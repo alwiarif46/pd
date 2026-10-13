@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime
+.DS_Store
+*.pem
+
+# Testing
+coverage/
+.nyc_output/
+
+# Misc
+.turbo/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data
+/data/
+
+# Plan versions
+plans/.versions/

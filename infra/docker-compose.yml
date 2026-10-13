@@ -1,0 +1,105 @@
+version: '3.9'
+
+services:
+  web:
+    build:
+      context: ../apps/web
+      dockerfile: Dockerfile
+    image: pd-web:latest
+    restart: unless-stopped
+    # Static build served by nginx, not a running container
+
+  api:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    image: pd-api:latest
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - DATABASE_URL=postgresql://pd_app:${POSTGRES_PASSWORD}@postgres:5432/pd
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CORS_ORIGIN=https://pd.shaavir.com
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  worker:
+    build:
+      context: ../apps/worker
+      dockerfile: Dockerfile
+    image: pd-worker:latest
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+      - clamav
+    environment:
+      - DATABASE_URL=postgresql://pd_app:${POSTGRES_PASSWORD}@postgres:5432/pd
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 768M
+
+  sandbox:
+    build:
+      context: ../apps/sandbox
+      dockerfile: Dockerfile
+    image: pd-sandbox:latest
+    network_mode: none
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1.5G
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=pd
+      - POSTGRES_USER=pd_owner
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: '0.15'
+          memory: 256M
+
+  clamav:
+    image: clamav/clamav:latest
+    restart: unless-stopped
+    volumes:
+      - clamav_data:/var/lib/clamav
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 1.5G
+
+volumes:
+  postgres_data:
+  redis_data:
+  clamav_data:
