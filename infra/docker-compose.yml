@@ -93,6 +93,7 @@ services:
     restart: unless-stopped
     volumes:
       - clamav_data:/var/lib/clamav
+      - ./infra/clamav/clamd.conf:/etc/clamav/clamd.conf:ro
     deploy:
       resources:
         limits:
