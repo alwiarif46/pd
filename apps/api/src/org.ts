@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { isUuid, PLAN_LIMITS, type Plan, schema, userMemberships, withOrg } from '@pd/core';
 import { requireAuth, requireUser } from './context.js';
 import { inOrg } from './scope.js';
-import { hashToken, isWorkEmail, logOutOfBand, newToken } from './security.js';
+import { hashToken, isWorkEmail, newToken, sendOutOfBand } from './security.js';
 
 function seatLimit(plan: Plan): number {
   return PLAN_LIMITS[plan].maxUsers;
@@ -96,7 +96,9 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     if (!isWorkEmail(email)) {
       return reply.code(400).send({ error: 'Use a work email address' });
     }
-    return inOrg(reply, auth.orgId!, async (db, respond) => {
+    // Delivered only after COMMIT, so the link never names an invite that rolled back.
+    let issued = null as string | null;
+    const result = await inOrg(reply, auth.orgId!, async (db, respond) => {
       const [org] = await db.select().from(schema.organizations).where(eq(schema.organizations.id, auth.orgId!));
       const members = await db.select().from(schema.memberships).where(eq(schema.memberships.orgId, auth.orgId!));
       const plan = (org?.plan ?? 'free') as Plan;
@@ -104,6 +106,7 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
         return respond(402, { error: 'This plan has no seats left' });
       }
       const token = newToken();
+      issued = token;
       await db.insert(schema.invites).values({
         orgId: auth.orgId!,
         email,
@@ -111,9 +114,12 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
         tokenHash: hashToken(token),
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       });
-      logOutOfBand('email', email, token);
       return respond(201, { ok: true });
     });
+    if (issued) {
+      void sendOutOfBand({ channel: 'email', purpose: 'invite', to: email, secret: issued });
+    }
+    return result;
   });
 
   app.delete('/api/org/members/:userId', { preHandler: requireAuth }, async (request, reply) => {
