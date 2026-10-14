@@ -6,10 +6,10 @@ import { pipeline } from 'node:stream/promises';
 import { and, eq, gt } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import {
-  addMonthsClamped,
   fitsBidCap,
   isUuid,
-  freeAllowance,
+  isValidFileSize,
+  normalizeSolicitationKey,
   reserveCredit,
   schema,
   withOrg,
@@ -17,11 +17,23 @@ import {
   type Plan,
 } from '@pd/core';
 import { requireAuth } from './context.js';
+import {
+  bidBytesInUse,
+  currentCreditPeriod,
+  expireAbandonedUploads,
+  lockOrg,
+  notDeleted,
+  releaseSessionCredit,
+  removeChunkDirs,
+  reserveForBid,
+} from './credits.js';
+import { apiError } from './errors.js';
 import { findBid, inOrg, type Outcome, queueAfterCommit } from './scope.js';
 import { enqueueScan } from './queue.js';
 
 const CHUNK_BYTES = 20 * 1024 * 1024;
 const dataDir = process.env.DATA_DIR || '/data/files';
+const SHA256 = /^[0-9a-f]{64}$/i;
 
 const STORED_EXTENSIONS = new Set(['.pdf', '.docx', '.xlsx']);
 
@@ -35,6 +47,12 @@ function isKind(value: string): value is FileKind {
   return value === 'solicitation' || value === 'amendment' || value === 'attachment' || value === 'resume' || value === 'draft';
 }
 
+/** A bid key that is set. 'PENDING' (or empty) means the first solicitation has not set it yet. */
+function settledKey(key: string | null | undefined): string | null {
+  const normalized = normalizeSolicitationKey(key ?? '');
+  return normalized && normalized !== 'PENDING' ? normalized : null;
+}
+
 export async function registerUploads(app: FastifyInstance): Promise<void> {
   app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_request, body, done) => {
     done(null, body);
@@ -43,88 +61,152 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
   app.post('/api/bids/:id/uploads', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const bidId = (request.params as { id: string }).id;
-    const body = request.body as {
-      fileName?: string;
-      kind?: string;
-      declaredSize?: number;
-      sha256?: string;
-      chunkCount?: number;
+    const body = (request.body ?? {}) as {
+      fileName?: unknown;
+      kind?: unknown;
+      declaredSize?: unknown;
+      sha256?: unknown;
+      chunkCount?: unknown;
+      /** The solicitation number printed on the file, when the client knows it. */
+      solicitationNumber?: unknown;
     };
-    const kind = body.kind ?? '';
-    if (!body.fileName || !isKind(kind) || !body.declaredSize || !body.sha256 || !body.chunkCount) {
-      return reply.code(400).send({ error: 'fileName, kind, declaredSize, sha256, and chunkCount are required' });
+    const kind = typeof body.kind === 'string' ? body.kind : '';
+    const fileName = typeof body.fileName === 'string' ? body.fileName.trim() : '';
+    const declaredSize = body.declaredSize;
+    const chunkCount = body.chunkCount;
+    if (
+      !fileName
+      || !isKind(kind)
+      || !isValidFileSize(declaredSize)
+      || typeof body.sha256 !== 'string' || !SHA256.test(body.sha256)
+      || typeof chunkCount !== 'number' || !Number.isSafeInteger(chunkCount) || chunkCount < 1
+      // Every chunk holds at least 1 byte and at most CHUNK_BYTES.
+      || chunkCount > declaredSize || chunkCount * CHUNK_BYTES < declaredSize
+    ) {
+      return reply.code(400).send(apiError('invalid_upload'));
     }
-    return inOrg(reply, orgId, async (db, respond) => {
+    const sha256 = body.sha256.toLowerCase();
+    const fileKey = typeof body.solicitationNumber === 'string' && normalizeSolicitationKey(body.solicitationNumber)
+      ? body.solicitationNumber.trim()
+      : null;
+    const abandoned: string[] = [];
+    const result = await inOrg(reply, orgId, async (db, respond) => {
       const bid = await findBid(db, orgId, bidId);
       if (!bid) {
         return respond(404, { error: 'Bid not found' });
       }
-      const [org] = await db.select().from(schema.organizations).where(eq(schema.organizations.id, orgId));
-      const plan = (org?.plan ?? 'free') as Plan;
-      const documents = await db.select().from(schema.documents).where(eq(schema.documents.bidId, bidId));
-      const usedBytes = documents.reduce((sum, document) => sum + document.sizeBytes, 0);
-      if (!fitsBidCap(plan, usedBytes, body.declaredSize!)) {
-        return respond(413, { error: 'This file exceeds the bid file cap' });
+      // One upload start at a time per organization: period creation and the credit check
+      // below must not interleave with another request's.
+      const org = await lockOrg(db, orgId);
+      if (!org) {
+        return respond(404, { error: 'Bid not found' });
       }
-      if (documents.some((document) => document.sha256 === body.sha256)) {
-        return respond(200, { duplicate: true });
-      }
-      const solicitations = documents.filter((document) => document.kind === 'solicitation');
       const now = new Date();
-      let [credit] = await db.select().from(schema.rfpCredits).where(eq(schema.rfpCredits.orgId, orgId));
-      if (!credit || credit.periodEnd < now) {
-        const start = org?.cycleStart ?? now;
-        const firstPeriod = !org?.freeFirstMonthEnds || org.freeFirstMonthEnds > now;
-        const allowed = plan === 'free'
-          ? freeAllowance({ isFirstPeriod: firstPeriod, returningToFree: false })
-          : plan === 'starter' ? 10 : 20;
-        const [created] = await db.insert(schema.rfpCredits).values({
-          orgId,
-          periodStart: start,
-          periodEnd: addMonthsClamped(start, 1),
-          allowed,
-        }).returning();
-        credit = created;
+      abandoned.push(...await expireAbandonedUploads(db, orgId, now));
+
+      // Same file on the same bid: never a charge, and never a cap refusal (06 s4).
+      const [duplicate] = await db.select({ id: schema.documents.id }).from(schema.documents).where(and(
+        eq(schema.documents.bidId, bidId),
+        eq(schema.documents.orgId, orgId),
+        eq(schema.documents.sha256, sha256),
+        notDeleted(),
+      )).limit(1);
+      if (duplicate) {
+        return respond(200, { duplicate: true, documentId: duplicate.id });
       }
+
+      const plan = (org.plan ?? 'free') as Plan;
+      // Re-read the bid under the org lock: its credit state may have changed meanwhile.
+      const current = (await findBid(db, orgId, bidId))!;
+      const usedBytes = await bidBytesInUse(db, orgId, bidId, now);
+      if (!fitsBidCap(plan, usedBytes, declaredSize)) {
+        return respond(413, apiError('bid_cap_exceeded'));
+      }
+
+      const holdsCredit = current.creditStatus === 'reserved' || current.creditStatus === 'consumed';
+      const needsCredit = kind === 'solicitation' && !holdsCredit;
+      const period = needsCredit ? await currentCreditPeriod(db, orgId, now) : null;
       const decision = reserveCredit(
-        { allowed: credit.allowed, used: credit.used, reserved: credit.reserved },
+        period
+          ? { allowed: period.allowed, used: period.used, reserved: period.reserved }
+          // No period row yet: let reserveForBid create it and decide atomically.
+          : { allowed: 1, used: 0, reserved: 0 },
         {
           kind,
           sameSha256: false,
-          isFirstSolicitation: kind === 'solicitation' && solicitations.length === 0,
-          bidKey: bid.solicitationKey === 'PENDING' ? null : bid.solicitationKey,
-          fileKey: null,
+          isFirstSolicitation: needsCredit,
+          bidKey: settledKey(current.solicitationKey),
+          fileKey,
         },
       );
       if (!decision.ok) {
-        const status = decision.reason === 'out_of_credits' ? 402 : 409;
-        return respond(status, { error: decision.reason });
+        return decision.reason === 'out_of_credits'
+          ? respond(402, apiError('out_of_credits'))
+          : respond(409, apiError('key_mismatch'));
       }
+      let creditId: string | null = null;
       if (decision.reserved) {
-        await db.update(schema.rfpCredits).set({
-          reserved: decision.state.reserved,
-          updatedAt: new Date(),
-        }).where(eq(schema.rfpCredits.id, credit.id));
+        creditId = await reserveForBid(db, org, bidId, now);
+        if (!creditId) {
+          return respond(402, apiError('out_of_credits'));
+        }
+      }
+      // The first solicitation sets the bid's key when the bid has none yet (06 s4).
+      if (kind === 'solicitation' && fileKey && !settledKey(current.solicitationKey)) {
         await db.update(schema.bids).set({
-          creditId: credit.id,
-          creditStatus: 'reserved',
-          updatedAt: new Date(),
-        }).where(eq(schema.bids.id, bidId));
+          solicitationNumber: fileKey,
+          solicitationKey: normalizeSolicitationKey(fileKey),
+          updatedAt: now,
+        }).where(and(eq(schema.bids.id, bidId), eq(schema.bids.orgId, orgId)));
       }
       const [session] = await db.insert(schema.uploadSessions).values({
         orgId,
         bidId,
         userId: request.auth!.userId,
-        fileName: body.fileName!,
+        fileName,
         kind,
-        declaredSize: body.declaredSize!,
-        sha256: body.sha256!,
-        chunkCount: body.chunkCount!,
+        declaredSize,
+        sha256,
+        chunkCount,
         status: 'open',
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+        creditId,
       }).returning();
-      return respond(201, { id: session.id, expiresAt: session.expiresAt });
+      return respond(201, { id: session.id, expiresAt: session.expiresAt, creditReserved: creditId !== null });
     });
+    await removeChunkDirs(dataDir, orgId, abandoned);
+    return result;
+  });
+
+  // The client gave up on an upload: the session closes and any credit it reserved goes back.
+  app.delete('/api/uploads/:id', { preHandler: requireAuth }, async (request, reply) => {
+    const orgId = request.auth!.orgId!;
+    const sessionId = (request.params as { id: string }).id;
+    if (!isUuid(sessionId)) {
+      return reply.code(404).send({ error: 'Upload session not found' });
+    }
+    let cancelled = false;
+    const result = await inOrg(reply, orgId, async (db, respond) => {
+      // Claim it from 'open' once. A concurrent complete or sweep that got there first wins.
+      const [session] = await db.update(schema.uploadSessions).set({
+        status: 'cancelled',
+        updatedAt: new Date(),
+      }).where(and(
+        eq(schema.uploadSessions.id, sessionId),
+        eq(schema.uploadSessions.orgId, orgId),
+        eq(schema.uploadSessions.status, 'open'),
+      )).returning();
+      if (!session) {
+        return respond(404, { error: 'Upload session not found' });
+      }
+      const released = await releaseSessionCredit(db, orgId, session);
+      cancelled = true;
+      return { ok: true, creditReleased: released };
+    });
+    if (cancelled) {
+      await removeChunkDirs(dataDir, orgId, [sessionId]);
+    }
+    return result;
   });
 
   app.put('/api/uploads/:id/chunks/:index', { preHandler: requireAuth, bodyLimit: CHUNK_BYTES + 1024 }, async (request, reply) => {
@@ -209,6 +291,24 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       if (names.length !== session.chunkCount) {
         await reopen();
         return { code: 400, body: { error: 'Not every chunk has arrived' } };
+      }
+      // A solicitation never reaches a bid without a credit behind it. Normally its session
+      // reserved one at start; if that reservation went back (another session for this bid was
+      // abandoned) or processing released it, reserve again now, under the org lock.
+      if (session.kind === 'solicitation') {
+        const org = await lockOrg(db, orgId);
+        const bid = await findBid(db, orgId, session.bidId);
+        if (!org || !bid) {
+          await reopen();
+          return { code: 404, body: { error: 'Bid not found' } };
+        }
+        if (bid.creditStatus !== 'reserved' && bid.creditStatus !== 'consumed') {
+          const creditId = await reserveForBid(db, org, bid.id, new Date());
+          if (!creditId) {
+            await reopen();
+            return { code: 402, body: apiError('out_of_credits') };
+          }
+        }
       }
       const targetDir = join(dataDir, orgId, 'docs');
       await mkdir(targetDir, { recursive: true });

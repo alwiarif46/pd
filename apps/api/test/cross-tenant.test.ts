@@ -160,8 +160,9 @@ describe.skipIf(Boolean(unavailable)).each(MODES)('cross-tenant access through t
 
   it('returns 404 for the other organization uploads', async () => {
     expect((await asA('POST', `/api/bids/${b.bidId}/uploads`, {
-      fileName: 'x.pdf', kind: 'attachment', declaredSize: 1, sha256: 'y', chunkCount: 1,
+      fileName: 'x.pdf', kind: 'attachment', declaredSize: 1, sha256: 'a'.repeat(64), chunkCount: 1,
     })).statusCode).toBe(404);
+    expect((await asA('DELETE', `/api/uploads/${b.uploadSessionId}`)).statusCode).toBe(404);
     const chunk = await app.inject({
       method: 'PUT',
       url: `/api/uploads/${b.uploadSessionId}/chunks/0`,

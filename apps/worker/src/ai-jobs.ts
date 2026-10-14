@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, sql } from 'drizzle-orm';
 import {
   buildSystemPrompt,
   extractComplianceMatrix,
@@ -9,7 +9,7 @@ import {
   type ComplianceRequirement,
   type PageText,
 } from '@pd/ai';
-import { consumeCredit, releaseCredit, schema, withOrg } from '@pd/core';
+import { schema, withOrg } from '@pd/core';
 import type { JobPayload } from './redis.js';
 
 function isUuid(value: string): boolean {
@@ -70,25 +70,35 @@ async function recordRun(input: {
 
 async function settleCredit(orgId: string, bidId: string, action: 'consume' | 'release'): Promise<void> {
   await withOrg(orgId, async (db) => {
-    const [bid] = await db.select().from(schema.bids).where(eq(schema.bids.id, bidId));
-    if (!bid?.creditId || bid.creditStatus !== 'reserved') {
-      return;
-    }
-    const [credit] = await db.select().from(schema.rfpCredits).where(eq(schema.rfpCredits.id, bid.creditId));
-    if (!credit || credit.reserved < 1) {
-      return;
-    }
-    const state = { allowed: credit.allowed, used: credit.used, reserved: credit.reserved };
-    const next = action === 'consume' ? consumeCredit(state) : releaseCredit(state);
-    await db.update(schema.rfpCredits).set({
-      used: next.used,
-      reserved: next.reserved,
-      updatedAt: new Date(),
-    }).where(eq(schema.rfpCredits.id, credit.id));
-    await db.update(schema.bids).set({
+    // Claim the reservation with a conditional update: only one settler (this job, a retry, the
+    // api releasing an abandoned upload, or a bid delete) flips it, and only that one touches
+    // the counters. Counters change by increments, never by writing back values read earlier.
+    const [bid] = await db.update(schema.bids).set({
       creditStatus: action === 'consume' ? 'consumed' : 'released',
       updatedAt: new Date(),
-    }).where(eq(schema.bids.id, bidId));
+    }).where(and(
+      eq(schema.bids.id, bidId),
+      eq(schema.bids.orgId, orgId),
+      eq(schema.bids.creditStatus, 'reserved'),
+      isNotNull(schema.bids.creditId),
+    )).returning({ creditId: schema.bids.creditId });
+    if (!bid?.creditId) {
+      return;
+    }
+    await db.update(schema.rfpCredits).set(action === 'consume'
+      ? {
+        reserved: sql`${schema.rfpCredits.reserved} - 1`,
+        used: sql`${schema.rfpCredits.used} + 1`,
+        updatedAt: new Date(),
+      }
+      : {
+        reserved: sql`${schema.rfpCredits.reserved} - 1`,
+        updatedAt: new Date(),
+      }).where(and(
+      eq(schema.rfpCredits.id, bid.creditId),
+      eq(schema.rfpCredits.orgId, orgId),
+      gt(schema.rfpCredits.reserved, 0),
+    ));
   });
 }
 
