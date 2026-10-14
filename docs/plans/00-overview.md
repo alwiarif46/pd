@@ -25,6 +25,7 @@ The app serves two goals:
 | 06-accounts-billing.md | Signup, organizations, roles, plans, Stripe, usage limits |
 | 07-security-privacy.md | Security controls, retention, archive, legal, abuse |
 | 08-build-phases.md | Build order, acceptance checks, testing, launch |
+| 09-ui-workflow.md | v0, Claude Code, and Cursor split; folder rules; CLAUDE.md; component contracts per tab |
 
 ## 3. Decisions made
 
@@ -52,6 +53,8 @@ The app serves two goals:
 | Free tabs | Bid overview and kickoff, Schedule, Compliance matrix |
 | Paid tabs | Outline and status tracker, Resume and key personnel matrix, Color team reviews, Production checklist, Orals, Lessons learned |
 | Dropped from v1 | Competitor comparison, Win strategy, Section planner, Executive summary |
+| Database | PostgreSQL, self-hosted in Docker. Free, with row-level security for tenants |
+| Tooling | v0 writes screens into `design/v0/` on branch `v0-ui`; Claude Code integrates them into the app and owns containers, API, worker, and the schedule port; Cursor edits the app (09-ui-workflow.md) |
 
 ## 4. Sidebar tabs (v1)
 
@@ -125,3 +128,4 @@ Clicking a row in tabs 1 to 8 opens the row detail slider with the exact quote, 
 | 13 Oct 2026 | DOCX converted to PDF; admin tooling post-v1; staging stays open; root Amaan only until decided | Amaan |
 | 13 Oct 2026 | Row-level security hardening, source columns, sandbox, ClamAV limits, quote normalization, cost arithmetic, CUI marking check, credit reservation, free-period rules, Stripe status rules, new tables, upload sessions, backups RPO and RTO, SMS controls, honest admin access statement, viewing tokens | Independent review |
 | 13 Oct 2026 | Open items renumbered: 3 closed, 9 added | Plans v2 |
+| 14 Oct 2026 | PostgreSQL confirmed; v0 / Claude Code / Cursor split added as 09-ui-workflow.md | Chat with Amaan |
