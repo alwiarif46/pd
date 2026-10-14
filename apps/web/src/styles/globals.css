@@ -1,0 +1,18 @@
+/* Tailwind v4 entry.
+   Preflight is off on purpose: the legacy screens (src/screens, src/components/*.tsx) are styled by
+   src/index.css and would change under Tailwind's reset. When they are retired, add:
+   @import "tailwindcss/preflight.css" layer(base);  */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@import "tw-animate-css";
+@import "./tokens.css";
+
+/* Scan only new code. Legacy class names (for example .grow) must not generate utilities. */
+@source "../ui";
+@source "../features";
+@source "../components/ui";
+@source "../lib";
+
+/* Dark styles apply only under a .dark class, which the app never sets. */
+@custom-variant dark (&:where(.dark, .dark *));

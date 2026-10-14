@@ -1,0 +1,42 @@
+/* Design tokens from docs/plans/09-ui-workflow.md section 4, as Tailwind v4 theme variables. */
+@theme {
+  /* Plan 09 names */
+  --color-ink: #1C2A3A;
+  --color-canvas: #EBEFF4;
+  --color-paper: #FFFFFF;
+  --color-line: #D5DBE3;
+  --color-due: #B42318;
+  --color-today: #1F6FEB;
+  --color-weekend: #F3F5F8;
+  --color-holiday: #FFF4DC;
+  --color-warning: #B54708;
+  --color-team-blue: #2F6FD6;
+  --color-team-pink: #E58AAE;
+  --color-team-red: #C62828;
+  --color-team-green: #3C9A4A;
+  --color-team-gold: #D4A017;
+  --color-team-white-glove: #E9ECF0;
+
+  /* shadcn/ui names mapped to the plan 09 palette. Plan 09 "accent" (#1F4E79) is shadcn "primary". */
+  --color-background: #EBEFF4;
+  --color-foreground: #1C2A3A;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #1C2A3A;
+  --color-popover: #FFFFFF;
+  --color-popover-foreground: #1C2A3A;
+  --color-primary: #1F4E79;
+  --color-primary-foreground: #FFFFFF;
+  --color-secondary: #F3F5F8;
+  --color-secondary-foreground: #1C2A3A;
+  --color-muted: #F3F5F8;
+  --color-muted-foreground: #5B6878;
+  --color-accent: #EBEFF4;
+  --color-accent-foreground: #1C2A3A;
+  --color-destructive: #B42318;
+  --color-border: #D5DBE3;
+  --color-input: #D5DBE3;
+  --color-ring: #1F4E79;
+
+  --font-sans: "Segoe UI", system-ui, sans-serif;
+  --font-numeric: Bahnschrift, "DIN Alternate", "Roboto Condensed", sans-serif;
+}
