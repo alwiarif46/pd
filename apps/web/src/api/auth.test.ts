@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { callAt, jsonBody, jsonResponse, lastCall, mockFetch } from '../test/fetch';
-import { isSignedIn, logIn, logOut, resetPassword, signUp } from './auth';
+import { isSignedIn, logIn, logOut, resendCode, resendEmail, resetPassword, signUp } from './auth';
 import { ApiError } from './errors';
 import { getMe, updateMe } from './me';
 import { getToken, setToken } from './session';
@@ -72,6 +72,28 @@ describe('bodies', () => {
     expect(call.url).toBe('/api/auth/reset');
     expect(call.method).toBe('POST');
     expect(jsonBody(call)).toEqual({ token: 'reset-tok', password: 'a new password' });
+  });
+});
+
+describe('resend (shapes unreconciled with the API)', () => {
+  it('resendEmail posts the email', async () => {
+    const fetchMock = mockFetch(jsonResponse(200, { ok: true }));
+    await resendEmail('a@acme.com');
+    const call = lastCall(fetchMock);
+    expect(call.url).toBe('/api/auth/resend-email');
+    expect(call.method).toBe('POST');
+    expect(jsonBody(call)).toEqual({ email: 'a@acme.com' });
+  });
+
+  it('resendCode posts with the token and no body', async () => {
+    setToken('tok');
+    const fetchMock = mockFetch(jsonResponse(200, { ok: true }));
+    await resendCode();
+    const call = lastCall(fetchMock);
+    expect(call.url).toBe('/api/auth/resend-code');
+    expect(call.method).toBe('POST');
+    expect(call.headers.get('Authorization')).toBe('Bearer tok');
+    expect(call.headers.has('Content-Type')).toBe(false);
   });
 });
 
