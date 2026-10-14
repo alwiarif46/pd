@@ -1,9 +1,8 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
 import { and, asc, eq, gte, lte } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { schema, withOrg } from '@pd/core';
+import { resolveOrgPath, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
 import { findBid, findDocument, type Outcome, queueAfterCommit } from './scope.js';
 import { enqueueClassify } from './queue.js';
@@ -184,7 +183,11 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       if (document.liveStatus === 'archived' || document.liveStatus === 'deleted') {
         return reply.code(409).send({ error: 'This file is archived. Restore it to open the full page.' });
       }
-      const absolute = join(dataDir, orgId, document.viewerPath || document.storagePath);
+      // A stored path must stay inside this organization's folder.
+      const absolute = resolveOrgPath(dataDir, orgId, document.viewerPath || document.storagePath);
+      if (!absolute) {
+        return reply.code(404).send({ error: 'Document not found' });
+      }
       try {
         await stat(absolute);
       } catch {

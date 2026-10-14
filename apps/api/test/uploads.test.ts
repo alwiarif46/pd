@@ -106,6 +106,30 @@ describe.skipIf(Boolean(unavailable))('upload complete', () => {
     expect(documents).toHaveLength(1);
   });
 
+  it('will not serve a stored path outside the organization folder', async () => {
+    const documentId = await withOrg(tenant.orgId, async (db) => {
+      const [row] = await db.insert(schema.documents).values({
+        orgId: tenant.orgId,
+        bidId: tenant.bidId,
+        fileName: 'x.pdf',
+        mime: 'application/pdf',
+        sizeBytes: 1,
+        sha256: 'traversal',
+        kind: 'attachment',
+        storagePath: '../../outside.pdf',
+        liveStatus: 'live',
+      }).returning();
+      return row.id;
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/documents/${documentId}/file`,
+      headers: { authorization: `Bearer ${tenant.token}` },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'Document not found' });
+  });
+
   it('puts the session back to open when the bytes do not match', async () => {
     const sessionId = await withOrg(tenant.orgId, async (db) => {
       const [session] = await db.insert(schema.uploadSessions).values({
