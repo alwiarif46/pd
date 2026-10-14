@@ -48,7 +48,7 @@ The app serves two goals:
 | Paid tabs | Outline and status tracker, Resume and key personnel matrix, Color team reviews, Production checklist, Orals, Lessons learned |
 | Dropped from v1 | Competitor comparison, Win strategy, Section planner, Executive summary |
 | Database | PostgreSQL, self-hosted in Docker. Free, with row-level security for tenants |
-| Tooling | v0 for presentational UI components, Claude Code for containers, API, worker, and the schedule port, Cursor for edits (09-ui-workflow.md) |
+| Tooling | v0 writes screens into `design/v0/` on branch `v0-ui`; Claude Code integrates them into the app and owns containers, API, worker, and the schedule port; Cursor edits the app (09-ui-workflow.md) |
 
 ## 4. Sidebar tabs (v1)
 
