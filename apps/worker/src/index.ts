@@ -1,4 +1,5 @@
 import { Worker } from 'bullmq';
+import { assertTenantRole } from '@pd/core';
 import { processAmendmentJob, processCompliance, processDates, processOverview } from './ai-jobs.js';
 import { processClassify } from './classify-job.js';
 import { processFile } from './file-job.js';
@@ -24,6 +25,17 @@ const workers = [
 ];
 
 console.log('Worker running');
+
+// Tenant isolation depends on row-level security, which a superuser or BYPASSRLS role
+// skips. Stop in production when connected as such a role; warn elsewhere.
+assertTenantRole().catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (process.env.NODE_ENV === 'production') {
+    console.error(message);
+    process.exit(1);
+  }
+  console.warn(message);
+});
 
 async function shutdown(): Promise<void> {
   await Promise.all(workers.map((worker) => worker.close()));

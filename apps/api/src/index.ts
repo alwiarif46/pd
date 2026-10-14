@@ -1,36 +1,20 @@
-import Fastify from 'fastify';
-import { registerAmendments } from './amendments.js';
-import { registerAuth } from './auth.js';
-import { registerBids } from './bids.js';
-import { registerDocuments } from './documents.js';
-import { registerJobs } from './jobs.js';
-import { registerOrg } from './org.js';
-import { registerTabs } from './tabs.js';
-import { registerUploads } from './uploads.js';
+import { assertTenantRole } from '@pd/core';
+import { buildApp } from './app.js';
 
-const fastify = Fastify({
-  logger: true,
-});
-
-await fastify.register(import('@fastify/cors'), {
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
-});
-
-fastify.get('/health', async () => {
-  return { status: 'ok', timestamp: new Date().toISOString() };
-});
-
-await registerAuth(fastify);
-await registerOrg(fastify);
-await registerBids(fastify);
-await registerUploads(fastify);
-await registerDocuments(fastify);
-await registerJobs(fastify);
-await registerAmendments(fastify);
-await registerTabs(fastify);
+const fastify = await buildApp();
 
 const start = async () => {
   try {
+    // Tenant isolation depends on row-level security, which a superuser or BYPASSRLS
+    // role skips. Refuse to serve in production as such a role; warn elsewhere.
+    try {
+      await assertTenantRole();
+    } catch (error) {
+      if (process.env.NODE_ENV === 'production') {
+        throw error;
+      }
+      fastify.log.warn(error instanceof Error ? error.message : error);
+    }
     const port = Number(process.env.PORT) || 3001;
     await fastify.listen({ port, host: '0.0.0.0' });
     console.log(`API server listening on port ${port}`);
