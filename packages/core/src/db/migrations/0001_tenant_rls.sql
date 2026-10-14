@@ -1,8 +1,20 @@
 -- 0001_tenant_rls: roles, grants, and row-level security for every tenant table (02 s4, 03, 07).
 --
--- Run as the owner role (pd_owner), which must be able to create roles and schemas.
+-- Run as the owner role (pd_owner). It does not need to be a superuser, but it must:
+--   - own the database (it revokes PUBLIC on schema public, which belongs to the database
+--     owner from Postgres 15, and grants CONNECT on the database);
+--   - have CREATEROLE, or find pd_app and pd_system already created with the attributes below.
+-- From Postgres 16 a CREATEROLE role gets ADMIN on the roles it creates; this migration then
+-- grants itself SET (not INHERIT) on pd_system, which CREATE SCHEMA ... AUTHORIZATION and
+-- ALTER FUNCTION ... OWNER TO need.
+--
 -- No passwords are set here. Set them out of band, for example:
 --   ALTER ROLE pd_app PASSWORD '...';
+--
+-- Later migrations: FORCE ROW LEVEL SECURITY applies the policies to the table owner too, and
+-- no policy names the owner, so the migrator reads and writes zero tenant rows. A data backfill
+-- must run per organization with app.org_id set and a policy that covers the role it runs as
+-- (or as pd_app), not as a plain UPDATE from the owner.
 --
 -- Policy expression: NULLIF turns an unset or reset `app.org_id` (it reads as '' once a
 -- transaction-local value has ended on that connection) into NULL, so a query outside
@@ -16,6 +28,16 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pd_system') THEN
     CREATE ROLE pd_system NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+  END IF;
+  -- The migrator must be able to SET ROLE pd_system to hand it the schema and function below.
+  -- A superuser already can. Postgres 16 separates SET from INHERIT, so the migrator does not
+  -- pick up pd_system's read access to memberships; before 16 a plain grant is the only form.
+  IF current_setting('server_version_num')::int >= 160000 THEN
+    IF NOT pg_has_role(current_user, 'pd_system', 'SET') THEN
+      EXECUTE format('GRANT pd_system TO %I WITH INHERIT FALSE, SET TRUE', current_user);
+    END IF;
+  ELSIF NOT pg_has_role(current_user, 'pd_system', 'MEMBER') THEN
+    EXECUTE format('GRANT pd_system TO %I', current_user);
   END IF;
 END
 $$;
