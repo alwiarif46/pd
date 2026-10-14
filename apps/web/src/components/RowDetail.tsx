@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api } from '../api';
+import { api } from '../legacy-api';
 import type { DocumentRow, SourceFields } from '../models';
 
 interface HistoryRow {
