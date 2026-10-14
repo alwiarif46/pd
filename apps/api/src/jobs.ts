@@ -1,7 +1,8 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { schema, withOrg } from '@pd/core';
+import { isUuid, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
+import { findBid, findDocument } from './scope.js';
 import { enqueueClassify, enqueueScan } from './queue.js';
 
 export async function registerJobs(app: FastifyInstance): Promise<void> {
@@ -9,11 +10,11 @@ export async function registerJobs(app: FastifyInstance): Promise<void> {
     const orgId = request.auth!.orgId!;
     const bidId = (request.params as { id: string }).id;
     return withOrg(orgId, async (db) => {
-      const [bid] = await db.select().from(schema.bids).where(eq(schema.bids.id, bidId));
+      const bid = await findBid(db, orgId, bidId);
       if (!bid) {
         return reply.code(404).send({ error: 'Bid not found' });
       }
-      const rows = await db.select().from(schema.jobs).where(eq(schema.jobs.bidId, bidId));
+      const rows = await db.select().from(schema.jobs).where(and(eq(schema.jobs.bidId, bidId), eq(schema.jobs.orgId, orgId)));
       const pending = rows.filter((job) => job.status === 'pending').length;
       return rows.map((job, index) => ({
         ...job,
@@ -27,14 +28,17 @@ export async function registerJobs(app: FastifyInstance): Promise<void> {
     const orgId = request.auth!.orgId!;
     const jobId = (request.params as { id: string }).id;
     return withOrg(orgId, async (db) => {
-      const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, jobId));
+      if (!isUuid(jobId)) {
+        return reply.code(404).send({ error: 'Job not found' });
+      }
+      const [job] = await db.select().from(schema.jobs).where(and(eq(schema.jobs.id, jobId), eq(schema.jobs.orgId, orgId)));
       if (!job?.documentId || !job.bidId) {
         return reply.code(404).send({ error: 'Job not found' });
       }
       if (job.status !== 'failed') {
         return reply.code(409).send({ error: 'Only a failed step can be retried' });
       }
-      const [document] = await db.select().from(schema.documents).where(eq(schema.documents.id, job.documentId));
+      const document = await findDocument(db, orgId, job.documentId);
       if (!document?.storagePath) {
         return reply.code(404).send({ error: 'The file is no longer available' });
       }
