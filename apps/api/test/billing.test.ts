@@ -57,17 +57,31 @@ class FakeStripe implements BillingStripe {
     return this.customers.get(id) ?? { id, deleted: true };
   }
 
+  /** Runs inside createCustomer, after Stripe "created" it (to stage a race). */
+  onCreateCustomer: ((orgId: string) => Promise<void>) | null = null;
+  /** Stripe calls in order, for checking what happens before what. */
+  calls: string[] = [];
+
   async createCustomer(input: { orgId: string; name: string }): Promise<{ id: string }> {
     const id = `cus_${randomBytes(6).toString('hex')}`;
     this.customers.set(id, { id, metadata: { org_id: input.orgId } });
+    this.calls.push('createCustomer');
+    await this.onCreateCustomer?.(input.orgId);
     return { id };
   }
 
   async hasLiveSubscription(customerId: string): Promise<boolean> {
+    this.calls.push('hasLiveSubscription');
     return this.live.has(customerId);
   }
 
+  async expireOpenCheckoutSessions(customerId: string): Promise<number> {
+    this.calls.push(`expire:${customerId}`);
+    return 0;
+  }
+
   async createCheckoutSession(input: CheckoutInput): Promise<{ url: string | null }> {
+    this.calls.push(`checkout:${input.customerId}`);
     this.checkouts.push(input);
     return { url: `https://checkout.stripe.test/${this.checkouts.length}` };
   }
@@ -166,7 +180,11 @@ describe.skipIf(Boolean(unavailable))('billing', () => {
     return { ...org, customerId };
   }
 
-  function send(event: { id?: string; type: string; object: Record<string, unknown> }, signature?: string) {
+  function send(
+    event: { id?: string; type: string; object: Record<string, unknown> },
+    signature?: string,
+    options: { contentType?: string; signedAt?: number } = {},
+  ) {
     const payload = JSON.stringify({
       id: event.id ?? `evt_${randomBytes(8).toString('hex')}`,
       object: 'event',
@@ -177,11 +195,20 @@ describe.skipIf(Boolean(unavailable))('billing', () => {
       method: 'POST',
       url: '/api/billing/webhook',
       headers: {
-        'content-type': 'application/json',
-        'stripe-signature': signature ?? sdk.webhooks.generateTestHeaderString({ payload, secret: WEBHOOK_SECRET }),
+        'content-type': options.contentType ?? 'application/json',
+        'stripe-signature': signature ?? sdk.webhooks.generateTestHeaderString({
+          payload,
+          secret: WEBHOOK_SECRET,
+          ...(options.signedAt === undefined ? {} : { timestamp: options.signedAt }),
+        }),
       },
       payload,
     });
+  }
+
+  async function auditRows(orgId: string, action: string) {
+    return withOrg(orgId, (db) => db.select().from(schema.auditLog)
+      .where(and(eq(schema.auditLog.orgId, orgId), eq(schema.auditLog.action, action))));
   }
 
   function subscriptionEvent(type: string, subscriptionId: string, id?: string) {
@@ -508,5 +535,135 @@ describe.skipIf(Boolean(unavailable))('billing', () => {
     const response = await send({ id: eventId, type: 'customer.created', object: { id: 'cus_x' } });
     expect(response.statusCode).toBe(200);
     expect(await processedAt(eventId)).not.toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // Review follow-ups: races, money safety, transport details
+  // -------------------------------------------------------------------------
+
+  it('expires open Checkout Sessions before opening a new one', async () => {
+    const org = await newOrg('expire');
+    await org.call('POST', '/api/billing/checkout', { plan: 'starter' });
+    const { stripeCustomerId } = await orgRow(org.orgId);
+    expect(fake.calls).toEqual(['createCustomer', `expire:${stripeCustomerId}`, `checkout:${stripeCustomerId}`]);
+    fake.calls = [];
+    await org.call('POST', '/api/billing/checkout', { plan: 'growth' });
+    expect(fake.calls).toEqual(['hasLiveSubscription', `expire:${stripeCustomerId}`, `checkout:${stripeCustomerId}`]);
+  });
+
+  it('keeps the customer id another request stored first', async () => {
+    const org = await newOrg('customer-race');
+    // While this request talks to Stripe, another one stores its customer.
+    fake.onCreateCustomer = async (orgId) => {
+      await withOrg(orgId, (db) => db.update(schema.organizations).set({ stripeCustomerId: 'cus_first' })
+        .where(eq(schema.organizations.id, orgId)));
+    };
+    const response = await org.call('POST', '/api/billing/checkout', { plan: 'starter' });
+    expect(response.statusCode).toBe(200);
+    expect((await orgRow(org.orgId)).stripeCustomerId).toBe('cus_first');
+    expect(fake.checkouts[0].customerId).toBe('cus_first');
+  });
+
+  it('does not return Stripe ids from GET /api/org to anyone', async () => {
+    const org = await customerOrg('no-ids');
+    for (const call of [org.call, org.memberCall]) {
+      const payload = (await call('GET', '/api/org')).json<{ org: Record<string, unknown> }>();
+      expect(payload.org).not.toHaveProperty('stripeCustomerId');
+      expect(payload.org).not.toHaveProperty('stripeSubscriptionId');
+      expect(payload.org).toHaveProperty('planStatus', 'free');
+    }
+  });
+
+  it('records an unknown price, marks the event processed, and leaves the organization alone', async () => {
+    const org = await customerOrg('unknown-price');
+    fake.subscriptions.set('sub_u', subscription('sub_u', { status: 'active', price: 'price_enterprise', customer: org.customerId, orgId: org.orgId }));
+    const eventId = `evt_u_${randomUUID()}`;
+    expect((await subscriptionEvent('customer.subscription.created', 'sub_u', eventId)).statusCode).toBe(200);
+    expect(await processedAt(eventId)).not.toBeNull();
+    expect(await orgRow(org.orgId)).toMatchObject({ plan: 'free', planStatus: 'free', stripeSubscriptionId: null });
+    expect(await creditRows(org.orgId)).toHaveLength(0);
+    const audit = await auditRows(org.orgId, 'billing.unknown_price');
+    expect(audit).toHaveLength(1);
+    expect(audit[0].detail).toEqual({ subscriptionId: 'sub_u', priceIds: ['price_enterprise'] });
+  });
+
+  it('keeps the stored subscription when a second live one arrives, and records both', async () => {
+    const org = await customerOrg('two-live');
+    fake.subscriptions.set('sub_a', subscription('sub_a', { status: 'active', price: 'price_starter', customer: org.customerId, orgId: org.orgId }));
+    await subscriptionEvent('customer.subscription.created', 'sub_a');
+    fake.subscriptions.set('sub_b', subscription('sub_b', { status: 'active', price: 'price_growth', customer: org.customerId, orgId: org.orgId }));
+    const eventId = `evt_b_${randomUUID()}`;
+    expect((await subscriptionEvent('customer.subscription.created', 'sub_b', eventId)).statusCode).toBe(200);
+    expect(await processedAt(eventId)).not.toBeNull();
+    expect(await orgRow(org.orgId)).toMatchObject({ plan: 'starter', stripeSubscriptionId: 'sub_a' });
+    expect((await currentRow(org.orgId))?.allowed).toBe(10);
+    const audit = await auditRows(org.orgId, 'billing.second_live_subscription');
+    expect(audit.map((row) => row.detail)).toEqual([{ stored: 'sub_a', incoming: 'sub_b' }]);
+
+    // Once the first one is over in Stripe, the second takes its place on its next event.
+    fake.subscriptions.set('sub_a', subscription('sub_a', { status: 'canceled', price: 'price_starter', customer: org.customerId, orgId: org.orgId }));
+    expect((await subscriptionEvent('customer.subscription.updated', 'sub_b')).statusCode).toBe(200);
+    expect(await orgRow(org.orgId)).toMatchObject({ plan: 'growth', stripeSubscriptionId: 'sub_b' });
+    // The first one's late cancellation no longer moves the organization.
+    expect((await subscriptionEvent('customer.subscription.deleted', 'sub_a')).statusCode).toBe(200);
+    expect(await orgRow(org.orgId)).toMatchObject({ plan: 'growth', planStatus: 'active', stripeSubscriptionId: 'sub_b' });
+  });
+
+  it('starts exactly one paid period under concurrent duplicate and sibling deliveries', async () => {
+    const org = await customerOrg('concurrent-up');
+    await seedFreePeriod(org.orgId, 0);
+    fake.subscriptions.set('sub_cu', subscription('sub_cu', { status: 'active', price: 'price_starter', customer: org.customerId, orgId: org.orgId }));
+    const eventId = `evt_cu_${randomUUID()}`;
+    const responses = await Promise.all([
+      subscriptionEvent('customer.subscription.created', 'sub_cu', eventId),
+      subscriptionEvent('customer.subscription.created', 'sub_cu', eventId),
+      subscriptionEvent('customer.subscription.created', 'sub_cu', eventId),
+      send({ type: 'checkout.session.completed', object: { id: 'cs_cu', subscription: 'sub_cu' } }),
+    ]);
+    expect(responses.map((response) => response.statusCode)).toEqual([200, 200, 200, 200]);
+    const rows = await creditRows(org.orgId);
+    expect(rows.filter((row) => row.allowed === 10)).toHaveLength(1);
+    expect(rows).toHaveLength(2);
+    expect(await orgRow(org.orgId)).toMatchObject({ plan: 'starter', stripeSubscriptionId: 'sub_cu' });
+  });
+
+  it('starts exactly one free period under concurrent cancel events', async () => {
+    const org = await customerOrg('concurrent-cancel');
+    fake.subscriptions.set('sub_cc', subscription('sub_cc', { status: 'active', price: 'price_starter', customer: org.customerId, orgId: org.orgId }));
+    await subscriptionEvent('customer.subscription.created', 'sub_cc');
+    fake.subscriptions.set('sub_cc', subscription('sub_cc', { status: 'canceled', price: 'price_starter', customer: org.customerId, orgId: org.orgId }));
+    const responses = await Promise.all([
+      subscriptionEvent('customer.subscription.deleted', 'sub_cc'),
+      subscriptionEvent('customer.subscription.updated', 'sub_cc'),
+      send({ type: 'invoice.payment_failed', object: { id: 'in_cc', subscription: 'sub_cc' } }),
+    ]);
+    expect(responses.map((response) => response.statusCode)).toEqual([200, 200, 200]);
+    const rows = await creditRows(org.orgId);
+    expect(rows.filter((row) => row.allowed === 1)).toHaveLength(1);
+    expect(rows).toHaveLength(2);
+    expect(await orgRow(org.orgId)).toMatchObject({ plan: 'free', planStatus: 'free' });
+  });
+
+  it('accepts application/json with a charset', async () => {
+    const org = await customerOrg('charset');
+    fake.subscriptions.set('sub_cs', subscription('sub_cs', { status: 'active', price: 'price_starter', customer: org.customerId, orgId: org.orgId }));
+    const response = await send(
+      { type: 'customer.subscription.created', object: { id: 'sub_cs' } },
+      undefined,
+      { contentType: 'application/json; charset=utf-8' },
+    );
+    expect(response.statusCode).toBe(200);
+    expect((await orgRow(org.orgId)).plan).toBe('starter');
+  });
+
+  it('rejects a correctly signed event whose timestamp is outside the tolerance', async () => {
+    const eventId = `evt_old_${randomUUID()}`;
+    const response = await send(
+      { id: eventId, type: 'customer.subscription.updated', object: { id: 'sub_old_ts' } },
+      undefined,
+      { signedAt: Math.floor(Date.now() / 1000) - 400 },
+    );
+    expect(response.statusCode).toBe(400);
+    expect(await processedAt(eventId)).toBeNull();
   });
 });

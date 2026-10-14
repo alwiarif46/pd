@@ -1,12 +1,12 @@
 import Stripe from 'stripe';
 import { and, eq, gt, isNull, lt } from 'drizzle-orm';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { addMonthsClamped, getDb, isUuid, PLAN_LIMITS, periodAllowance, type Plan, schema, withOrg } from '@pd/core';
 import { BODY_REQUIRED, readBody, text } from './body.js';
 import { requireAuth } from './context.js';
 import { currentCreditPeriod, lockOrg } from './credits.js';
 import { apiError } from './errors.js';
-import { type Db, inOrg } from './scope.js';
+import type { Db } from './scope.js';
 
 /*
  * Stripe billing (06 s5): Checkout to upgrade, the Customer Portal for changes and
@@ -124,9 +124,15 @@ export interface BillingStripe {
   constructEvent(payload: Buffer, signature: string, secret: string): EventLike;
   retrieveSubscription(id: string): Promise<SubscriptionLike>;
   retrieveCustomer(id: string): Promise<CustomerLike>;
+  /**
+   * The organization's customer. Two calls for one organization within Stripe's idempotency
+   * window return the same customer.
+   */
   createCustomer(input: { orgId: string; name: string }): Promise<{ id: string }>;
   /** True when the customer has a subscription that is not over (active, trialing, past_due, unpaid). */
   hasLiveSubscription(customerId: string): Promise<boolean>;
+  /** Expires the customer's open Checkout Sessions, so an older tab cannot complete too. */
+  expireOpenCheckoutSessions(customerId: string): Promise<number>;
   createCheckoutSession(input: CheckoutInput): Promise<{ url: string | null }>;
   createPortalSession(input: { customerId: string; returnUrl: string }): Promise<{ url: string }>;
 }
@@ -134,26 +140,41 @@ export interface BillingStripe {
 const LIVE_STATUSES = new Set(['active', 'trialing', 'past_due', 'unpaid']);
 
 function stripeAdapter(secretKey: string): BillingStripe {
-  const stripe = new Stripe(secretKey, { apiVersion: STRIPE_API_VERSION, maxNetworkRetries: 2, timeout: 20_000 });
+  // Webhook work: Stripe retries the event anyway, so a few client retries are fine.
+  const background = new Stripe(secretKey, { apiVersion: STRIPE_API_VERSION, maxNetworkRetries: 2, timeout: 20_000 });
+  // A person is waiting on Checkout and the Portal: fail fast, no retries.
+  const interactive = new Stripe(secretKey, { apiVersion: STRIPE_API_VERSION, maxNetworkRetries: 0, timeout: 8_000 });
   return {
-    constructEvent: (payload, signature, secret) => stripe.webhooks.constructEvent(payload, signature, secret),
-    retrieveSubscription: async (id) => stripe.subscriptions.retrieve(id),
+    constructEvent: (payload, signature, secret) => background.webhooks.constructEvent(payload, signature, secret),
+    retrieveSubscription: async (id) => background.subscriptions.retrieve(id),
     retrieveCustomer: async (id) => {
-      const customer = await stripe.customers.retrieve(id);
+      const customer = await background.customers.retrieve(id);
       return customer.deleted
         ? { id: customer.id, deleted: true, metadata: null }
         : { id: customer.id, deleted: false, metadata: customer.metadata };
     },
-    createCustomer: async ({ orgId, name }) => stripe.customers.create(
-      { name, metadata: { org_id: orgId } },
-      // A retry after a rolled-back transaction gets the same customer back, not a second one.
-      { idempotencyKey: `pd-org-customer-${orgId}` },
-    ),
+    createCustomer: async ({ orgId, name }) => {
+      // Only fixed parameters go under the idempotency key (a renamed organization would
+      // otherwise be refused as a key reuse with different parameters); the name follows.
+      const customer = await interactive.customers.create(
+        { metadata: { org_id: orgId } },
+        { idempotencyKey: `pd-org-customer-${orgId}` },
+      );
+      await interactive.customers.update(customer.id, { name });
+      return { id: customer.id };
+    },
     hasLiveSubscription: async (customerId) => {
-      const list = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 20 });
+      const list = await interactive.subscriptions.list({ customer: customerId, status: 'all', limit: 20 });
       return list.data.some((subscription) => LIVE_STATUSES.has(subscription.status));
     },
-    createCheckoutSession: async (input) => stripe.checkout.sessions.create({
+    expireOpenCheckoutSessions: async (customerId) => {
+      const open = await interactive.checkout.sessions.list({ customer: customerId, status: 'open', limit: 20 });
+      for (const session of open.data) {
+        await interactive.checkout.sessions.expire(session.id);
+      }
+      return open.data.length;
+    },
+    createCheckoutSession: async (input) => interactive.checkout.sessions.create({
       mode: 'subscription',
       customer: input.customerId,
       client_reference_id: input.orgId,
@@ -162,7 +183,7 @@ function stripeAdapter(secretKey: string): BillingStripe {
       success_url: input.successUrl,
       cancel_url: input.cancelUrl,
     }),
-    createPortalSession: async ({ customerId, returnUrl }) => stripe.billingPortal.sessions.create({
+    createPortalSession: async ({ customerId, returnUrl }) => interactive.billingPortal.sessions.create({
       customer: customerId,
       return_url: returnUrl,
     }),
@@ -194,6 +215,8 @@ function stripeClient(config: BillingConfig): BillingStripe {
 export type Target =
   | { kind: 'paid'; plan: PaidPlan; status: 'active' | 'past_due'; periodStart: Date | null; periodEnd: Date | null }
   | { kind: 'free' }
+  /** Live, but on a price this deployment does not know: leave the organization as it is. */
+  | { kind: 'unknown_price'; priceIds: string[] }
   /** Not settled yet (incomplete): leave the organization as it is. */
   | { kind: 'none' };
 
@@ -220,8 +243,9 @@ export function deriveTarget(subscription: SubscriptionLike, prices: Record<Paid
         .map((item) => (item.price.id === prices.growth ? 'growth' : item.price.id === prices.starter ? 'starter' : null))
         .find((value): value is PaidPlan => value !== null);
       if (!plan) {
-        // A price this deployment does not know. Fail so Stripe retries once the env is fixed.
-        throw new Error('The subscription has no Starter or Growth price');
+        // A price this deployment does not know (a new price in the dashboard, or a wrong env).
+        // Retrying would not help; it is recorded for a person to fix.
+        return { kind: 'unknown_price', priceIds: subscription.items.data.map((item) => item.price.id) };
       }
       const period = subscriptionPeriod(subscription);
       return {
@@ -288,11 +312,24 @@ export type ApplyResult =
   | 'org_not_found'
   | 'customer_mismatch'
   | 'stale_subscription'
+  | 'second_live_subscription'
+  | 'unknown_price'
   | 'not_settled';
+
+/** The organization's stored subscription as Stripe reported it, fetched before the lock. */
+export interface StoredSubscriptionCheck {
+  id: string;
+  /** Active, trialing, or past_due: it still gives the organization a paid plan. */
+  live: boolean;
+}
+
+/** Thrown when the stored subscription changed between the check and the lock; Stripe retries. */
+export class StoredSubscriptionChanged extends Error {}
 
 /**
  * Brings the organization in line with one subscription's current state. Runs in withOrg
- * for `orgId`; locks the organization first, then touches rfp_credits.
+ * for `orgId`; locks the organization first, then touches rfp_credits. Makes no network calls:
+ * anything it needs from Stripe is fetched before (`stored`).
  */
 export async function applySubscription(
   db: Db,
@@ -300,6 +337,7 @@ export async function applySubscription(
   subscription: { id: string; customerId: string | null },
   target: Target,
   now: Date,
+  stored: StoredSubscriptionCheck | null = null,
 ): Promise<ApplyResult> {
   const org = await lockOrg(db, orgId);
   if (!org) {
@@ -311,9 +349,26 @@ export async function applySubscription(
   if (target.kind === 'none') {
     return 'not_settled';
   }
-  if (org.stripeSubscriptionId && org.stripeSubscriptionId !== subscription.id && target.kind === 'free') {
+  if (target.kind === 'unknown_price') {
+    await audit(db, orgId, 'billing.unknown_price', { subscriptionId: subscription.id, priceIds: target.priceIds });
+    return 'unknown_price';
+  }
+  const other = org.stripeSubscriptionId && org.stripeSubscriptionId !== subscription.id ? org.stripeSubscriptionId : null;
+  if (other && target.kind === 'free') {
     // An older subscription ended while the organization has another one: nothing to do.
     return 'stale_subscription';
+  }
+  if (other && target.kind === 'paid') {
+    if (stored?.id !== other) {
+      throw new StoredSubscriptionChanged('The stored subscription changed while the event was processed');
+    }
+    if (stored.live) {
+      // Two live subscriptions on one customer. Cancelling one is a money decision for a person:
+      // keep the stored one, record both, and leave Stripe alone.
+      await audit(db, orgId, 'billing.second_live_subscription', { stored: other, incoming: subscription.id });
+      return 'second_live_subscription';
+    }
+    // The stored one is over (its own event has not arrived yet): the new one takes its place.
   }
   const fromPaid = org.plan !== 'free';
   if (target.kind === 'free') {
@@ -379,6 +434,10 @@ export async function applySubscription(
   return changed || !fromPaid ? 'applied' : 'unchanged';
 }
 
+async function audit(db: Db, orgId: string, action: string, detail: Record<string, unknown>): Promise<void> {
+  await db.insert(schema.auditLog).values({ orgId, action, targetType: 'stripe_subscription', detail });
+}
+
 type OrgPatch = Partial<Pick<OrgRow, 'plan' | 'planStatus' | 'stripeSubscriptionId' | 'cycleStart' | 'cycleEnd'>>;
 
 function same(a: unknown, b: unknown): boolean {
@@ -400,8 +459,16 @@ async function updateOrg(db: Db, org: OrgRow, patch: OrgPatch, now: Date): Promi
   return true;
 }
 
-/** Fetches the event's subscription and applies it. Returns what happened, for the log. */
-async function processEvent(stripe: BillingStripe, config: BillingConfig, event: EventLike): Promise<string> {
+/**
+ * Fetches the event's subscription and applies it. Returns what happened, for the log. Every
+ * Stripe call happens before the organization row is locked.
+ */
+async function processEvent(
+  stripe: BillingStripe,
+  config: BillingConfig,
+  event: EventLike,
+  log: FastifyBaseLogger,
+): Promise<string> {
   if (!HANDLED_EVENTS.has(event.type)) {
     return 'ignored_type';
   }
@@ -421,7 +488,29 @@ async function processEvent(stripe: BillingStripe, config: BillingConfig, event:
   }
   const target = deriveTarget(subscription, config.prices);
   const id = orgId;
-  return withOrg(id, (db) => applySubscription(db, id, { id: subscription.id, customerId }, target, new Date()));
+  let stored: StoredSubscriptionCheck | null = null;
+  if (target.kind === 'paid') {
+    // A different stored subscription: is it still live? Asked now, not under the lock.
+    const current = await withOrg(id, async (db) => {
+      const [row] = await db.select({ subscriptionId: schema.organizations.stripeSubscriptionId })
+        .from(schema.organizations).where(eq(schema.organizations.id, id));
+      return row?.subscriptionId ?? null;
+    });
+    if (current && current !== subscription.id) {
+      const other = await stripe.retrieveSubscription(current);
+      stored = { id: current, live: other.status === 'active' || other.status === 'trialing' || other.status === 'past_due' };
+    }
+  }
+  const outcome = await withOrg(id, (db) => applySubscription(db, id, { id: subscription.id, customerId }, target, new Date(), stored));
+  if (outcome === 'unknown_price' && target.kind === 'unknown_price') {
+    log.error({ eventId: event.id, subscriptionId: subscription.id, priceIds: target.priceIds }, 'stripe subscription has an unknown price');
+  } else if (outcome === 'second_live_subscription') {
+    log.error(
+      { eventId: event.id, storedSubscriptionId: stored?.id, incomingSubscriptionId: subscription.id },
+      'organization has two live Stripe subscriptions; cancel the extra one in Stripe',
+    );
+  }
+  return outcome;
 }
 
 // ---------------------------------------------------------------------------
@@ -455,32 +544,46 @@ export async function registerBilling(app: FastifyInstance): Promise<void> {
     }
     const orgId = request.auth!.orgId!;
     const stripe = stripeClient(config);
-    let customerId = null as string | null;
-    const result = await inOrg(reply, orgId, async (db, respond) => {
-      const org = await lockOrg(db, orgId);
-      if (!org) {
-        return respond(404, { error: 'Organization not found' });
-      }
-      const exists = { error: 'This organization already has a subscription. Use Manage billing to change it.', code: 'subscription_exists' };
-      if (org.plan !== 'free' || org.planStatus !== 'free') {
-        return respond(409, exists);
-      }
-      if (org.stripeCustomerId) {
-        if (await stripe.hasLiveSubscription(org.stripeCustomerId)) {
-          return respond(409, exists);
-        }
-        customerId = org.stripeCustomerId;
-        return null;
-      }
-      const customer = await stripe.createCustomer({ orgId, name: org.name });
-      await db.update(schema.organizations).set({ stripeCustomerId: customer.id, updatedAt: new Date() })
-        .where(eq(schema.organizations.id, orgId));
-      customerId = customer.id;
-      return null;
+    const exists = { error: 'This organization already has a subscription. Use Manage billing to change it.', code: 'subscription_exists' };
+    // No Stripe call is made while the organization row is locked: read, call Stripe, then
+    // store the customer id only if none was stored meanwhile.
+    const org = await withOrg(orgId, async (db) => {
+      const [row] = await db.select({
+        name: schema.organizations.name,
+        plan: schema.organizations.plan,
+        planStatus: schema.organizations.planStatus,
+        stripeCustomerId: schema.organizations.stripeCustomerId,
+      }).from(schema.organizations).where(eq(schema.organizations.id, orgId));
+      return row ?? null;
     });
-    if (!customerId) {
-      return result;
+    if (!org) {
+      return reply.code(404).send({ error: 'Organization not found' });
     }
+    if (org.plan !== 'free' || org.planStatus !== 'free') {
+      return reply.code(409).send(exists);
+    }
+    let customerId = org.stripeCustomerId;
+    if (customerId) {
+      if (await stripe.hasLiveSubscription(customerId)) {
+        return reply.code(409).send(exists);
+      }
+    } else {
+      const created = (await stripe.createCustomer({ orgId, name: org.name })).id;
+      customerId = await withOrg(orgId, async (db) => {
+        const [claimed] = await db.update(schema.organizations).set({ stripeCustomerId: created, updatedAt: new Date() })
+          .where(and(eq(schema.organizations.id, orgId), isNull(schema.organizations.stripeCustomerId)))
+          .returning({ id: schema.organizations.stripeCustomerId });
+        if (claimed) {
+          return created;
+        }
+        // Another request stored one first (the idempotency key makes it the same customer).
+        const [row] = await db.select({ id: schema.organizations.stripeCustomerId })
+          .from(schema.organizations).where(eq(schema.organizations.id, orgId));
+        return row?.id ?? created;
+      });
+    }
+    // An earlier tab or a stale session must not be able to complete as well.
+    await stripe.expireOpenCheckoutSessions(customerId);
     const session = await stripe.createCheckoutSession({
       customerId,
       orgId,
@@ -548,7 +651,7 @@ export async function registerBilling(app: FastifyInstance): Promise<void> {
         return { received: true };
       }
       try {
-        const outcome = await processEvent(stripe, config, event);
+        const outcome = await processEvent(stripe, config, event, request.log);
         await db.update(schema.stripeEvents).set({ processedAt: new Date(), updatedAt: new Date() }).where(and(
           eq(schema.stripeEvents.eventId, event.id),
           isNull(schema.stripeEvents.processedAt),
