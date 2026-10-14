@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { isUuid, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
@@ -118,7 +118,8 @@ async function history(
   });
 }
 
-async function loadTab(db: Db, bidId: string, tab: TabName) {
+// 'resumes' and 'reviews' are loaded in the tab route itself, through their parent rows.
+async function loadTab(db: Db, bidId: string, tab: Exclude<TabName, 'resumes' | 'reviews'>) {
   switch (tab) {
     case 'overview':
       return {
@@ -136,18 +137,6 @@ async function loadTab(db: Db, bidId: string, tab: TabName) {
     case 'outline':
       return {
         items: await db.select().from(schema.outlineItems).where(eq(schema.outlineItems.bidId, bidId)),
-      };
-    case 'resumes':
-      return {
-        requirements: await db.select().from(schema.personnelRequirements).where(eq(schema.personnelRequirements.bidId, bidId)),
-        candidates: await db.select().from(schema.candidates).where(eq(schema.candidates.bidId, bidId)),
-        matches: await db.select().from(schema.resumeMatches).where(sql`false`),
-      };
-    case 'reviews':
-      return {
-        reviews: await db.select().from(schema.reviews).where(eq(schema.reviews.bidId, bidId)),
-        assignments: await db.select().from(schema.reviewAssignments),
-        findings: await db.select().from(schema.reviewFindings),
       };
     case 'production':
       return {
