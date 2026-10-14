@@ -3,6 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { isUuid, PLAN_LIMITS, type Plan, schema, userMemberships, withOrg } from '@pd/core';
 import { requireAuth, requireUser } from './context.js';
+import { BODY_REQUIRED, readBody, text } from './body.js';
 import { currentCreditPeriod, expireAbandonedUploads, removeChunkDirs } from './credits.js';
 import { inOrg } from './scope.js';
 import { hashToken, isWorkEmail, newToken, sendOutOfBand } from './security.js';
@@ -19,7 +20,11 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     if ((await userMemberships(auth.userId)).length > 0) {
       return reply.code(409).send({ error: 'You already belong to an organization' });
     }
-    const name = ((request.body as { name?: string }).name ?? '').trim();
+    const body = readBody(request);
+    if (!body) {
+      return reply.code(400).send(BODY_REQUIRED);
+    }
+    const name = text(body, 'name').trim();
     if (!name) {
       return reply.code(400).send({ error: 'Organization name is required' });
     }
@@ -82,7 +87,11 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     if (auth.role !== 'owner') {
       return reply.code(403).send({ error: 'Only the owner can change the organization' });
     }
-    const name = ((request.body as { name?: string }).name ?? '').trim();
+    const body = readBody(request);
+    if (!body) {
+      return reply.code(400).send(BODY_REQUIRED);
+    }
+    const name = text(body, 'name').trim();
     return withOrg(auth.orgId!, async (db) => {
       await db.update(schema.organizations).set({ name, updatedAt: new Date() }).where(eq(schema.organizations.id, auth.orgId!));
       return { ok: true };
@@ -101,7 +110,11 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     if (auth.role !== 'owner') {
       return reply.code(403).send({ error: 'Only the owner can invite' });
     }
-    const email = ((request.body as { email?: string }).email ?? '').trim().toLowerCase();
+    const body = readBody(request);
+    if (!body) {
+      return reply.code(400).send(BODY_REQUIRED);
+    }
+    const email = text(body, 'email').trim().toLowerCase();
     if (!isWorkEmail(email)) {
       return reply.code(400).send({ error: 'Use a work email address' });
     }

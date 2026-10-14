@@ -1,6 +1,7 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
+import pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, it, vi } from 'vitest';
 import { closeDb, getDb, getPool, schema } from '@pd/core';
 import { type OutOfBandMessage, resetSendCaps, sendOutOfBand, setOutOfBandSink } from '../src/security.js';
@@ -373,6 +374,188 @@ describe.skipIf(Boolean(unavailable))('auth routes', () => {
       expect(reset.statusCode).toBe(200);
       expect((await call('GET', '/api/me', undefined, user.token)).statusCode).toBe(401);
       expect((await call('POST', '/api/auth/reset', { token, password: 'another new password' })).statusCode).toBe(400);
+    });
+  });
+
+  describe('password changes and racing logins', () => {
+    it('a login that races a password reset does not leave a live session', async () => {
+      const user = await verifiedUser();
+      const sessionsBefore = await getDb().select().from(schema.sessions).where(eq(schema.sessions.userId, user.userId));
+      // Stand in for a reset that has updated the hash but not committed yet.
+      const holder = new pg.Client({ connectionString: inject('appUrl') });
+      await holder.connect();
+      await holder.query('begin');
+      await holder.query('update users set password_hash = $1 where id = $2', ['changed:elsewhere', user.userId]);
+      const pending = call('POST', '/api/auth/login', { email: user.email, password: user.password });
+      const deadline = Date.now() + 10_000;
+      let waiting = 0;
+      while (waiting < 1 && Date.now() < deadline) {
+        await holder.query('select pg_stat_clear_snapshot()');
+        const result = await holder.query<{ n: number }>(
+          "select count(*)::int as n from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid() and wait_event_type = 'Lock'",
+        );
+        waiting = result.rows[0].n;
+      }
+      await holder.query('commit');
+      await holder.end();
+      expect(waiting).toBe(1);
+      const response = await pending;
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toEqual({ error: 'Email or password is wrong' });
+      const sessionsAfter = await getDb().select().from(schema.sessions).where(eq(schema.sessions.userId, user.userId));
+      expect(sessionsAfter).toHaveLength(sessionsBefore.length);
+    });
+
+    it('a reset expires the user\'s other outstanding reset links', async () => {
+      const user = await verifiedUser();
+      expect((await call('POST', '/api/auth/reset', { email: user.email })).statusCode).toBe(200);
+      const first = lastSecret('email', user.email);
+      expect((await call('POST', '/api/auth/reset', { email: user.email })).statusCode).toBe(200);
+      const second = lastSecret('email', user.email);
+      expect((await call('POST', '/api/auth/reset', { token: second, password: 'a brand new password' })).statusCode).toBe(200);
+      expect((await call('POST', '/api/auth/reset', { token: first, password: 'another new password' })).statusCode).toBe(400);
+      expect((await call('POST', '/api/auth/login', { email: user.email, password: 'a brand new password' })).statusCode).toBe(200);
+    });
+
+    it('a password change expires every outstanding reset link', async () => {
+      const user = await verifiedUser();
+      await call('POST', '/api/auth/reset', { email: user.email });
+      const first = lastSecret('email', user.email);
+      await call('POST', '/api/auth/reset', { email: user.email });
+      const second = lastSecret('email', user.email);
+      const change = await call('PATCH', '/api/me', { password: 'a brand new password', currentPassword: user.password }, user.token);
+      expect(change.statusCode).toBe(200);
+      for (const token of [first, second]) {
+        expect((await call('POST', '/api/auth/reset', { token, password: 'an attacker password' })).statusCode).toBe(400);
+      }
+    });
+
+    it('a password change fails if the password changed after it was checked', async () => {
+      const user = await verifiedUser();
+      // Two changes from the same session with the same current password: only one wins.
+      const results = await Promise.all([
+        call('PATCH', '/api/me', { password: 'first new password', currentPassword: user.password }, user.token),
+        call('PATCH', '/api/me', { password: 'second new password', currentPassword: user.password }, user.token),
+      ]);
+      expect(results.map((result) => result.statusCode).sort()).toEqual([200, 403]);
+    });
+
+    it('caps password length at 256 on signup, reset and PATCH /api/me', async () => {
+      const long = 'x'.repeat(257);
+      expect((await call('POST', '/api/auth/signup', { email: uniqueEmail('long'), phone: uniquePhone(), password: long })).statusCode).toBe(400);
+      const user = await verifiedUser();
+      await call('POST', '/api/auth/reset', { email: user.email });
+      const token = lastSecret('email', user.email);
+      expect((await call('POST', '/api/auth/reset', { token, password: long })).statusCode).toBe(400);
+      expect((await call('PATCH', '/api/me', { password: long, currentPassword: user.password }, user.token)).statusCode).toBe(400);
+      // The link was not used up by the refused attempt.
+      expect((await call('POST', '/api/auth/reset', { token, password: 'x'.repeat(256) })).statusCode).toBe(200);
+    });
+
+    it('a reset request takes the same minimum time whether or not the account exists', async () => {
+      const user = await verifiedUser();
+      for (const email of [uniqueEmail('nobody'), user.email]) {
+        const started = Date.now();
+        const response = await call('POST', '/api/auth/reset', { email });
+        expect(response.json()).toEqual({ ok: true });
+        expect(Date.now() - started).toBeGreaterThanOrEqual(290);
+      }
+    });
+  });
+
+  describe('signup caps', () => {
+    it('counts signups answered 409 against the per-account cap', async () => {
+      const user = await signUp();
+      const statuses: number[] = [];
+      for (let i = 0; i < 5; i += 1) {
+        statuses.push((await call('POST', '/api/auth/signup', { email: user.email, phone: uniquePhone(), password: 'correct horse battery' })).statusCode);
+      }
+      // The first signup used one of the 5 daily sends for this email.
+      expect(statuses).toEqual([409, 409, 409, 409, 429]);
+    });
+
+    it('counts signups answered 409 against the per-IP cap', async () => {
+      const user = await signUp();
+      const password = 'correct horse battery';
+      const statuses: number[] = [];
+      // Four probes of the taken email and four of the taken phone (under the per-account caps)...
+      for (let i = 0; i < 4; i += 1) {
+        statuses.push((await call('POST', '/api/auth/signup', { email: user.email, phone: uniquePhone(), password })).statusCode);
+        statuses.push((await call('POST', '/api/auth/signup', { email: uniqueEmail('probe'), phone: user.phone, password })).statusCode);
+      }
+      expect(statuses.every((status) => status === 409)).toBe(true);
+      // ...plus the first signup and one more make 10 for this IP; the next is refused.
+      expect((await call('POST', '/api/auth/signup', { email: uniqueEmail('new'), phone: uniquePhone(), password })).statusCode).toBe(201);
+      expect((await call('POST', '/api/auth/signup', { email: uniqueEmail('new'), phone: uniquePhone(), password })).statusCode).toBe(429);
+    });
+  });
+
+  describe('client IP behind a proxy', () => {
+    async function capsHitAfter(trust: string | undefined, forwardedFor: (i: number) => string) {
+      vi.stubEnv('PD_TRUST_PROXY', trust ?? '');
+      const { buildApp } = await import('../src/app.js');
+      const proxied = await buildApp({ logger: false });
+      vi.unstubAllEnvs();
+      try {
+        const statuses: number[] = [];
+        for (let i = 0; i < 11; i += 1) {
+          const response = await proxied.inject({
+            method: 'POST',
+            url: '/api/auth/resend-email',
+            remoteAddress: '127.0.0.1',
+            headers: { 'x-forwarded-for': forwardedFor(i) },
+            payload: { email: uniqueEmail('proxy') },
+          });
+          statuses.push(response.statusCode);
+        }
+        return statuses;
+      } finally {
+        await proxied.close();
+      }
+    }
+
+    it('keys the per-IP cap on X-Forwarded-For when the proxy is trusted', async () => {
+      // One client: capped on the 11th request.
+      expect((await capsHitAfter('127.0.0.1', () => '203.0.113.5')).at(-1)).toBe(429);
+      resetSendCaps();
+      // Eleven clients behind the proxy: none capped.
+      const statuses = await capsHitAfter('127.0.0.1', (i) => `203.0.113.${i + 10}`);
+      expect(statuses.every((status) => status === 200)).toBe(true);
+    });
+
+    it('ignores X-Forwarded-For when no proxy is trusted', async () => {
+      const statuses = await capsHitAfter(undefined, (i) => `203.0.113.${i + 10}`);
+      expect(statuses.at(-1)).toBe(429);
+    });
+
+    it('refuses PD_TRUST_PROXY values that trust everyone', async () => {
+      const { trustProxyFromEnv } = await import('../src/app.js');
+      expect(trustProxyFromEnv(undefined)).toBe(false);
+      expect(trustProxyFromEnv(' ')).toBe(false);
+      expect(trustProxyFromEnv('10.0.0.0/8, ::1,loopback')).toEqual(['10.0.0.0/8', '::1', 'loopback']);
+      for (const bad of ['true', '*', '1', '10.0.0.0/33', 'nginx']) {
+        expect(() => trustProxyFromEnv(bad), bad).toThrow(/PD_TRUST_PROXY/);
+      }
+    });
+  });
+
+  describe('organization routes without a body', () => {
+    it('answer 400, not 500', async () => {
+      const user = await verifiedUser();
+      expect((await call('POST', '/api/org', undefined, user.token)).statusCode).toBe(400);
+      expect((await call('POST', '/api/org', { name: 'Acme' }, user.token)).statusCode).toBe(201);
+      expect((await call('PATCH', '/api/org', undefined, user.token)).statusCode).toBe(400);
+      expect((await call('POST', '/api/org/invites', undefined, user.token)).statusCode).toBe(400);
+    });
+  });
+
+  describe('startup', () => {
+    it('refuses to start in production with no email/SMS delivery installed', async () => {
+      setOutOfBandSink(null);
+      vi.stubEnv('NODE_ENV', 'production');
+      const { buildApp } = await import('../src/app.js');
+      await expect(buildApp({ logger: false })).rejects.toThrow(/delivery/);
+      vi.unstubAllEnvs();
     });
   });
 

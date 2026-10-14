@@ -133,7 +133,8 @@ const emailCap = dailyCap('email', 10, 5);
 
 /**
  * Records an SMS send against the caller's IP and each account key (signup passes the email and
- * the phone; resend-code passes the phone), or says which cap is reached.
+ * the phone; resend-code passes the email, as the caller never names the phone), or says which
+ * cap is reached.
  */
 export function recordSmsSend(ip: string, accountKeys: string[]): CapResult {
   return smsCap.record(ip, accountKeys);
@@ -174,6 +175,16 @@ const warned = new Set<string>();
  */
 export function setOutOfBandSink(next: OutOfBandSink | null): void {
   sink = next;
+}
+
+/**
+ * In production (NODE_ENV=production) the app must not start without a delivery installed:
+ * signup, resends, resets and invites would answer success and send nothing.
+ */
+export function assertOutOfBandDelivery(): void {
+  if (process.env.NODE_ENV === 'production' && !sink) {
+    throw new Error('No email/SMS delivery is installed (setOutOfBandSink). Refusing to start with NODE_ENV=production.');
+  }
 }
 
 /**
