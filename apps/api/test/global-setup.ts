@@ -22,6 +22,8 @@ import type { GlobalSetupContext } from 'vitest/node';
 declare module 'vitest' {
   export interface ProvidedContext {
     adminUrl: string;
+    /** Superuser connection to the cluster's maintenance database (for tests that create databases). */
+    clusterUrl: string;
     appUrl: string;
     dbUnavailable: string;
   }
@@ -92,6 +94,7 @@ export default async function setup({ provide }: GlobalSetupContext) {
     console.warn(`[api tests] ${reason}`);
     provide('dbUnavailable', reason);
     provide('adminUrl', '');
+    provide('clusterUrl', '');
     provide('appUrl', '');
     return;
   }
@@ -109,10 +112,21 @@ export default async function setup({ provide }: GlobalSetupContext) {
       + 'or set TEST_PD_APP_PASSWORD to its password so the tests do not change it.',
     );
   }
-  await admin.query(`create database "${database}"`);
+  // Migrate the way production should: as an owner role that owns the database and has
+  // CREATEROLE but is not a superuser. When pd_app already existed (TEST_PD_APP_PASSWORD),
+  // that owner cannot be granted SET on the existing pd_system, so the superuser migrates.
+  const owner = { name: `pd_owner_${randomBytes(4).toString('hex')}`, password: randomBytes(12).toString('hex') };
+  if (!roleExisted) {
+    await admin.query(`create role "${owner.name}" login createrole nosuperuser nobypassrls password '${owner.password}'`);
+    await admin.query(`create database "${database}" owner "${owner.name}"`);
+  } else {
+    await admin.query(`create database "${database}"`);
+  }
 
   const adminUrl = withDatabase(cluster.url, database);
-  const migrator = new pg.Client({ connectionString: adminUrl });
+  const migrator = new pg.Client({
+    connectionString: roleExisted ? adminUrl : withDatabase(cluster.url, database, owner),
+  });
   await migrator.connect();
   await migrate(drizzle(migrator), { migrationsFolder });
   await migrator.end();
@@ -124,6 +138,7 @@ export default async function setup({ provide }: GlobalSetupContext) {
   await admin.end();
 
   provide('adminUrl', adminUrl);
+  provide('clusterUrl', cluster.url);
   provide('appUrl', withDatabase(cluster.url, database, { name: 'pd_app', password: appPassword }));
   provide('dbUnavailable', '');
 
@@ -139,6 +154,7 @@ export default async function setup({ provide }: GlobalSetupContext) {
         await cleanup.query('drop owned by pd_app, pd_system cascade').catch(() => undefined);
         await cleanup.query('drop role if exists pd_app').catch(() => undefined);
         await cleanup.query('drop role if exists pd_system').catch(() => undefined);
+        await cleanup.query(`drop role if exists "${owner.name}"`).catch(() => undefined);
       }
       await cleanup.end();
     }

@@ -79,6 +79,20 @@ describe.skipIf(Boolean(unavailable))('row-level security catalog', () => {
     expect(result.rows[0].with_check).toMatch(/^\(id = \(NULLIF\(current_setting\('app\.org_id'/);
   });
 
+  it('was migrated by a database owner that is not a superuser', async () => {
+    const result = await admin.query(`
+      select r.rolsuper, r.rolcreaterole,
+        (select p.proowner::regrole::text from pg_proc p where p.oid = 'pd_system.user_memberships(uuid)'::regprocedure) as function_owner
+      from pg_database d join pg_roles r on r.oid = d.datdba
+      where d.datname = current_database()
+    `);
+    // global-setup migrates as a CREATEROLE owner unless pd_app already existed on the cluster.
+    if (!process.env.TEST_PD_APP_PASSWORD) {
+      expect(result.rows[0]).toMatchObject({ rolsuper: false, rolcreaterole: true });
+    }
+    expect(result.rows[0].function_owner).toBe('pd_system');
+  });
+
   it('leaves no policy from the old rls.sql', async () => {
     const result = await admin.query("select policyname from pg_policies where policyname like 'tenant\\_%' and policyname <> 'tenant_isolation'");
     expect(result.rows).toEqual([]);
