@@ -49,6 +49,37 @@ jobs:
       - run: pnpm install
       - run: pnpm build
 
+  test-api:
+    # Tenant-isolation tests against a real Postgres. The tests migrate a fresh database as
+    # the superuser below, then connect as pd_app so row-level security is exercised.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install
+      - run: pnpm --filter @pd/api test
+
   build-docker:
     # Off until the Dockerfiles build from the repo root: each one needs the root lockfile,
     # the workspace packages, and infra/, none of which are inside its ./apps/<app> context.
