@@ -106,7 +106,7 @@ export interface OrganizationDto extends BaseDto {
   plan: Plan;
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
-  planStatus: string;
+  planStatus: PlanStatus;
   cycleStart: string | null;
   cycleEnd: string | null;
   freeFirstMonthEnds: string | null;
@@ -124,6 +124,12 @@ export interface OrgPayloadDto {
   org: OrganizationDto | null;
   credits: RfpCreditDto | null;
   role: Role;
+  /** Members the plan allows (06 s2). */
+  seatLimit: number;
+  /** Files per bid, in MB (06 s3). */
+  mbCap: number;
+  /** False until Stripe is configured on the server; Checkout and Portal answer 503 then. */
+  billingAvailable: boolean;
 }
 
 export interface CreatedOrgDto {
@@ -132,16 +138,32 @@ export interface CreatedOrgDto {
   plan: Plan;
 }
 
-export interface MembershipDto extends OrgScopedDto {
-  userId: string;
-  role: Role;
-}
-
 export interface ProcessingInfoDto {
   provider: string;
   model: string;
   subprocessors: string[];
   privacyPath: string;
+}
+
+/** 'free' on the free plan; 'active' or 'past_due' (Stripe is retrying) on a paid plan. */
+export type PlanStatus = 'active' | 'past_due' | 'free';
+
+/** One member of the organization, oldest first (GET /api/org/members). */
+export interface OrgMemberDto {
+  userId: string;
+  name: string | null;
+  email: string;
+  role: Role;
+  joinedAt: string;
+  /** The signed-in user. */
+  isYou: boolean;
+}
+
+export type PaidPlan = Exclude<Plan, 'free'>;
+
+/** A Stripe-hosted page to send the browser to (Checkout or the Customer Portal). */
+export interface BillingRedirectDto {
+  url: string;
 }
 
 // ---------------------------------------------------------------------------
