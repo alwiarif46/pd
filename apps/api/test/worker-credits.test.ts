@@ -156,7 +156,7 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
    * `waiters` backends are blocked on a lock, then lets go. Returns how many waited, and the
    * contenders' settled results.
    */
-  async function race<T>(orgId: string, sql: string, params: unknown[], waiters: number, contenders: () => Promise<T>[]) {
+  async function race<T extends readonly unknown[]>(orgId: string, sql: string, params: unknown[], waiters: number, contenders: () => readonly [...T]) {
     const holder = new pg.Client({ connectionString: inject('appUrl') });
     await holder.connect();
     await holder.query('begin');
