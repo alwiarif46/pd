@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint . --ext ts --report-unused-disable-directives --max-warnings 0",
+    "lint": "eslint . --max-warnings 0",
     "clean": "rm -rf dist"
   },
   "main": "./src/index.ts",
