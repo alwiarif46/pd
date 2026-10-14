@@ -1,7 +1,8 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
+import { findBid } from './scope.js';
 
 export async function registerBids(app: FastifyInstance): Promise<void> {
   app.get('/api/bids', { preHandler: requireAuth }, async (request) => {
@@ -34,7 +35,7 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
     const orgId = request.auth!.orgId!;
     const id = (request.params as { id: string }).id;
     return withOrg(orgId, async (db) => {
-      const [bid] = await db.select().from(schema.bids).where(eq(schema.bids.id, id));
+      const bid = await findBid(db, orgId, id);
       if (!bid) {
         return reply.code(404).send({ error: 'Bid not found' });
       }
@@ -58,7 +59,7 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
       retentionExtendedUntil?: string | null;
     };
     return withOrg(orgId, async (db) => {
-      const [bid] = await db.select().from(schema.bids).where(eq(schema.bids.id, id));
+      const bid = await findBid(db, orgId, id);
       if (!bid) {
         return reply.code(404).send({ error: 'Bid not found' });
       }
@@ -78,8 +79,8 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
           ? bid.retentionExtendedUntil
           : (body.retentionExtendedUntil ? new Date(body.retentionExtendedUntil) : null),
         updatedAt: new Date(),
-      }).where(eq(schema.bids.id, id));
-      const [updated] = await db.select().from(schema.bids).where(eq(schema.bids.id, id));
+      }).where(and(eq(schema.bids.id, id), eq(schema.bids.orgId, orgId)));
+      const updated = await findBid(db, orgId, id);
       return updated;
     });
   });
@@ -88,11 +89,11 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
     const orgId = request.auth!.orgId!;
     const id = (request.params as { id: string }).id;
     return withOrg(orgId, async (db) => {
-      const [bid] = await db.select().from(schema.bids).where(eq(schema.bids.id, id));
+      const bid = await findBid(db, orgId, id);
       if (!bid) {
         return reply.code(404).send({ error: 'Bid not found' });
       }
-      await db.delete(schema.bids).where(eq(schema.bids.id, id));
+      await db.delete(schema.bids).where(and(eq(schema.bids.id, id), eq(schema.bids.orgId, orgId)));
       return { ok: true };
     });
   });

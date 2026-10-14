@@ -1,7 +1,8 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { schema, withOrg } from '@pd/core';
+import { isUuid, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
+import { type Db, findBid } from './scope.js';
 
 const TABS = [
   'overview',
@@ -93,7 +94,7 @@ function when(value: unknown): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-type Db = Parameters<Parameters<typeof withOrg>[1]>[0];
+
 
 async function history(
   db: Db,
@@ -117,7 +118,8 @@ async function history(
   });
 }
 
-async function loadTab(db: Db, bidId: string, tab: TabName) {
+// 'resumes' and 'reviews' are loaded in the tab route itself, through their parent rows.
+async function loadTab(db: Db, bidId: string, tab: Exclude<TabName, 'resumes' | 'reviews'>) {
   switch (tab) {
     case 'overview':
       return {
@@ -135,18 +137,6 @@ async function loadTab(db: Db, bidId: string, tab: TabName) {
     case 'outline':
       return {
         items: await db.select().from(schema.outlineItems).where(eq(schema.outlineItems.bidId, bidId)),
-      };
-    case 'resumes':
-      return {
-        requirements: await db.select().from(schema.personnelRequirements).where(eq(schema.personnelRequirements.bidId, bidId)),
-        candidates: await db.select().from(schema.candidates).where(eq(schema.candidates.bidId, bidId)),
-        matches: await db.select().from(schema.resumeMatches).where(sql`false`),
-      };
-    case 'reviews':
-      return {
-        reviews: await db.select().from(schema.reviews).where(eq(schema.reviews.bidId, bidId)),
-        assignments: await db.select().from(schema.reviewAssignments),
-        findings: await db.select().from(schema.reviewFindings),
       };
     case 'production':
       return {
@@ -175,7 +165,7 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ error: 'Unknown tab' });
     }
     return withOrg(orgId, async (db) => {
-      const [bid] = await db.select().from(schema.bids).where(eq(schema.bids.id, id));
+      const bid = await findBid(db, orgId, id);
       if (!bid) {
         return reply.code(404).send({ error: 'Bid not found' });
       }
@@ -209,14 +199,21 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
     if (!isTable(table)) {
       return reply.code(404).send({ error: 'Unknown table' });
     }
+    if (!isUuid(rowId)) {
+      return reply.code(404).send({ error: 'Row not found' });
+    }
     return withOrg(orgId, async (db) => {
-      const row = await readRow(db, id, table, rowId);
+      if (!await findBid(db, orgId, id)) {
+        return reply.code(404).send({ error: 'Bid not found' });
+      }
+      const row = await readRow(db, orgId, id, table, rowId);
       if (!row) {
         return reply.code(404).send({ error: 'Row not found' });
       }
       const changes = await db.select().from(schema.rowHistory).where(and(
         eq(schema.rowHistory.rowTable, table),
         eq(schema.rowHistory.rowId, rowId),
+        eq(schema.rowHistory.orgId, orgId),
       ));
       return { row, history: changes };
     });
@@ -230,7 +227,13 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
     if (!isTable(table)) {
       return reply.code(404).send({ error: 'Unknown table' });
     }
+    if (!isUuid(rowId)) {
+      return reply.code(404).send({ error: 'Row not found' });
+    }
     return withOrg(orgId, async (db) => {
+      if (!await findBid(db, orgId, id)) {
+        return reply.code(404).send({ error: 'Bid not found' });
+      }
       const updated = await patchRow(db, orgId, userId, id, table, rowId, fields);
       if (!updated) {
         return reply.code(404).send({ error: 'Row not found' });
@@ -245,8 +248,14 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
     if (!isTable(table)) {
       return reply.code(404).send({ error: 'Unknown table' });
     }
+    if (!isUuid(rowId)) {
+      return reply.code(404).send({ error: 'Row not found' });
+    }
     return withOrg(orgId, async (db) => {
-      const removed = await deleteRow(db, id, table, rowId);
+      if (!await findBid(db, orgId, id)) {
+        return reply.code(404).send({ error: 'Bid not found' });
+      }
+      const removed = await deleteRow(db, orgId, id, table, rowId);
       if (!removed) {
         return reply.code(404).send({ error: 'Row not found' });
       }
@@ -262,7 +271,7 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ error: 'Unknown tab' });
     }
     return withOrg(orgId, async (db) => {
-      const [bid] = await db.select().from(schema.bids).where(eq(schema.bids.id, id));
+      const bid = await findBid(db, orgId, id);
       if (!bid) {
         return reply.code(404).send({ error: 'Bid not found' });
       }
@@ -281,7 +290,7 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ error: 'Unknown tab' });
     }
     return withOrg(orgId, async (db) => {
-      const [bid] = await db.select().from(schema.bids).where(eq(schema.bids.id, id));
+      const bid = await findBid(db, orgId, id);
       if (!bid) {
         return reply.code(404).send({ error: 'Bid not found' });
       }
@@ -349,7 +358,7 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'Choose shift, scale, or keep' });
     }
     return withOrg(orgId, async (db) => {
-      const [bid] = await db.select().from(schema.bids).where(eq(schema.bids.id, id));
+      const bid = await findBid(db, orgId, id);
       if (!bid) {
         return reply.code(404).send({ error: 'Bid not found' });
       }
@@ -380,7 +389,7 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
           startDate: new Date(nextStart),
           endDate: new Date(nextEnd),
           updatedAt: new Date(),
-        }).where(eq(schema.scheduleActivities.id, activity.id));
+        }).where(and(eq(schema.scheduleActivities.id, activity.id), eq(schema.scheduleActivities.orgId, orgId)));
         moved += 1;
       }
       return { ok: true, moved };
@@ -390,16 +399,22 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
   app.post('/api/bids/:id/compliance/merge', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const id = (request.params as { id: string }).id;
-    const ids = (request.body as { ids?: string[] }).ids ?? [];
+    const requested = (request.body as { ids?: unknown }).ids;
+    // Unique ids only: the same id twice would merge a row into itself and then delete it.
+    const ids = Array.isArray(requested) ? [...new Set(requested.filter(isUuid))] : [];
     if (ids.length < 2) {
       return reply.code(400).send({ error: 'Choose at least two rows' });
     }
     return withOrg(orgId, async (db) => {
+      if (!await findBid(db, orgId, id)) {
+        return reply.code(404).send({ error: 'Bid not found' });
+      }
       const rows = [];
       for (const rowId of ids) {
         const [row] = await db.select().from(schema.complianceRows).where(and(
           eq(schema.complianceRows.id, rowId),
           eq(schema.complianceRows.bidId, id),
+          eq(schema.complianceRows.orgId, orgId),
         ));
         if (row) {
           rows.push(row);
@@ -412,9 +427,9 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
       await db.update(schema.complianceRows).set({
         requirementText: rows.map((row) => row.requirementText).join(' '),
         updatedAt: new Date(),
-      }).where(eq(schema.complianceRows.id, keep.id));
+      }).where(and(eq(schema.complianceRows.id, keep.id), eq(schema.complianceRows.orgId, orgId)));
       for (const row of rest) {
-        await db.delete(schema.complianceRows).where(eq(schema.complianceRows.id, row.id));
+        await db.delete(schema.complianceRows).where(and(eq(schema.complianceRows.id, row.id), eq(schema.complianceRows.orgId, orgId)));
       }
       return { id: keep.id };
     });
@@ -426,17 +441,26 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
     const body = request.body as { rowId?: string; at?: number };
     const at = body.at ?? 0;
     return withOrg(orgId, async (db) => {
-      const [row] = await db.select().from(schema.complianceRows).where(and(
-        eq(schema.complianceRows.id, body.rowId ?? ''),
-        eq(schema.complianceRows.bidId, id),
-      ));
-      if (!row || at <= 0 || at >= row.requirementText.length) {
+      if (!await findBid(db, orgId, id)) {
+        return reply.code(404).send({ error: 'Bid not found' });
+      }
+      const [row] = isUuid(body.rowId)
+        ? await db.select().from(schema.complianceRows).where(and(
+          eq(schema.complianceRows.id, body.rowId),
+          eq(schema.complianceRows.bidId, id),
+          eq(schema.complianceRows.orgId, orgId),
+        ))
+        : [];
+      if (!row) {
+        return reply.code(404).send({ error: 'Row not found' });
+      }
+      if (at <= 0 || at >= row.requirementText.length) {
         return reply.code(400).send({ error: 'Choose a split point inside the requirement' });
       }
       await db.update(schema.complianceRows).set({
         requirementText: row.requirementText.slice(0, at).trim(),
         updatedAt: new Date(),
-      }).where(eq(schema.complianceRows.id, row.id));
+      }).where(and(eq(schema.complianceRows.id, row.id), eq(schema.complianceRows.orgId, orgId)));
       const [created] = await db.insert(schema.complianceRows).values({
         orgId,
         bidId: id,
@@ -452,68 +476,73 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
   });
 }
 
-async function readRow(db: Db, bidId: string, table: RowTable, rowId: string): Promise<object | null> {
+/** True when `id` names a row of `table` on this bid in this organization. */
+async function onBid(db: Db, orgId: string, bidId: string, table: RowTable, id: unknown): Promise<boolean> {
+  return isUuid(id) && (await readRow(db, orgId, bidId, table, id)) !== null;
+}
+
+async function readRow(db: Db, orgId: string, bidId: string, table: RowTable, rowId: string): Promise<object | null> {
   switch (table) {
     case 'bid_facts': {
-      const [row] = await db.select().from(schema.bidFacts).where(and(eq(schema.bidFacts.id, rowId), eq(schema.bidFacts.bidId, bidId)));
+      const [row] = await db.select().from(schema.bidFacts).where(and(eq(schema.bidFacts.id, rowId), eq(schema.bidFacts.bidId, bidId), eq(schema.bidFacts.orgId, orgId)));
       return row ?? null;
     }
     case 'kickoff_items': {
-      const [row] = await db.select().from(schema.kickoffItems).where(and(eq(schema.kickoffItems.id, rowId), eq(schema.kickoffItems.bidId, bidId)));
+      const [row] = await db.select().from(schema.kickoffItems).where(and(eq(schema.kickoffItems.id, rowId), eq(schema.kickoffItems.bidId, bidId), eq(schema.kickoffItems.orgId, orgId)));
       return row ?? null;
     }
     case 'schedule_activities': {
-      const [row] = await db.select().from(schema.scheduleActivities).where(and(eq(schema.scheduleActivities.id, rowId), eq(schema.scheduleActivities.bidId, bidId)));
+      const [row] = await db.select().from(schema.scheduleActivities).where(and(eq(schema.scheduleActivities.id, rowId), eq(schema.scheduleActivities.bidId, bidId), eq(schema.scheduleActivities.orgId, orgId)));
       return row ?? null;
     }
     case 'compliance_rows': {
-      const [row] = await db.select().from(schema.complianceRows).where(and(eq(schema.complianceRows.id, rowId), eq(schema.complianceRows.bidId, bidId)));
+      const [row] = await db.select().from(schema.complianceRows).where(and(eq(schema.complianceRows.id, rowId), eq(schema.complianceRows.bidId, bidId), eq(schema.complianceRows.orgId, orgId)));
       return row ?? null;
     }
     case 'outline_items': {
-      const [row] = await db.select().from(schema.outlineItems).where(and(eq(schema.outlineItems.id, rowId), eq(schema.outlineItems.bidId, bidId)));
+      const [row] = await db.select().from(schema.outlineItems).where(and(eq(schema.outlineItems.id, rowId), eq(schema.outlineItems.bidId, bidId), eq(schema.outlineItems.orgId, orgId)));
       return row ?? null;
     }
     case 'personnel_requirements': {
-      const [row] = await db.select().from(schema.personnelRequirements).where(and(eq(schema.personnelRequirements.id, rowId), eq(schema.personnelRequirements.bidId, bidId)));
+      const [row] = await db.select().from(schema.personnelRequirements).where(and(eq(schema.personnelRequirements.id, rowId), eq(schema.personnelRequirements.bidId, bidId), eq(schema.personnelRequirements.orgId, orgId)));
       return row ?? null;
     }
     case 'candidates': {
-      const [row] = await db.select().from(schema.candidates).where(and(eq(schema.candidates.id, rowId), eq(schema.candidates.bidId, bidId)));
+      const [row] = await db.select().from(schema.candidates).where(and(eq(schema.candidates.id, rowId), eq(schema.candidates.bidId, bidId), eq(schema.candidates.orgId, orgId)));
       return row ?? null;
     }
     case 'resume_matches': {
-      const [row] = await db.select().from(schema.resumeMatches).where(eq(schema.resumeMatches.id, rowId));
+      const [row] = await db.select().from(schema.resumeMatches).where(and(eq(schema.resumeMatches.id, rowId), eq(schema.resumeMatches.orgId, orgId)));
       if (!row) return null;
-      const [candidate] = await db.select().from(schema.candidates).where(and(eq(schema.candidates.id, row.candidateId), eq(schema.candidates.bidId, bidId)));
+      const [candidate] = await db.select().from(schema.candidates).where(and(eq(schema.candidates.id, row.candidateId), eq(schema.candidates.bidId, bidId), eq(schema.candidates.orgId, orgId)));
       return candidate ? row : null;
     }
     case 'reviews': {
-      const [row] = await db.select().from(schema.reviews).where(and(eq(schema.reviews.id, rowId), eq(schema.reviews.bidId, bidId)));
+      const [row] = await db.select().from(schema.reviews).where(and(eq(schema.reviews.id, rowId), eq(schema.reviews.bidId, bidId), eq(schema.reviews.orgId, orgId)));
       return row ?? null;
     }
     case 'review_assignments': {
-      const [row] = await db.select().from(schema.reviewAssignments).where(eq(schema.reviewAssignments.id, rowId));
+      const [row] = await db.select().from(schema.reviewAssignments).where(and(eq(schema.reviewAssignments.id, rowId), eq(schema.reviewAssignments.orgId, orgId)));
       if (!row) return null;
-      const [review] = await db.select().from(schema.reviews).where(and(eq(schema.reviews.id, row.reviewId), eq(schema.reviews.bidId, bidId)));
+      const [review] = await db.select().from(schema.reviews).where(and(eq(schema.reviews.id, row.reviewId), eq(schema.reviews.bidId, bidId), eq(schema.reviews.orgId, orgId)));
       return review ? row : null;
     }
     case 'review_findings': {
-      const [row] = await db.select().from(schema.reviewFindings).where(eq(schema.reviewFindings.id, rowId));
+      const [row] = await db.select().from(schema.reviewFindings).where(and(eq(schema.reviewFindings.id, rowId), eq(schema.reviewFindings.orgId, orgId)));
       if (!row) return null;
-      const [review] = await db.select().from(schema.reviews).where(and(eq(schema.reviews.id, row.reviewId), eq(schema.reviews.bidId, bidId)));
+      const [review] = await db.select().from(schema.reviews).where(and(eq(schema.reviews.id, row.reviewId), eq(schema.reviews.bidId, bidId), eq(schema.reviews.orgId, orgId)));
       return review ? row : null;
     }
     case 'production_items': {
-      const [row] = await db.select().from(schema.productionItems).where(and(eq(schema.productionItems.id, rowId), eq(schema.productionItems.bidId, bidId)));
+      const [row] = await db.select().from(schema.productionItems).where(and(eq(schema.productionItems.id, rowId), eq(schema.productionItems.bidId, bidId), eq(schema.productionItems.orgId, orgId)));
       return row ?? null;
     }
     case 'orals_items': {
-      const [row] = await db.select().from(schema.oralsItems).where(and(eq(schema.oralsItems.id, rowId), eq(schema.oralsItems.bidId, bidId)));
+      const [row] = await db.select().from(schema.oralsItems).where(and(eq(schema.oralsItems.id, rowId), eq(schema.oralsItems.bidId, bidId), eq(schema.oralsItems.orgId, orgId)));
       return row ?? null;
     }
     case 'lessons': {
-      const [row] = await db.select().from(schema.lessons).where(and(eq(schema.lessons.id, rowId), eq(schema.lessons.bidId, bidId)));
+      const [row] = await db.select().from(schema.lessons).where(and(eq(schema.lessons.id, rowId), eq(schema.lessons.bidId, bidId), eq(schema.lessons.orgId, orgId)));
       return row ?? null;
     }
     default: {
@@ -523,53 +552,53 @@ async function readRow(db: Db, bidId: string, table: RowTable, rowId: string): P
   }
 }
 
-async function deleteRow(db: Db, bidId: string, table: RowTable, rowId: string): Promise<boolean> {
-  const row = await readRow(db, bidId, table, rowId);
+async function deleteRow(db: Db, orgId: string, bidId: string, table: RowTable, rowId: string): Promise<boolean> {
+  const row = await readRow(db, orgId, bidId, table, rowId);
   if (!row) {
     return false;
   }
   switch (table) {
     case 'bid_facts':
-      await db.delete(schema.bidFacts).where(eq(schema.bidFacts.id, rowId));
+      await db.delete(schema.bidFacts).where(and(eq(schema.bidFacts.id, rowId), eq(schema.bidFacts.orgId, orgId)));
       return true;
     case 'kickoff_items':
-      await db.delete(schema.kickoffItems).where(eq(schema.kickoffItems.id, rowId));
+      await db.delete(schema.kickoffItems).where(and(eq(schema.kickoffItems.id, rowId), eq(schema.kickoffItems.orgId, orgId)));
       return true;
     case 'schedule_activities':
-      await db.delete(schema.scheduleActivities).where(eq(schema.scheduleActivities.id, rowId));
+      await db.delete(schema.scheduleActivities).where(and(eq(schema.scheduleActivities.id, rowId), eq(schema.scheduleActivities.orgId, orgId)));
       return true;
     case 'compliance_rows':
-      await db.delete(schema.complianceRows).where(eq(schema.complianceRows.id, rowId));
+      await db.delete(schema.complianceRows).where(and(eq(schema.complianceRows.id, rowId), eq(schema.complianceRows.orgId, orgId)));
       return true;
     case 'outline_items':
-      await db.delete(schema.outlineItems).where(eq(schema.outlineItems.id, rowId));
+      await db.delete(schema.outlineItems).where(and(eq(schema.outlineItems.id, rowId), eq(schema.outlineItems.orgId, orgId)));
       return true;
     case 'personnel_requirements':
-      await db.delete(schema.personnelRequirements).where(eq(schema.personnelRequirements.id, rowId));
+      await db.delete(schema.personnelRequirements).where(and(eq(schema.personnelRequirements.id, rowId), eq(schema.personnelRequirements.orgId, orgId)));
       return true;
     case 'candidates':
-      await db.delete(schema.candidates).where(eq(schema.candidates.id, rowId));
+      await db.delete(schema.candidates).where(and(eq(schema.candidates.id, rowId), eq(schema.candidates.orgId, orgId)));
       return true;
     case 'resume_matches':
-      await db.delete(schema.resumeMatches).where(eq(schema.resumeMatches.id, rowId));
+      await db.delete(schema.resumeMatches).where(and(eq(schema.resumeMatches.id, rowId), eq(schema.resumeMatches.orgId, orgId)));
       return true;
     case 'reviews':
-      await db.delete(schema.reviews).where(eq(schema.reviews.id, rowId));
+      await db.delete(schema.reviews).where(and(eq(schema.reviews.id, rowId), eq(schema.reviews.orgId, orgId)));
       return true;
     case 'review_assignments':
-      await db.delete(schema.reviewAssignments).where(eq(schema.reviewAssignments.id, rowId));
+      await db.delete(schema.reviewAssignments).where(and(eq(schema.reviewAssignments.id, rowId), eq(schema.reviewAssignments.orgId, orgId)));
       return true;
     case 'review_findings':
-      await db.delete(schema.reviewFindings).where(eq(schema.reviewFindings.id, rowId));
+      await db.delete(schema.reviewFindings).where(and(eq(schema.reviewFindings.id, rowId), eq(schema.reviewFindings.orgId, orgId)));
       return true;
     case 'production_items':
-      await db.delete(schema.productionItems).where(eq(schema.productionItems.id, rowId));
+      await db.delete(schema.productionItems).where(and(eq(schema.productionItems.id, rowId), eq(schema.productionItems.orgId, orgId)));
       return true;
     case 'orals_items':
-      await db.delete(schema.oralsItems).where(eq(schema.oralsItems.id, rowId));
+      await db.delete(schema.oralsItems).where(and(eq(schema.oralsItems.id, rowId), eq(schema.oralsItems.orgId, orgId)));
       return true;
     case 'lessons':
-      await db.delete(schema.lessons).where(eq(schema.lessons.id, rowId));
+      await db.delete(schema.lessons).where(and(eq(schema.lessons.id, rowId), eq(schema.lessons.orgId, orgId)));
       return true;
     default: {
       const unreachable: never = table;
@@ -596,7 +625,7 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         return row;
       }
       return null;
-    case 'schedule':
+    case 'schedule': {
       if (!text(body.label)) return null;
       const [activity] = await db.insert(schema.scheduleActivities).values({
         orgId,
@@ -607,7 +636,8 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         origin: 'user',
       }).returning();
       return activity;
-    case 'compliance':
+    }
+    case 'compliance': {
       if (!text(body.requirementText)) return null;
       const [compliance] = await db.insert(schema.complianceRows).values({
         orgId,
@@ -621,8 +651,10 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         origin: 'user',
       }).returning();
       return compliance;
-    case 'outline':
+    }
+    case 'outline': {
       if (!text(body.title)) return null;
+      if (text(body.parentId) && !await onBid(db, orgId, bidId, 'outline_items', body.parentId)) return null;
       const [outline] = await db.insert(schema.outlineItems).values({
         orgId,
         bidId,
@@ -635,7 +667,8 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         origin: 'user',
       }).returning();
       return outline;
-    case 'resumes':
+    }
+    case 'resumes': {
       if (body.kind === 'candidate' && text(body.name) && text(body.role)) {
         const [row] = await db.insert(schema.candidates).values({
           orgId,
@@ -646,6 +679,12 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         return row;
       }
       if (body.kind === 'match' && text(body.candidateId) && text(body.requirementId)) {
+        if (
+          !await onBid(db, orgId, bidId, 'candidates', body.candidateId)
+          || !await onBid(db, orgId, bidId, 'personnel_requirements', body.requirementId)
+        ) {
+          return null;
+        }
         const result = body.result === 'meets' || body.result === 'partial' || body.result === 'gap' || body.result === 'unknown' ? body.result : 'unknown';
         const [row] = await db.insert(schema.resumeMatches).values({
           orgId,
@@ -665,7 +704,11 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         origin: 'user',
       }).returning();
       return requirement;
-    case 'reviews':
+    }
+    case 'reviews': {
+      if ((body.kind === 'finding' || body.kind === 'assignment') && !await onBid(db, orgId, bidId, 'reviews', body.reviewId)) {
+        return null;
+      }
       if (body.kind === 'finding' && text(body.reviewId) && text(body.text)) {
         const kind = body.findingKind === 'strength' || body.findingKind === 'weakness' || body.findingKind === 'deficiency' || body.findingKind === 'risk' || body.findingKind === 'comment' ? body.findingKind : 'comment';
         const [row] = await db.insert(schema.reviewFindings).values({
@@ -698,7 +741,8 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         status: 'open',
       }).returning();
       return review;
-    case 'production':
+    }
+    case 'production': {
       if (!text(body.category) || !text(body.rule)) return null;
       const [production] = await db.insert(schema.productionItems).values({
         orgId,
@@ -708,7 +752,8 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         origin: 'user',
       }).returning();
       return production;
-    case 'orals':
+    }
+    case 'orals': {
       if (!text(body.category) || !text(body.item)) return null;
       const [oral] = await db.insert(schema.oralsItems).values({
         orgId,
@@ -718,7 +763,8 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         origin: 'user',
       }).returning();
       return oral;
-    case 'lessons':
+    }
+    case 'lessons': {
       if (!text(body.question)) return null;
       const [lesson] = await db.insert(schema.lessons).values({
         orgId,
@@ -728,6 +774,7 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         author: text(body.author),
       }).returning();
       return lesson;
+    }
     default: {
       const unreachable: never = tab;
       return unreachable;
@@ -744,7 +791,7 @@ async function patchRow(
   rowId: string,
   fields: Record<string, unknown>,
 ): Promise<boolean> {
-  const current = await readRow(db, bidId, table, rowId);
+  const current = await readRow(db, orgId, bidId, table, rowId);
   if (!current) {
     return false;
   }
@@ -762,7 +809,7 @@ async function patchRow(
         value: fields.value === undefined ? String(record.value) : (text(fields.value) ?? ''),
         confirmed: fields.confirmed === undefined ? Boolean(record.confirmed) : flag(fields.confirmed),
         updatedAt: new Date(),
-      }).where(eq(schema.bidFacts.id, rowId));
+      }).where(and(eq(schema.bidFacts.id, rowId), eq(schema.bidFacts.orgId, orgId)));
       return true;
     case 'kickoff_items':
       await db.update(schema.kickoffItems).set({
@@ -770,7 +817,7 @@ async function patchRow(
         owner: fields.owner === undefined ? text(record.owner) : text(fields.owner),
         note: fields.note === undefined ? text(record.note) : text(fields.note),
         updatedAt: new Date(),
-      }).where(eq(schema.kickoffItems.id, rowId));
+      }).where(and(eq(schema.kickoffItems.id, rowId), eq(schema.kickoffItems.orgId, orgId)));
       return true;
     case 'schedule_activities':
       if (record.locked === true && fields.startDate) {
@@ -784,7 +831,7 @@ async function patchRow(
         owner: fields.owner === undefined ? text(record.owner) : text(fields.owner),
         status: fields.status === undefined ? text(record.status) : text(fields.status),
         updatedAt: new Date(),
-      }).where(eq(schema.scheduleActivities.id, rowId));
+      }).where(and(eq(schema.scheduleActivities.id, rowId), eq(schema.scheduleActivities.orgId, orgId)));
       return true;
     case 'compliance_rows':
       await note('requirementText', fields.requirementText);
@@ -796,7 +843,7 @@ async function patchRow(
         status: fields.status === undefined ? text(record.status) : text(fields.status),
         responseSection: fields.responseSection === undefined ? text(record.responseSection) : text(fields.responseSection),
         updatedAt: new Date(),
-      }).where(eq(schema.complianceRows.id, rowId));
+      }).where(and(eq(schema.complianceRows.id, rowId), eq(schema.complianceRows.orgId, orgId)));
       return true;
     case 'outline_items':
       await db.update(schema.outlineItems).set({
@@ -806,21 +853,21 @@ async function patchRow(
         pageLimit: fields.pageLimit === undefined ? (record.pageLimit as number | null) : Number(fields.pageLimit),
         dueDate: fields.dueDate === undefined ? (record.dueDate as Date | null) : when(fields.dueDate),
         updatedAt: new Date(),
-      }).where(eq(schema.outlineItems.id, rowId));
+      }).where(and(eq(schema.outlineItems.id, rowId), eq(schema.outlineItems.orgId, orgId)));
       return true;
     case 'personnel_requirements':
       await db.update(schema.personnelRequirements).set({
         role: fields.role === undefined ? String(record.role) : (text(fields.role) ?? String(record.role)),
         requirement: fields.requirement === undefined ? String(record.requirement) : (text(fields.requirement) ?? String(record.requirement)),
         updatedAt: new Date(),
-      }).where(eq(schema.personnelRequirements.id, rowId));
+      }).where(and(eq(schema.personnelRequirements.id, rowId), eq(schema.personnelRequirements.orgId, orgId)));
       return true;
     case 'candidates':
       await db.update(schema.candidates).set({
         name: fields.name === undefined ? String(record.name) : (text(fields.name) ?? String(record.name)),
         role: fields.role === undefined ? String(record.role) : (text(fields.role) ?? String(record.role)),
         updatedAt: new Date(),
-      }).where(eq(schema.candidates.id, rowId));
+      }).where(and(eq(schema.candidates.id, rowId), eq(schema.candidates.orgId, orgId)));
       return true;
     case 'resume_matches': {
       const result = fields.result === 'meets' || fields.result === 'partial' || fields.result === 'gap' || fields.result === 'unknown'
@@ -830,7 +877,7 @@ async function patchRow(
         result,
         reviewerOverride: fields.reviewerOverride === undefined ? Boolean(record.reviewerOverride) : flag(fields.reviewerOverride),
         updatedAt: new Date(),
-      }).where(eq(schema.resumeMatches.id, rowId));
+      }).where(and(eq(schema.resumeMatches.id, rowId), eq(schema.resumeMatches.orgId, orgId)));
       return true;
     }
     case 'reviews':
@@ -838,14 +885,14 @@ async function patchRow(
         status: fields.status === undefined ? text(record.status) : text(fields.status),
         scheduledAt: fields.scheduledAt === undefined ? (record.scheduledAt as Date | null) : when(fields.scheduledAt),
         updatedAt: new Date(),
-      }).where(eq(schema.reviews.id, rowId));
+      }).where(and(eq(schema.reviews.id, rowId), eq(schema.reviews.orgId, orgId)));
       return true;
     case 'review_assignments':
       await db.update(schema.reviewAssignments).set({
         reviewerName: fields.reviewerName === undefined ? String(record.reviewerName) : (text(fields.reviewerName) ?? String(record.reviewerName)),
         sections: fields.sections === undefined ? text(record.sections) : text(fields.sections),
         updatedAt: new Date(),
-      }).where(eq(schema.reviewAssignments.id, rowId));
+      }).where(and(eq(schema.reviewAssignments.id, rowId), eq(schema.reviewAssignments.orgId, orgId)));
       return true;
     case 'review_findings':
       await note('disposition', fields.disposition);
@@ -853,28 +900,28 @@ async function patchRow(
         disposition: fields.disposition === undefined ? text(record.disposition) : text(fields.disposition),
         text: fields.text === undefined ? String(record.text) : (text(fields.text) ?? String(record.text)),
         updatedAt: new Date(),
-      }).where(eq(schema.reviewFindings.id, rowId));
+      }).where(and(eq(schema.reviewFindings.id, rowId), eq(schema.reviewFindings.orgId, orgId)));
       return true;
     case 'production_items':
       await db.update(schema.productionItems).set({
         done: fields.done === undefined ? Boolean(record.done) : flag(fields.done),
         rule: fields.rule === undefined ? String(record.rule) : (text(fields.rule) ?? String(record.rule)),
         updatedAt: new Date(),
-      }).where(eq(schema.productionItems.id, rowId));
+      }).where(and(eq(schema.productionItems.id, rowId), eq(schema.productionItems.orgId, orgId)));
       return true;
     case 'orals_items':
       await db.update(schema.oralsItems).set({
         done: fields.done === undefined ? Boolean(record.done) : flag(fields.done),
         item: fields.item === undefined ? String(record.item) : (text(fields.item) ?? String(record.item)),
         updatedAt: new Date(),
-      }).where(eq(schema.oralsItems.id, rowId));
+      }).where(and(eq(schema.oralsItems.id, rowId), eq(schema.oralsItems.orgId, orgId)));
       return true;
     case 'lessons':
       await db.update(schema.lessons).set({
         answer: fields.answer === undefined ? String(record.answer) : (text(fields.answer) ?? ''),
         author: fields.author === undefined ? text(record.author) : text(fields.author),
         updatedAt: new Date(),
-      }).where(eq(schema.lessons.id, rowId));
+      }).where(and(eq(schema.lessons.id, rowId), eq(schema.lessons.orgId, orgId)));
       return true;
     default: {
       const unreachable: never = table;

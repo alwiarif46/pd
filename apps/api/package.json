@@ -8,21 +8,25 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint . --ext ts --report-unused-disable-directives --max-warnings 0",
+    "test": "vitest run",
+    "lint": "eslint . --max-warnings 0",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "fastify": "^5.0.0",
-    "@fastify/cors": "^9.0.0",
-    "pg": "^8.12.0",
-    "@pd/core": "workspace:*",
+    "@fastify/cors": "^10.1.0",
     "@pd/ai": "workspace:*",
+    "@pd/core": "workspace:*",
     "bullmq": "^5.20.0",
-    "ioredis": "^5.4.0"
+    "fastify": "^5.0.0",
+    "ioredis": "^5.4.0",
+    "pg": "^8.12.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "embedded-postgres": "16.14.0-beta.17",
+    "tsx": "^4.19.0",
     "typescript": "^5.6.0",
-    "tsx": "^4.19.0"
+    "vitest": "2.1.9"
   }
 }

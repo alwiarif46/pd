@@ -1,10 +1,10 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
 import { and, asc, eq, gte, lte } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { schema, withOrg } from '@pd/core';
+import { resolveOrgPath, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
+import { findBid, findDocument, type Outcome, queueAfterCommit } from './scope.js';
 import { enqueueClassify } from './queue.js';
 import { newToken } from './security.js';
 
@@ -18,11 +18,11 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
     const orgId = request.auth!.orgId!;
     const bidId = (request.params as { id: string }).id;
     return withOrg(orgId, async (db) => {
-      const [bid] = await db.select().from(schema.bids).where(eq(schema.bids.id, bidId));
+      const bid = await findBid(db, orgId, bidId);
       if (!bid) {
         return reply.code(404).send({ error: 'Bid not found' });
       }
-      return db.select().from(schema.documents).where(eq(schema.documents.bidId, bidId));
+      return db.select().from(schema.documents).where(and(eq(schema.documents.bidId, bidId), eq(schema.documents.orgId, orgId)));
     });
   });
 
@@ -30,7 +30,7 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
     const orgId = request.auth!.orgId!;
     const documentId = (request.params as { id: string }).id;
     return withOrg(orgId, async (db) => {
-      const [document] = await db.select().from(schema.documents).where(eq(schema.documents.id, documentId));
+      const document = await findDocument(db, orgId, documentId);
       if (!document) {
         return reply.code(404).send({ error: 'Document not found' });
       }
@@ -47,18 +47,19 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
   app.post('/api/documents/:id/confirm-marking', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const documentId = (request.params as { id: string }).id;
-    return withOrg(orgId, async (db) => {
-      const [document] = await db.select().from(schema.documents).where(eq(schema.documents.id, documentId));
+    const outcome = await withOrg(orgId, async (db): Promise<Outcome> => {
+      const document = await findDocument(db, orgId, documentId);
       if (!document || !document.storagePath) {
-        return reply.code(404).send({ error: 'Document not found' });
+        return { code: 404, body: { error: 'Document not found' } };
       }
       if (document.extractStatus === 'rejected') {
-        return reply.code(409).send({ error: 'Classified files are not accepted' });
+        return { code: 409, body: { error: 'Classified files are not accepted' } };
       }
       if (document.markingStatus !== 'blocked') {
-        return reply.code(409).send({ error: 'This file is not waiting for confirmation' });
+        return { code: 409, body: { error: 'This file is not waiting for confirmation' } };
       }
-      await db.update(schema.documents).set({ markingStatus: 'confirmed', updatedAt: new Date() }).where(eq(schema.documents.id, documentId));
+      const storagePath = document.storagePath;
+      await db.update(schema.documents).set({ markingStatus: 'confirmed', updatedAt: new Date() }).where(and(eq(schema.documents.id, documentId), eq(schema.documents.orgId, orgId)));
       await db.insert(schema.auditLog).values({
         orgId,
         userId: request.auth!.userId,
@@ -73,16 +74,24 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
         type: 'classify',
         status: 'pending',
       }).returning();
-      await enqueueClassify({
-        orgId,
-        bidId: document.bidId,
-        documentId,
-        jobId: job.id,
-        storagePath: document.storagePath,
-        kind: document.kind,
-      });
-      return { ok: true };
+      return {
+        code: 200,
+        body: { ok: true },
+        queue: {
+          jobId: job.id,
+          enqueue: () => enqueueClassify({
+            orgId,
+            bidId: document.bidId,
+            documentId,
+            jobId: job.id,
+            storagePath,
+            kind: document.kind,
+          }),
+        },
+      };
     });
+    await queueAfterCommit(orgId, outcome);
+    return reply.code(outcome.code).send(outcome.body);
   });
 
   app.post('/api/documents/:id/key-override', { preHandler: requireAuth }, async (request, reply) => {
@@ -95,12 +104,13 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'A reason is required' });
     }
     const documentId = (request.params as { id: string }).id;
-    return withOrg(auth.orgId!, async (db) => {
-      const [document] = await db.select().from(schema.documents).where(eq(schema.documents.id, documentId));
+    const orgId = auth.orgId!;
+    return withOrg(orgId, async (db) => {
+      const document = await findDocument(db, orgId, documentId);
       if (!document) {
         return reply.code(404).send({ error: 'Document not found' });
       }
-      const [bid] = await db.select().from(schema.bids).where(eq(schema.bids.id, document.bidId));
+      const bid = await findBid(db, orgId, document.bidId);
       if (!bid) {
         return reply.code(404).send({ error: 'Bid not found' });
       }
@@ -110,7 +120,7 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       await db.update(schema.bids).set({
         keyOverridesUsed: bid.keyOverridesUsed + 1,
         updatedAt: new Date(),
-      }).where(eq(schema.bids.id, bid.id));
+      }).where(and(eq(schema.bids.id, bid.id), eq(schema.bids.orgId, orgId)));
       await db.insert(schema.auditLog).values({
         orgId: auth.orgId!,
         userId: auth.userId,
@@ -139,12 +149,13 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
     const from = Number(query.from ?? 1);
     const to = Number(query.to ?? from);
     return withOrg(orgId, async (db) => {
-      const [document] = await db.select().from(schema.documents).where(eq(schema.documents.id, documentId));
+      const document = await findDocument(db, orgId, documentId);
       if (!document) {
         return reply.code(404).send({ error: 'Document not found' });
       }
       const rows = await db.select().from(schema.pages).where(and(
         eq(schema.pages.documentId, documentId),
+        eq(schema.pages.orgId, orgId),
         gte(schema.pages.pageNo, from),
         lte(schema.pages.pageNo, to),
       )).orderBy(asc(schema.pages.pageNo));
@@ -162,7 +173,7 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
     const orgId = request.auth!.orgId!;
     const documentId = (request.params as { id: string }).id;
     return withOrg(orgId, async (db) => {
-      const [document] = await db.select().from(schema.documents).where(eq(schema.documents.id, documentId));
+      const document = await findDocument(db, orgId, documentId);
       if (!document?.storagePath) {
         return reply.code(404).send({ error: 'Document not found' });
       }
@@ -172,7 +183,11 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       if (document.liveStatus === 'archived' || document.liveStatus === 'deleted') {
         return reply.code(409).send({ error: 'This file is archived. Restore it to open the full page.' });
       }
-      const absolute = join(dataDir, orgId, document.viewerPath || document.storagePath);
+      // A stored path must stay inside this organization's folder.
+      const absolute = resolveOrgPath(dataDir, orgId, document.viewerPath || document.storagePath);
+      if (!absolute) {
+        return reply.code(404).send({ error: 'Document not found' });
+      }
       try {
         await stat(absolute);
       } catch {
@@ -186,7 +201,7 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
     const orgId = request.auth!.orgId!;
     const documentId = (request.params as { id: string }).id;
     return withOrg(orgId, async (db) => {
-      const [document] = await db.select().from(schema.documents).where(eq(schema.documents.id, documentId));
+      const document = await findDocument(db, orgId, documentId);
       if (!document) {
         return reply.code(404).send({ error: 'Document not found' });
       }
@@ -196,7 +211,7 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       await db.update(schema.documents).set({
         liveStatus: 'restoring',
         updatedAt: new Date(),
-      }).where(eq(schema.documents.id, documentId));
+      }).where(and(eq(schema.documents.id, documentId), eq(schema.documents.orgId, orgId)));
       return { status: 'Restore requested' };
     });
   });
@@ -205,11 +220,11 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
     const orgId = request.auth!.orgId!;
     const documentId = (request.params as { id: string }).id;
     return withOrg(orgId, async (db) => {
-      const [document] = await db.select().from(schema.documents).where(eq(schema.documents.id, documentId));
+      const document = await findDocument(db, orgId, documentId);
       if (!document) {
         return reply.code(404).send({ error: 'Document not found' });
       }
-      await db.delete(schema.documents).where(eq(schema.documents.id, documentId));
+      await db.delete(schema.documents).where(and(eq(schema.documents.id, documentId), eq(schema.documents.orgId, orgId)));
       return { ok: true };
     });
   });

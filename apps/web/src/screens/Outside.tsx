@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { ApiError, api, setToken, uploadFile } from '../api';
+import { ApiError, api, setToken, uploadFile } from '../legacy-api';
 import type { Bid, OrgPayload } from '../models';
 import { capMb, daysLeft } from '../models';
 
