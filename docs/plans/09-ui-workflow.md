@@ -211,6 +211,26 @@ interface LockedTabProps { tab: Tab; title: string; description: string; onUpgra
 interface EmptyStateProps { title: string; text: string; action?: { label: string; onClick: () => void } }
 ```
 
+### 5.13 Auth: log in, sign up, verify, reset
+```ts
+type AuthStatus =
+  | { state: 'idle' }
+  | { state: 'submitting' }
+  | { state: 'error'; message: string }
+  | { state: 'done'; message: string };
+interface AuthLayoutProps { title: string; children: React.ReactNode }
+interface LogInProps { status: AuthStatus; onLogIn: (email: string, password: string) => void; onForgotPassword: () => void; onSignUp: () => void }
+interface SignUpValues { email: string; name: string; password: string; phone: string }
+interface SignUpProps { status: AuthStatus; onSignUp: (v: SignUpValues) => void; onLogIn: () => void; onOpenPrivacy: () => void }
+interface VerifyProps {
+  email: string; phone: string; step: 'email' | 'phone' | 'done'; status: AuthStatus;
+  onSubmitCode: (code: string) => void; onResendEmail: () => void; onResendCode: () => void; onLogIn: () => void;
+}
+interface ResetRequestProps { status: AuthStatus; onRequest: (email: string) => void; onLogIn: () => void }
+interface ResetPasswordProps { status: AuthStatus; onSetPassword: (password: string) => void; onLogIn: () => void }
+```
+The email link lands on the app with a token; the container verifies it and moves `VerifyProps.step` to `'phone'`. Error text comes from the API and is shown as given. Rules the forms check before calling back: work email, password at least 12 characters, phone `+1` and 10 digits, SMS code 6 digits.
+
 ## 6. Order of v0 chats
 
 1. Shell (sidebar, top bar, locked tab, upgrade dialog) and the common pieces (ProcessingBanner, EmptyState, SourceLink).
@@ -219,6 +239,8 @@ interface EmptyStateProps { title: string; text: string; action?: { label: strin
 4. Overview and kickoff.
 5. Documents and Bid settings.
 6. Paid tabs in Phase 4 order: Outline, Resume matrix, Reviews, Production, Orals, Lessons.
+
+Auth (5.13) is its own chat and does not depend on the shell; it can run at any point.
 
 The Schedule tab is not a v0 chat. Claude Code ports it from the offline builder into `src/schedule/`.
 
@@ -245,4 +267,5 @@ Each chat ends the same way: v0 pushes to the `v0-ui` branch, you merge it to `m
 |---|---|
 | 14 Oct 2026 | v0 for presentational components only; Claude Code owns containers, API, worker, and the schedule port |
 | 14 Oct 2026 | v0 connected to the repo: writes only to `design/v0/` on branch `v0-ui`; Claude Code integrates into `src/ui/` |
+| 14 Oct 2026 | Auth screens (log in, sign up, verify, reset) rebuilt by v0 under contract 5.13 |
 | 14 Oct 2026 | Tailwind v4 CSS-first (no `tailwind.config.ts`), React 19, sonner replaces toast, label added, preflight off until legacy screens retire; plans live only in `docs/plans`; `AGENTS.md` for v0 |
