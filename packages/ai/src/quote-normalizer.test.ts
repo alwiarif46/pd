@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import { locateQuote, normalizeQuote, quoteCoverage } from './quote-normalizer.ts';
 
 test('normalizeQuote joins a hyphenated line break and maps ligatures and smart quotes', () => {
