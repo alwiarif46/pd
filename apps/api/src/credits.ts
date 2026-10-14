@@ -15,7 +15,9 @@ import type { Db } from './scope.js';
  *   back values read earlier, so concurrent requests and the worker cannot lose an update.
  * - Row locks are always taken in this order, by the api and the worker alike, so no two
  *   transactions wait on each other in a cycle:
- *     organizations -> documents -> upload_sessions -> bids -> amendments -> rfp_credits.
+ *     organizations -> documents -> check_these -> upload_sessions -> bids -> amendments -> rfp_credits.
+ *   check_these: the worker's matrix write replaces a document's hits under the document lock,
+ *   and promote locks the document (FOR SHARE) before the hit (check-these.ts).
  *   One exception: upload complete claims its own unexpired session before the org lock (so
  *   the org is not locked while the file is assembled). The only org-locked writer of sessions
  *   is the expiry sweep, which touches expired sessions only, so it never waits on that row.

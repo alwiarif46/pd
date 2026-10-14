@@ -105,6 +105,56 @@ function choose(values: readonly string[]): string {
   return `Choose one of: ${values.join(', ')}`;
 }
 
+/** A typed field: its contract values and the legacy labels older clients send for them. */
+interface TypedField<T extends string> {
+  label: string;
+  values: readonly T[];
+  aliases: Readonly<Record<string, T>>;
+}
+
+// Aliases are keyed by `aliasKey` and match the legacy labels migration 0006 maps.
+const ROW_STATUS: TypedField<(typeof ROW_STATUSES)[number]> = { label: 'Status', values: ROW_STATUSES, aliases: {} };
+const OUTLINE_STATUS: TypedField<(typeof OUTLINE_STATUSES)[number]> = { label: 'Status', values: OUTLINE_STATUSES, aliases: {} };
+const REVIEW_STATUS: TypedField<(typeof REVIEW_STATUSES)[number]> = { label: 'Status', values: REVIEW_STATUSES, aliases: { open: 'planned' } };
+const DISPOSITION: TypedField<(typeof DISPOSITIONS)[number]> = {
+  label: 'Disposition', values: DISPOSITIONS, aliases: { accept: 'accepted', reject: 'rejected' },
+};
+const MATCH_RESULT: TypedField<(typeof MATCH_RESULTS)[number]> = { label: 'Result', values: MATCH_RESULTS, aliases: {} };
+const PRODUCTION_CATEGORY: TypedField<(typeof PRODUCTION_CATEGORIES)[number]> = {
+  label: 'Category',
+  values: PRODUCTION_CATEGORIES,
+  aliases: { fonts: 'format', margins: 'format', page_limits: 'format', file_naming: 'files', portal: 'submission' },
+};
+const ORALS_CATEGORY: TypedField<(typeof ORALS_CATEGORIES)[number]> = {
+  label: 'Category', values: ORALS_CATEGORIES, aliases: { checklist: 'prep' },
+};
+
+/** Case, surrounding space, and inner spaces or hyphens do not matter: 'Not started' is not_started. */
+function aliasKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+/** The contract value `value` names, exactly, loosely written, or as a legacy alias; else undefined. */
+function coerce<T extends string>(field: TypedField<T>, value: unknown): T | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const key = aliasKey(value);
+  return oneOf(field.values, key) ? key : field.aliases[key];
+}
+
+/**
+ * An optional typed input: undefined when not sent or empty (the legacy row slider sends ''),
+ * the contract value when it names one, else 400. Null is refused: these columns are NOT NULL.
+ */
+function input<T extends string>(field: TypedField<T>, value: unknown): Result<T | undefined> {
+  if (value === undefined || value === '') {
+    return ok(undefined);
+  }
+  const coerced = coerce(field, value);
+  return coerced === undefined ? fail(400, `${field.label}: ${choose(field.values)}`) : ok(coerced);
+}
+
 function text(value: unknown): string | null {
   if (value === null || value === undefined || value === '') {
     return null;
@@ -212,10 +262,13 @@ async function moveOutline(
   if (parentId !== null && !byId.has(parentId)) {
     return fail(404, 'Parent outline item not found');
   }
-  for (let cursor = parentId; cursor !== null; cursor = byId.get(cursor)?.parentId ?? null) {
+  // Walk up from the new parent. The visited set ends the walk on a cycle already stored.
+  const visited = new Set<string>();
+  for (let cursor = parentId; cursor !== null && !visited.has(cursor); cursor = byId.get(cursor)?.parentId ?? null) {
     if (cursor === id) {
       return fail(409, 'An item cannot move under itself or one of its own sections');
     }
+    visited.add(cursor);
   }
   const oldParent = item.parentId;
   const target = siblings(items, parentId).filter((row) => row.id !== id);
@@ -306,27 +359,14 @@ async function presentFindings(db: Db, rows: FindingRow[]) {
   }));
 }
 
-const PRODUCTION_LABELS: Record<string, (typeof PRODUCTION_CATEGORIES)[number]> = {
-  fonts: 'format', margins: 'format', 'page limits': 'format', 'file naming': 'files', portal: 'submission',
-};
-
-/** The contract category for a stored one: migration 0006 maps the same legacy labels. */
-function productionCategory(stored: string): (typeof PRODUCTION_CATEGORIES)[number] {
-  const label = stored.trim().toLowerCase();
-  return oneOf(PRODUCTION_CATEGORIES, label) ? label : PRODUCTION_LABELS[label] ?? 'other';
-}
-
-function oralsCategory(stored: string): (typeof ORALS_CATEGORIES)[number] {
-  const label = stored.trim().toLowerCase();
-  return oneOf(ORALS_CATEGORIES, label) ? label : 'prep';
-}
-
+// Migration 0006 CHECKs the stored categories, so these only guard the DTO type: they return a
+// stored contract value unchanged and map anything else the way 0006 does.
 function presentProduction<T extends { category: string }>(row: T) {
-  return { ...row, category: productionCategory(row.category) };
+  return { ...row, category: coerce(PRODUCTION_CATEGORY, row.category) ?? 'other' };
 }
 
 function presentOrals<T extends { category: string }>(row: T) {
-  return { ...row, category: oralsCategory(row.category) };
+  return { ...row, category: coerce(ORALS_CATEGORY, row.category) ?? 'prep' };
 }
 
 /** A row as its DTO: the derived fields for candidates, reviews, and findings; others as stored. */
@@ -528,22 +568,23 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
     const userId = request.auth!.userId;
     const bidId = (request.params as { id: string }).id;
     const body = (request.body ?? {}) as { id?: unknown; parentId?: unknown; index?: unknown };
-    if (!isUuid(body.id)) {
-      return reply.code(404).send({ error: 'Outline item not found' });
-    }
     const parentId = body.parentId ?? null;
-    if (parentId !== null && !isUuid(parentId)) {
-      return reply.code(404).send({ error: 'Parent outline item not found' });
-    }
-    if (typeof body.index !== 'number' || !Number.isFinite(body.index)) {
-      return reply.code(400).send({ error: 'Send the new index as a number' });
-    }
-    const itemId = body.id;
-    const index = body.index;
     return inOrg(reply, orgId, async (db, respond) => {
+      // The bid first: another organization's bid is 404 whatever the body says.
       if (!await findBid(db, orgId, bidId)) {
         return respond(404, { error: 'Bid not found' });
       }
+      if (!isUuid(body.id)) {
+        return respond(404, { error: 'Outline item not found' });
+      }
+      if (parentId !== null && !isUuid(parentId)) {
+        return respond(404, { error: 'Parent outline item not found' });
+      }
+      if (typeof body.index !== 'number' || !Number.isFinite(body.index)) {
+        return respond(400, { error: 'Send the new index as a number' });
+      }
+      const itemId = body.id;
+      const index = body.index;
       const moved = await moveOutline(db, orgId, userId, bidId, itemId, parentId, index);
       if (!moved.ok) {
         return respond(moved.code, { error: moved.error });
@@ -942,9 +983,8 @@ async function insertRow(
     }
     case 'compliance': {
       if (!text(body.requirementText)) return fail(400, MISSING);
-      if (body.status !== undefined && !oneOf(ROW_STATUSES, body.status)) {
-        return fail(400, `Status: ${choose(ROW_STATUSES)}`);
-      }
+      const status = input(ROW_STATUS, body.status);
+      if (!status.ok) return status;
       const [compliance] = await db.insert(schema.complianceRows).values({
         orgId,
         bidId,
@@ -953,22 +993,22 @@ async function insertRow(
         requirementText: text(body.requirementText)!,
         reqType: body.reqType === 'shall' || body.reqType === 'must' || body.reqType === 'will' || body.reqType === 'should' || body.reqType === 'other' ? body.reqType : 'other',
         owner: text(body.owner),
-        status: oneOf(ROW_STATUSES, body.status) ? body.status : 'open',
+        status: status.value ?? 'open',
         origin: 'user',
       }).returning();
       return created('compliance_rows', compliance);
     }
     case 'outline': {
       if (!text(body.title)) return fail(400, MISSING);
-      if (body.status !== undefined && !oneOf(OUTLINE_STATUSES, body.status)) {
-        return fail(400, `Status: ${choose(OUTLINE_STATUSES)}`);
-      }
+      const status = input(OUTLINE_STATUS, body.status);
+      if (!status.ok) return status;
       const pageLimit = count(body.pageLimit);
       if (pageLimit === false) return fail(400, 'Page limit must be a whole number, 0 or more');
       const parentId = text(body.parentId);
-      if (parentId && !await onBid(db, orgId, bidId, 'outline_items', parentId)) return fail(400, MISSING);
-      // New items go at the end of their siblings.
+      // Lock before the parent check, so a parent deleted meanwhile is seen (400), not a
+      // foreign-key failure at the insert. New items go at the end of their siblings.
       await lockOutline(db, bidId);
+      if (parentId && !await onBid(db, orgId, bidId, 'outline_items', parentId)) return fail(400, MISSING);
       const [last] = await db.select({ position: max(schema.outlineItems.position) }).from(schema.outlineItems).where(and(
         eq(schema.outlineItems.bidId, bidId),
         eq(schema.outlineItems.orgId, orgId),
@@ -982,7 +1022,7 @@ async function insertRow(
         parentId,
         pageLimit: pageLimit ?? null,
         writer: text(body.writer),
-        status: oneOf(OUTLINE_STATUSES, body.status) ? body.status : 'not_started',
+        status: status.value ?? 'not_started',
         position: last?.position == null ? 0 : last.position + 1,
         origin: 'user',
       }).returning();
@@ -1005,14 +1045,13 @@ async function insertRow(
         ) {
           return fail(400, MISSING);
         }
-        if (body.result !== undefined && !oneOf(MATCH_RESULTS, body.result)) {
-          return fail(400, `Result: ${choose(MATCH_RESULTS)}`);
-        }
+        const result = input(MATCH_RESULT, body.result);
+        if (!result.ok) return result;
         const [row] = await db.insert(schema.resumeMatches).values({
           orgId,
           candidateId: text(body.candidateId)!,
           requirementId: text(body.requirementId)!,
-          result: oneOf(MATCH_RESULTS, body.result) ? body.result : 'unknown',
+          result: result.value ?? 'unknown',
         }).returning();
         return created('resume_matches', row);
       }
@@ -1032,9 +1071,8 @@ async function insertRow(
         return fail(400, MISSING);
       }
       if (body.kind === 'finding' && text(body.reviewId) && text(body.text)) {
-        if (body.disposition !== undefined && !oneOf(DISPOSITIONS, body.disposition)) {
-          return fail(400, `Disposition: ${choose(DISPOSITIONS)}`);
-        }
+        const disposition = input(DISPOSITION, body.disposition);
+        if (!disposition.ok) return disposition;
         const kind = body.findingKind === 'strength' || body.findingKind === 'weakness' || body.findingKind === 'deficiency' || body.findingKind === 'risk' || body.findingKind === 'comment' ? body.findingKind : 'comment';
         const [row] = await db.insert(schema.reviewFindings).values({
           orgId,
@@ -1043,7 +1081,7 @@ async function insertRow(
           text: text(body.text)!,
           evalFactor: text(body.evalFactor),
           origin: 'user',
-          disposition: oneOf(DISPOSITIONS, body.disposition) ? body.disposition : 'open',
+          disposition: disposition.value ?? 'open',
           authorUserId: userId,
         }).returning();
         return created('review_findings', row);
@@ -1060,25 +1098,25 @@ async function insertRow(
       if (body.type !== 'pink' && body.type !== 'red' && body.type !== 'green' && body.type !== 'gold' && body.type !== 'other') {
         return fail(400, MISSING);
       }
-      if (body.status !== undefined && !oneOf(REVIEW_STATUSES, body.status)) {
-        return fail(400, `Status: ${choose(REVIEW_STATUSES)}`);
-      }
+      const status = input(REVIEW_STATUS, body.status);
+      if (!status.ok) return status;
       const [review] = await db.insert(schema.reviews).values({
         orgId,
         bidId,
         type: body.type,
         scheduledAt: when(body.scheduledAt),
-        status: oneOf(REVIEW_STATUSES, body.status) ? body.status : 'planned',
+        status: status.value ?? 'planned',
       }).returning();
       return created('reviews', review);
     }
     case 'production': {
       if (!text(body.category) || !text(body.rule)) return fail(400, MISSING);
-      if (!oneOf(PRODUCTION_CATEGORIES, body.category)) return fail(400, `Category: ${choose(PRODUCTION_CATEGORIES)}`);
+      const category = input(PRODUCTION_CATEGORY, body.category);
+      if (!category.ok) return category;
       const [production] = await db.insert(schema.productionItems).values({
         orgId,
         bidId,
-        category: body.category,
+        category: category.value!,
         rule: text(body.rule)!,
         owner: text(body.owner),
         origin: 'user',
@@ -1087,13 +1125,14 @@ async function insertRow(
     }
     case 'orals': {
       if (!text(body.category) || !text(body.item)) return fail(400, MISSING);
-      if (!oneOf(ORALS_CATEGORIES, body.category)) return fail(400, `Category: ${choose(ORALS_CATEGORIES)}`);
+      const category = input(ORALS_CATEGORY, body.category);
+      if (!category.ok) return category;
       const minutes = count(body.minutes);
       if (minutes === false) return fail(400, 'Minutes must be a whole number, 0 or more');
       const [oral] = await db.insert(schema.oralsItems).values({
         orgId,
         bidId,
-        category: body.category,
+        category: category.value!,
         item: text(body.item)!,
         owner: text(body.owner),
         minutes: minutes ?? null,
@@ -1145,11 +1184,6 @@ async function patchRow(
       await history(db, orgId, userId, table, rowId, field, record[field], value);
     }
   };
-  const typed = <T extends string>(values: readonly T[], field: string): Result<T | undefined> => {
-    const value = fields[field];
-    if (value === undefined) return ok(undefined);
-    return oneOf(values, value) ? ok(value) : fail(400, `${field}: ${choose(values)}`);
-  };
   switch (table) {
     case 'bid_facts':
       await note('value', text(fields.value) ?? record.value);
@@ -1183,7 +1217,7 @@ async function patchRow(
       }).where(and(eq(schema.scheduleActivities.id, rowId), eq(schema.scheduleActivities.orgId, orgId)));
       return ok(true);
     case 'compliance_rows': {
-      const status = typed(ROW_STATUSES, 'status');
+      const status = input(ROW_STATUS, fields.status);
       if (!status.ok) return status;
       await note('requirementText', fields.requirementText === undefined ? undefined : text(fields.requirementText) ?? record.requirementText);
       await note('owner', fields.owner === undefined ? undefined : text(fields.owner));
@@ -1199,7 +1233,7 @@ async function patchRow(
       return ok(true);
     }
     case 'outline_items': {
-      const status = typed(OUTLINE_STATUSES, 'status');
+      const status = input(OUTLINE_STATUS, fields.status);
       if (!status.ok) return status;
       const pageLimit = count(fields.pageLimit);
       if (pageLimit === false) return fail(400, 'Page limit must be a whole number, 0 or more');
@@ -1234,7 +1268,7 @@ async function patchRow(
     case 'resume_matches': {
       // Setting a result is a reviewer override. {reviewerOverride: false} undoes it: the AI's
       // own result comes back, or 'unknown' when there is none.
-      const result = typed(MATCH_RESULTS, 'result');
+      const result = input(MATCH_RESULT, fields.result);
       if (!result.ok) return result;
       const match = current as typeof schema.resumeMatches.$inferSelect;
       let nextResult = match.result;
@@ -1258,7 +1292,7 @@ async function patchRow(
       return ok(true);
     }
     case 'reviews': {
-      const status = typed(REVIEW_STATUSES, 'status');
+      const status = input(REVIEW_STATUS, fields.status);
       if (!status.ok) return status;
       await note('status', status.value);
       await db.update(schema.reviews).set({
@@ -1276,7 +1310,7 @@ async function patchRow(
       }).where(and(eq(schema.reviewAssignments.id, rowId), eq(schema.reviewAssignments.orgId, orgId)));
       return ok(true);
     case 'review_findings': {
-      const disposition = typed(DISPOSITIONS, 'disposition');
+      const disposition = input(DISPOSITION, fields.disposition);
       if (!disposition.ok) return disposition;
       await note('disposition', disposition.value);
       await note('text', fields.text === undefined ? undefined : text(fields.text) ?? record.text);

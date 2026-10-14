@@ -12,8 +12,10 @@ import { findBid, inOrg } from './scope.js';
  * Locking: check_these rows are locked after the document row and before the bid row, in
  * line with the credit lock order (credits.ts): the worker locks the document FOR UPDATE, then
  * replaces that document's open hits, then settles the bid's credit. Promote therefore takes
- * the document row (FOR KEY SHARE) before it claims the hit, and only then inserts the
- * compliance row (whose foreign keys take KEY SHARE on the bid). Claiming the hit is a
+ * the document row FOR SHARE before it claims the hit, and only then inserts the compliance row
+ * (whose foreign keys take KEY SHARE on the bid). FOR SHARE, not FOR KEY SHARE: it also waits
+ * for a soft delete (an UPDATE of live_status, which takes only FOR NO KEY UPDATE), so a hit is
+ * never promoted from a document deleted in the same instant. Claiming the hit is a
  * conditional UPDATE on status 'open': of two concurrent promotes, one wins and the other
  * gets 409, so a hit becomes at most one row.
  */
@@ -69,9 +71,18 @@ export async function registerCheckThese(app: FastifyInstance): Promise<void> {
       // Document before hit (see the header). A deleted document's hits are not shown or promoted.
       const [document] = await db.select({ liveStatus: schema.documents.liveStatus }).from(schema.documents)
         .where(and(eq(schema.documents.id, hit.documentId), eq(schema.documents.orgId, orgId)))
-        .for('key share');
+        .for('share');
       if (!document || document.liveStatus === 'deleted') {
         return respond(404, { error: 'Not found' });
+      }
+      // The row quotes the sentence as its source, so the sentence must still be on that page.
+      const pages = await db.select({ text: schema.pages.text }).from(schema.pages).where(and(
+        eq(schema.pages.documentId, hit.documentId),
+        eq(schema.pages.orgId, orgId),
+        eq(schema.pages.pageNo, hit.pageNo),
+      ));
+      if (!pages.some((page) => page.text.includes(hit.sentence))) {
+        return respond(409, { error: 'That sentence is no longer on its page' });
       }
       const now = new Date();
       const [claimed] = await db.update(schema.checkThese).set({
