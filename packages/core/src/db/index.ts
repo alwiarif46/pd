@@ -9,18 +9,27 @@ export type AppDatabase = NodePgDatabase<typeof schema>;
 let pool: pg.Pool | null = null;
 let db: AppDatabase | null = null;
 
-export function getPool(connectionString?: string): pg.Pool {
+/**
+ * Returns the shared pool, creating it on first use. `config` only applies on that first
+ * call: a connection string, or full pool options (tests use `max: 1`).
+ */
+export function getPool(config?: string | pg.PoolConfig): pg.Pool {
   if (!pool) {
-    pool = new Pool({
-      connectionString: connectionString || process.env.DATABASE_URL,
-    });
+    const options: pg.PoolConfig = typeof config === 'string' || config === undefined
+      ? { connectionString: config || process.env.DATABASE_URL }
+      : config;
+    pool = new Pool(options);
   }
   return pool;
 }
 
-export function getDb(connectionString?: string): AppDatabase {
+/**
+ * A database handle with no `app.org_id`. Under `pd_app` it sees no rows in any tenant table.
+ * Use it only for tables without `org_id` (users, sessions, auth tokens, phone codes).
+ */
+export function getDb(config?: string | pg.PoolConfig): AppDatabase {
   if (!db) {
-    db = drizzle(getPool(connectionString), { schema });
+    db = drizzle(getPool(config), { schema });
   }
   return db;
 }
@@ -36,4 +45,4 @@ export function closeDb(): Promise<void> {
 }
 
 export { schema };
-export { withOrg } from './tenant';
+export { assertTenantRole, isUuid, userMemberships, withOrg, type UserMembership } from './tenant';
