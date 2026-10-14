@@ -4,11 +4,14 @@ export const NETWORK_ERROR_MESSAGE = 'The API is not reachable';
 /** An error from the PD API. `status` is the HTTP status, or 0 when the request never got a response. */
 export class ApiError extends Error {
   readonly status: number;
+  /** The api's machine code (`out_of_credits`, `key_mismatch`, ...), when it sent one. */
+  readonly code?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = code;
   }
 }
 
