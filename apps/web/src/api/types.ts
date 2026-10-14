@@ -263,10 +263,25 @@ export interface JobDto extends OrgScopedDto {
   startedAt: string | null;
   finishedAt: string | null;
   queueDepth: number;
+  /** The pipeline queue holding the job, or null when it is in none. */
+  stage: string | null;
+  /** Seconds until the job is expected to finish; null without enough history. */
+  etaSeconds: number | null;
+}
+
+/** A compliance row an amendment link points at. */
+export interface AmendmentRowRef {
+  rowId: string;
+  label: string;
+  text: string;
+  sourcePage: number | null;
 }
 
 export interface AmendmentLinkDto extends OrgScopedDto {
   amendmentId: string;
+  amendmentNo: number | null;
+  oldRow: AmendmentRowRef | null;
+  newRow: AmendmentRowRef | null;
   rowTable: string;
   oldRowId: string | null;
   newRowId: string | null;
