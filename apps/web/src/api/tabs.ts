@@ -2,7 +2,9 @@ import { request, seg, type CallOptions } from './http';
 import type {
   CreatedRowMap,
   CreateRowBodyMap,
+  MoveOutlineInput,
   Ok,
+  OutlineItemDto,
   ScheduleTemplate,
   SeedableTab,
   TabName,
@@ -42,4 +44,13 @@ export function seedTab(
     json,
     signal: options.signal,
   });
+}
+
+/**
+ * Moves an outline item under `parentId` (null: a volume) at `index` among its new siblings and
+ * returns the bid's whole outline in order. `ApiError` 409 for a move under itself or one of its
+ * own sections, 404 when either item is not on the bid.
+ */
+export function moveOutlineItem(bidId: string, input: MoveOutlineInput, opts?: CallOptions): Promise<OutlineItemDto[]> {
+  return request(`/api/bids/${seg(bidId)}/outline/move`, { method: 'POST', json: input, signal: opts?.signal });
 }
