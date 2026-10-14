@@ -518,10 +518,8 @@ export const productionItems = pgTable('production_items', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
   bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
-  // 'format' | 'files' | 'submission' | 'copies' | 'other': backfilled by migration 0006 and
-  // enforced by the api on insert. Not a CHECK or a $type yet: the api test helpers still seed
-  // the legacy label 'Fonts'.
-  category: text('category').notNull(),
+  // CHECK (format, files, submission, copies, other) in migration 0006.
+  category: text('category').notNull().$type<'format' | 'files' | 'submission' | 'copies' | 'other'>(),
   rule: text('rule').notNull(),
   ...sourceColumns,
   // Seeded checklist rows are 'standard'.
@@ -534,9 +532,8 @@ export const oralsItems = pgTable('orals_items', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
   bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
-  // 'rules' | 'prep' | 'session': backfilled by migration 0006 and enforced by the api on
-  // insert. Not a CHECK or a $type yet: the api test helpers still seed the legacy label 'Rules'.
-  category: text('category').notNull(),
+  // CHECK (rules, prep, session) in migration 0006.
+  category: text('category').notNull().$type<'rules' | 'prep' | 'session'>(),
   item: text('item').notNull(),
   ...sourceColumns,
   // Seeded checklist rows are 'standard'.

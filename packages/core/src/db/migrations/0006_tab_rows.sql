@@ -12,8 +12,10 @@
 -- - production and orals categories typed to the contract. Production: Fonts, Margins and
 --   Page limits -> format; File naming -> files; Portal -> submission; Copies -> copies;
 --   anything else -> other. Orals: Rules -> rules; Checklist -> prep; Session -> session;
---   anything else -> prep (the orals contract has no 'other'). The api refuses other values on
---   insert and maps legacy labels when it reads; there is no CHECK on category yet.
+--   anything else -> prep (the orals contract has no 'other'). Both get a CHECK. The api maps
+--   the same legacy labels on input, for older clients.
+-- - resume_matches.ai_result takes only results that normalize to a contract value; anything
+--   else stays null (undoing an override then gives 'unknown').
 -- - The rows the seed route wrote (origin 'user', no document, the exact seeded text) become
 --   origin 'standard'.
 -- - New table check_these: pre-scan hits no compliance row quotes, with row-level security
@@ -147,7 +149,9 @@ ALTER TABLE "outline_items" ADD CONSTRAINT "outline_items_status_check" CHECK ("
 -- resume_matches.ai_result -------------------------------------------------------------------
 ALTER TABLE "resume_matches" NO FORCE ROW LEVEL SECURITY;
 --> statement-breakpoint
-UPDATE "resume_matches" SET "ai_result" = "result" WHERE "reviewer_override" = false AND "ai_result" IS NULL;
+UPDATE "resume_matches" SET "ai_result" = lower(btrim("result"))
+WHERE "reviewer_override" = false AND "ai_result" IS NULL
+  AND lower(btrim("result")) IN ('meets', 'partial', 'gap', 'unknown');
 --> statement-breakpoint
 ALTER TABLE "resume_matches" FORCE ROW LEVEL SECURITY;
 --> statement-breakpoint
@@ -221,6 +225,8 @@ WHERE "category" NOT IN ('format', 'files', 'submission', 'copies', 'other');
 --> statement-breakpoint
 ALTER TABLE "production_items" FORCE ROW LEVEL SECURITY;
 --> statement-breakpoint
+ALTER TABLE "production_items" ADD CONSTRAINT "production_items_category_check" CHECK ("category" IN ('format', 'files', 'submission', 'copies', 'other'));
+--> statement-breakpoint
 
 -- orals_items: standard origin, then categories ---------------------------------------------
 ALTER TABLE "orals_items" NO FORCE ROW LEVEL SECURITY;
@@ -242,6 +248,8 @@ UPDATE "orals_items" SET "category" = CASE lower(btrim("category"))
 WHERE "category" NOT IN ('rules', 'prep', 'session');
 --> statement-breakpoint
 ALTER TABLE "orals_items" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "orals_items" ADD CONSTRAINT "orals_items_category_check" CHECK ("category" IN ('rules', 'prep', 'session'));
 --> statement-breakpoint
 ALTER TABLE "orals_items" ADD CONSTRAINT "orals_items_minutes_check" CHECK ("minutes" >= 0);
 --> statement-breakpoint
