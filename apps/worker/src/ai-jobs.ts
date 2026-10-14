@@ -49,27 +49,39 @@ async function recordRun(input: {
   costUsd: number;
   durationMs: number;
   status: string;
-}): Promise<void> {
-  await withOrg(input.orgId, async (db) => {
-    await db.insert(schema.aiRuns).values({
-      orgId: input.orgId,
-      bidId: input.bidId,
-      task: input.task,
-      provider: input.provider,
-      model: input.model,
-      skillName: input.skillName,
-      skillVersion: input.skillVersion,
-      status: input.status,
-      inputTokens: input.tokens,
-      outputTokens: 0,
-      costUsd: input.costUsd.toFixed(6),
-      durationMs: input.durationMs,
-    });
+}, db?: Db): Promise<void> {
+  const write = (tx: Db) => tx.insert(schema.aiRuns).values({
+    orgId: input.orgId,
+    bidId: input.bidId,
+    task: input.task,
+    provider: input.provider,
+    model: input.model,
+    skillName: input.skillName,
+    skillVersion: input.skillVersion,
+    status: input.status,
+    inputTokens: input.tokens,
+    outputTokens: 0,
+    costUsd: input.costUsd.toFixed(6),
+    durationMs: input.durationMs,
+  });
+  if (db) {
+    await write(db);
+    return;
+  }
+  await withOrg(input.orgId, async (tx) => {
+    await write(tx);
   });
 }
 
+type Db = Parameters<Parameters<typeof withOrg>[1]>[0];
+
 async function settleCredit(orgId: string, bidId: string, action: 'consume' | 'release'): Promise<void> {
-  await withOrg(orgId, async (db) => {
+  await withOrg(orgId, (db) => settleCreditIn(db, orgId, bidId, action));
+}
+
+/** settleCredit inside the caller's transaction. Takes the bid row, then the credit row. */
+async function settleCreditIn(db: Db, orgId: string, bidId: string, action: 'consume' | 'release'): Promise<void> {
+  {
     // Claim the reservation with a conditional update: only one settler (this job, a retry, the
     // api releasing an abandoned upload, or a bid delete) flips it, and only that one touches
     // the counters. Counters change by increments, never by writing back values read earlier.
@@ -99,12 +111,15 @@ async function settleCredit(orgId: string, bidId: string, action: 'consume' | 'r
       eq(schema.rfpCredits.orgId, orgId),
       gt(schema.rfpCredits.reserved, 0),
     ));
-  });
+  }
 }
 
 export async function processCompliance(payload: JobPayload): Promise<void> {
   const started = Date.now();
   const { provider, config } = providerForJob();
+  // Only the solicitation's own matrix run settles the bid's credit (06 s4). An attachment's run
+  // merges rows into the matrix and must not consume or release the solicitation's reservation.
+  const settlesCredit = payload.kind === 'solicitation';
   try {
     // A solicitation the user deleted before its matrix was built is not processed: the api
     // released its credit, so building the matrix now would give it away for free. The credit
@@ -118,7 +133,18 @@ export async function processCompliance(payload: JobPayload): Promise<void> {
     }
     const pages = await loadPages(payload.orgId, payload.documentId);
     const result = await extractComplianceMatrix({ pages, provider, config });
+    // Rows, the run record, and the credit consume commit together, so a crash between them
+    // cannot leave rows without a consumed credit or a credit still reserved for a built matrix.
+    // The document is re-checked under a row lock in the same transaction (lock order: document,
+    // bid, credit): a delete that committed meanwhile wins, and nothing is written.
     await withOrg(payload.orgId, async (db) => {
+      const [current] = await db.select({ liveStatus: schema.documents.liveStatus })
+        .from(schema.documents)
+        .where(and(eq(schema.documents.id, payload.documentId), eq(schema.documents.orgId, payload.orgId)))
+        .for('update');
+      if (!current || current.liveStatus === 'deleted') {
+        return;
+      }
       if (result.requirements.length > 0) {
         await db.insert(schema.complianceRows).values(result.requirements.map((row) => ({
           orgId: payload.orgId,
@@ -142,23 +168,27 @@ export async function processCompliance(payload: JobPayload): Promise<void> {
           supersedeStatus: row.supersedeStatus,
         })));
       }
+      await recordRun({
+        orgId: payload.orgId,
+        bidId: payload.bidId,
+        task: 'compliance',
+        provider: config.providerName,
+        model: config.model,
+        skillName: result.metadata.skillName,
+        skillVersion: result.metadata.skillVersion,
+        tokens: result.metadata.tokensUsed,
+        costUsd: result.metadata.costUsd,
+        durationMs: Date.now() - started,
+        status: 'completed',
+      }, db);
+      if (settlesCredit) {
+        await settleCreditIn(db, payload.orgId, payload.bidId, 'consume');
+      }
     });
-    await recordRun({
-      orgId: payload.orgId,
-      bidId: payload.bidId,
-      task: 'compliance',
-      provider: config.providerName,
-      model: config.model,
-      skillName: result.metadata.skillName,
-      skillVersion: result.metadata.skillVersion,
-      tokens: result.metadata.tokensUsed,
-      costUsd: result.metadata.costUsd,
-      durationMs: Date.now() - started,
-      status: 'completed',
-    });
-    await settleCredit(payload.orgId, payload.bidId, 'consume');
   } catch (error) {
-    await settleCredit(payload.orgId, payload.bidId, 'release');
+    if (settlesCredit) {
+      await settleCredit(payload.orgId, payload.bidId, 'release');
+    }
     throw error;
   }
 }

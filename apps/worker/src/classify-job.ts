@@ -28,6 +28,12 @@ export async function processClassify(payload: JobPayload): Promise<void> {
     await enqueue('ai:amendment', payload);
     return;
   }
+  // The free tabs read the solicitation set: the solicitation and its attachments (00 s3).
+  // Resumes and draft volumes feed the paid resume and review tabs, whose AI steps are not
+  // built yet; they must not add compliance rows or bid facts.
+  if (payload.kind !== 'solicitation' && payload.kind !== 'attachment') {
+    return;
+  }
   await enqueue('ai:overview', payload);
   await enqueue('ai:dates', payload);
   await enqueue('ai:compliance', payload);
