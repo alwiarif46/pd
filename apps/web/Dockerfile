@@ -1,18 +1,17 @@
-FROM node:20-alpine AS builder
+# syntax=docker/dockerfile:1
+# Build from the repo root:  docker build -f apps/web/Dockerfile -t pd-web .
+# Static files only. Production TLS and routing are the host nginx (infra/nginx.conf); this
+# image serves the build on port 8080 as a non-root user.
 
+FROM node:20-alpine AS build
+RUN npm install -g pnpm@9
 WORKDIR /app
-
-COPY package.json pnpm-lock.yaml* ./
-RUN npm install -g pnpm && pnpm install --frozen-lockfile
-
 COPY . .
-RUN pnpm build
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --filter "@pd/web..."
+RUN pnpm --filter @pd/web build
 
-FROM nginx:alpine
-
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY infra/nginx.conf /etc/nginx/conf.d/default.conf
-
-EXPOSE 80
-
-CMD ["nginx", "-g", "daemon off;"]
+FROM nginxinc/nginx-unprivileged:1.27-alpine
+COPY infra/nginx-web.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/apps/web/dist /usr/share/nginx/html
+EXPOSE 8080
