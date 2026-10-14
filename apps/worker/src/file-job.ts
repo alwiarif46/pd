@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { schema, withOrg } from '@pd/core';
 import { enqueue } from './enqueue.js';
+import { expectOneRow } from './rows.js';
 import { dataDir, type JobPayload } from './redis.js';
 
 interface SandboxPage {
@@ -94,7 +95,7 @@ export async function processFile(payload: JobPayload): Promise<void> {
       text: page.text,
       ocrUsed: page.ocrUsed,
     })));
-    await db.update(schema.documents).set({
+    expectOneRow('document', await db.update(schema.documents).set({
       extractStatus: 'ready',
       pageCount: parsed.metadata.pageCount,
       encryption: parsed.metadata.encryption,
@@ -102,7 +103,7 @@ export async function processFile(payload: JobPayload): Promise<void> {
       pagesEstimated: parsed.metadata.pagesEstimated ? 1 : 0,
       viewerPath: payload.storagePath,
       updatedAt: new Date(),
-    }).where(eq(schema.documents.id, payload.documentId));
+    }).where(and(eq(schema.documents.id, payload.documentId), eq(schema.documents.orgId, payload.orgId))).returning({ id: schema.documents.id }));
   });
   await enqueue('marking', payload);
 }
