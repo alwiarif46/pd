@@ -3,6 +3,14 @@ import { jsonBody, jsonResponse, lastCall, mockFetch } from '../test/fetch';
 import { confirmAmendmentLink, listAmendmentLinks, rejectAmendmentLink } from './amendments';
 import { createBid, deleteBid, getBid, listBids, updateBid } from './bids';
 import {
+  addComplianceRow,
+  deleteComplianceRow,
+  listComplianceRows,
+  mergeComplianceRows,
+  splitComplianceRow,
+  updateComplianceRow,
+} from './compliance';
+import {
   confirmMarking,
   deleteDocument,
   getDocumentFile,
@@ -24,7 +32,10 @@ import {
   removeMember,
   updateOrg,
 } from './org';
+import { deleteRow, getRow, updateRow } from './rows';
+import { adjustSchedule } from './schedule';
 import { setToken } from './session';
+import { createTabRow, getTab, seedTab } from './tabs';
 
 type RouteCase = [name: string, call: () => Promise<unknown>, method: HttpMethod, path: string, body: unknown];
 
@@ -73,6 +84,73 @@ const cases: RouteCase[] = [
   ['listAmendmentLinks', () => listAmendmentLinks('b1'), 'GET', '/api/bids/b1/amendment-links', undefined],
   ['confirmAmendmentLink', () => confirmAmendmentLink('l1'), 'POST', '/api/amendment-links/l1/confirm', undefined],
   ['rejectAmendmentLink', () => rejectAmendmentLink('l1'), 'POST', '/api/amendment-links/l1/reject', undefined],
+  // tabs.ts
+  ['getTab', () => getTab('b1', 'schedule'), 'GET', '/api/bids/b1/tabs/schedule', undefined],
+  [
+    'createTabRow',
+    () => createTabRow('b1', 'overview', { kind: 'fact', field: 'Agency', value: 'GSA' }),
+    'POST',
+    '/api/bids/b1/tabs/overview/rows',
+    { kind: 'fact', field: 'Agency', value: 'GSA' },
+  ],
+  ['seedTab (overview sends {})', () => seedTab('b1', 'overview'), 'POST', '/api/bids/b1/tabs/overview/seed', {}],
+  [
+    'seedTab (schedule sends the template)',
+    () => seedTab('b1', 'schedule', { template: 'color-reviews' }),
+    'POST',
+    '/api/bids/b1/tabs/schedule/seed',
+    { template: 'color-reviews' },
+  ],
+  ['seedTab (schedule, no template)', () => seedTab('b1', 'schedule'), 'POST', '/api/bids/b1/tabs/schedule/seed', {}],
+  // rows.ts
+  ['getRow', () => getRow('b1', 'bid_facts', 'r1'), 'GET', '/api/bids/b1/rows/bid_facts/r1', undefined],
+  [
+    'updateRow wraps fields',
+    () => updateRow('b1', 'kickoff_items', 'r1', { done: true, owner: null }),
+    'PATCH',
+    '/api/bids/b1/rows/kickoff_items/r1',
+    { fields: { done: true, owner: null } },
+  ],
+  ['deleteRow', () => deleteRow('b1', 'lessons', 'r1'), 'DELETE', '/api/bids/b1/rows/lessons/r1', undefined],
+  // compliance.ts
+  ['listComplianceRows', () => listComplianceRows('b1'), 'GET', '/api/bids/b1/tabs/compliance', undefined],
+  [
+    'addComplianceRow',
+    () => addComplianceRow('b1', { requirementText: 'The offeror shall...', reqType: 'shall' }),
+    'POST',
+    '/api/bids/b1/tabs/compliance/rows',
+    { requirementText: 'The offeror shall...', reqType: 'shall' },
+  ],
+  [
+    'updateComplianceRow',
+    () => updateComplianceRow('b1', 'r1', { owner: 'Ann', status: 'done' }),
+    'PATCH',
+    '/api/bids/b1/rows/compliance_rows/r1',
+    { fields: { owner: 'Ann', status: 'done' } },
+  ],
+  ['deleteComplianceRow', () => deleteComplianceRow('b1', 'r1'), 'DELETE', '/api/bids/b1/rows/compliance_rows/r1', undefined],
+  [
+    'mergeComplianceRows',
+    () => mergeComplianceRows('b1', ['r1', 'r2']),
+    'POST',
+    '/api/bids/b1/compliance/merge',
+    { ids: ['r1', 'r2'] },
+  ],
+  [
+    'splitComplianceRow',
+    () => splitComplianceRow('b1', 'r1', 12),
+    'POST',
+    '/api/bids/b1/compliance/split',
+    { rowId: 'r1', at: 12 },
+  ],
+  // schedule.ts
+  [
+    'adjustSchedule',
+    () => adjustSchedule('b1', { mode: 'shift', previousDue: '2026-11-01', nextDue: '2026-11-08' }),
+    'POST',
+    '/api/bids/b1/schedule/adjust',
+    { mode: 'shift', previousDue: '2026-11-01', nextDue: '2026-11-08' },
+  ],
 ];
 
 describe('resource routes', () => {
