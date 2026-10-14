@@ -1,23 +1,7 @@
-export class ApiError extends Error {
-  status: number;
+import { ApiError } from './api/errors';
+import { getToken as token, setToken } from './api/session';
 
-  constructor(message: string, status: number) {
-    super(message);
-    this.status = status;
-  }
-}
-
-export function token(): string | null {
-  return sessionStorage.getItem('pd-token');
-}
-
-export function setToken(value: string | null): void {
-  if (value) {
-    sessionStorage.setItem('pd-token', value);
-  } else {
-    sessionStorage.removeItem('pd-token');
-  }
-}
+export { ApiError, token, setToken };
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);

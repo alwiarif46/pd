@@ -49,6 +49,20 @@ jobs:
       - run: pnpm install
       - run: pnpm build
 
+  test-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install
+      - run: pnpm --filter @pd/web test
+
   build-docker:
     # Off until the Dockerfiles build from the repo root: each one needs the root lockfile,
     # the workspace packages, and infra/, none of which are inside its ./apps/<app> context.
