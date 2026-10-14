@@ -154,7 +154,7 @@ export interface BidDto extends OrgScopedDto {
   bidType: BidType;
   solicitationNumber: string;
   solicitationKey: string;
-  status: string;
+  status: BidStatus;
   startDate: string | null;
   dueDate: string | null;
   dueTime: string | null;
@@ -165,6 +165,12 @@ export interface BidDto extends OrgScopedDto {
   creditStatus: 'reserved' | 'consumed' | 'released' | null;
   keyOverridesUsed: number;
   retentionExtendedUntil: string | null;
+  /** 03 s39 without an extension: paid, the later of latest non-resume upload + 90 days and due + 90; free, latest upload + 90; null if neither. */
+  defaultLiveUntil: string | null;
+  /** The later of `defaultLiveUntil` and `retentionExtendedUntil` (paid plans; free ignores the extension). */
+  filesLiveUntil: string | null;
+  /** Amendment key overrides left on this bid (limit from app_settings, default 2). */
+  keyOverridesLeft: number;
 }
 
 export interface CreateBidInput {
@@ -184,7 +190,12 @@ export interface BidPatch {
   timeZone?: string | null;
   oralsEnabled?: boolean;
   retentionExtendedUntil?: string | null;
+  /** Any other value is refused with 400. */
+  status?: BidStatus;
 }
+
+/** `bids.status` (09 s5.2); the database holds only these values. New bids start in `planning`. */
+export type BidStatus = 'planning' | 'writing' | 'submitted' | 'closed';
 
 // ---------------------------------------------------------------------------
 // Uploads and documents
@@ -223,8 +234,14 @@ export interface DocumentDto extends BidScopedDto {
   extractStatus: string | null;
   markingFound: string[] | null;
   markingStatus: 'none' | 'blocked' | 'confirmed' | null;
+  /** The lowest page a marking was found on, or null. */
+  markingPage: number | null;
+  /** Computed by the 03 s39 rule (plan, upload date, due date, extension); null for a deleted file. */
   liveUntil: string | null;
-  liveStatus: 'live' | 'archived' | 'restoring' | 'restored' | 'deleted' | null;
+  liveStatus: DocumentLiveStatus | null;
+  /** The latest `restored_until` of the file's restored, unpurged archive copies, or null. */
+  restoredUntil: string | null;
+  keyCheck: KeyCheck;
 }
 
 export interface ViewTokenDto {
@@ -246,6 +263,26 @@ export interface DocumentPagesDto {
   pagesEstimated: number | null;
   extractMethod: DocumentDto['extractMethod'];
   pages: PageDto[];
+}
+
+export type DocumentLiveStatus = 'live' | 'archived' | 'restore_requested' | 'restoring' | 'restored' | 'deleted';
+
+/**
+ * The amendment key check (09 s5.11): `not_applicable` for anything but an amendment; `mismatch`
+ * when the solicitation number was not found and no override was given; `overridden` after an
+ * owner override; otherwise `ok`.
+ */
+export type KeyCheck = 'not_applicable' | 'ok' | 'mismatch' | 'overridden';
+
+/** POST /api/documents/:id/restore. A repeat while a restore is pending returns the current state. */
+export interface RestoreDocumentDto {
+  status: 'restore_requested' | 'restoring' | 'restored';
+}
+
+export interface KeyOverrideDto {
+  ok: true;
+  amendmentId: string;
+  remaining: number;
 }
 
 // ---------------------------------------------------------------------------
