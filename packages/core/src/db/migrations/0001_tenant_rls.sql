@@ -109,6 +109,18 @@ END
 $$;
 --> statement-breakpoint
 
+-- organizations: keyed by its own id rather than org_id ------------------------
+-- pd_app sees and changes only the organization named by app.org_id. Creating one works
+-- because the api sets app.org_id to the new id before the insert (POST /api/org).
+ALTER TABLE public.organizations ENABLE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE public.organizations FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+CREATE POLICY tenant_isolation ON public.organizations AS PERMISSIVE FOR ALL TO pd_app
+  USING (id = NULLIF(current_setting('app.org_id', true), '')::uuid)
+  WITH CHECK (id = NULLIF(current_setting('app.org_id', true), '')::uuid);
+--> statement-breakpoint
+
 -- Membership lookup before app.org_id is known ------------------------------
 -- The api has to find a signed-in user's organizations before it can set app.org_id.
 -- pd_system owns one SECURITY DEFINER function that returns only (org_id, role) for one

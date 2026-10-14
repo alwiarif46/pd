@@ -65,6 +65,25 @@ describe.skipIf(Boolean(unavailable))('row-level security catalog', () => {
     }
   });
 
+  it('protects organizations by its own id', async () => {
+    const result = await admin.query(`
+      select c.relrowsecurity as enabled, c.relforcerowsecurity as forced, p.qual, p.with_check
+      from pg_class c
+      join pg_policies p on p.schemaname = 'public' and p.tablename = c.relname
+      where c.relname = 'organizations' and c.relnamespace = 'public'::regnamespace
+        and p.cmd = 'ALL' and 'pd_app' = any (p.roles)
+    `);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatchObject({ enabled: true, forced: true });
+    expect(result.rows[0].qual).toMatch(/^\(id = \(NULLIF\(current_setting\('app\.org_id'/);
+    expect(result.rows[0].with_check).toMatch(/^\(id = \(NULLIF\(current_setting\('app\.org_id'/);
+  });
+
+  it('leaves no policy from the old rls.sql', async () => {
+    const result = await admin.query("select policyname from pg_policies where policyname like 'tenant\\_%' and policyname <> 'tenant_isolation'");
+    expect(result.rows).toEqual([]);
+  });
+
   it('keeps pd_app subject to row-level security and unable to act as pd_system', async () => {
     const result = await admin.query(`
       select rolsuper, rolbypassrls, pg_has_role('pd_app', 'pd_system', 'MEMBER') as in_system
@@ -143,7 +162,7 @@ describe.skipIf(Boolean(unavailable))('row-level security as pd_app', () => {
 
   it('sees no tenant rows at all without app.org_id', async () => {
     const pool = getPool();
-    for (const table of TENANT_TABLES) {
+    for (const table of [...TENANT_TABLES, 'organizations']) {
       const result = await pool.query(`select count(*)::int as n from ${table}`);
       expect(result.rows[0].n, table).toBe(0);
     }
@@ -166,6 +185,20 @@ describe.skipIf(Boolean(unavailable))('row-level security as pd_app', () => {
     await withOrg(orgB, async (db) => {
       const [bid] = await db.select().from(schema.bids);
       expect(bid).toMatchObject({ id: bidB, name: 'B' });
+    });
+  });
+
+  it('sees and changes only its own organization row', async () => {
+    await withOrg(orgA, async (db) => {
+      expect((await db.select().from(schema.organizations)).map((org) => org.id)).toEqual([orgA]);
+      expect((await db.execute(sql`update organizations set name = 'taken' where id = ${orgB}`)).rowCount).toBe(0);
+    });
+    await expect(withOrg(orgA, async (db) => {
+      await db.insert(schema.organizations).values({ id: randomUUID(), name: 'planted', plan: 'free', planStatus: 'active' });
+    })).rejects.toThrow(/row-level security/);
+    await withOrg(orgB, async (db) => {
+      const [org] = await db.select().from(schema.organizations);
+      expect(org).toMatchObject({ id: orgB, name: orgB });
     });
   });
 
