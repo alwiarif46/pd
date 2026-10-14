@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { and, eq, gt } from 'drizzle-orm';
@@ -21,6 +21,8 @@ import {
   bidBytesInUse,
   currentCreditPeriod,
   expireAbandonedUploads,
+  hasLiveSolicitation,
+  lockBid,
   lockOrg,
   notDeleted,
   releaseSessionCredit,
@@ -131,6 +133,14 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       }
 
       const holdsCredit = current.creditStatus === 'reserved' || current.creditStatus === 'consumed';
+      // "Another solicitation file must carry the same key" (06 s4). The first solicitation is
+      // taken to be the bid's own number; any later one must state its number, so a different
+      // RFP cannot ride in on an existing bid by leaving the number out. A file with no number
+      // can still be added as an attachment.
+      if (kind === 'solicitation' && !fileKey && settledKey(current.solicitationKey)
+        && (holdsCredit || await hasLiveSolicitation(db, orgId, bidId))) {
+        return respond(409, apiError('key_required'));
+      }
       const needsCredit = kind === 'solicitation' && !holdsCredit;
       const period = needsCredit ? await currentCreditPeriod(db, orgId, now) : null;
       const decision = reserveCredit(
@@ -314,12 +324,18 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       await new Promise<void>((resolve) => {
         output.on('finish', () => resolve());
       });
+      // Every refusal from here on reopens the session and removes the assembled copy, so a
+      // failed complete leaves nothing behind but the chunks the client can still fix.
+      const refuse = async (code: number, body: unknown): Promise<Outcome> => {
+        await reopen();
+        await rm(absolute, { force: true });
+        return { code, body };
+      };
       const file = await readFile(absolute);
       hash.update(file);
       const digest = hash.digest('hex');
       if (digest !== session.sha256 || file.length !== session.declaredSize) {
-        await reopen();
-        return { code: 400, body: { error: 'The uploaded bytes do not match the declared file' } };
+        return refuse(400, { error: 'The uploaded bytes do not match the declared file' });
       }
       // A solicitation never reaches a bid without a credit behind it. Normally its session
       // reserved one at start; if that reservation went back (another session for this bid was
@@ -327,17 +343,17 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       // verified, so a refused complete never leaves a reservation behind, and the org lock is
       // not held while the file is assembled. The session records the credit it now owns.
       if (session.kind === 'solicitation') {
+        // Lock order: organization, then bid (read under lock, so credit_status is current),
+        // then the credit row inside reserveForBid.
         const org = await lockOrg(db, orgId);
-        const bid = await findBid(db, orgId, session.bidId);
+        const [bid] = await lockBid(db, orgId, session.bidId);
         if (!org || !bid) {
-          await reopen();
-          return { code: 404, body: { error: 'Bid not found' } };
+          return refuse(404, { error: 'Bid not found' });
         }
         if (bid.creditStatus !== 'reserved' && bid.creditStatus !== 'consumed') {
           const creditId = await reserveForBid(db, org, bid.id, new Date());
           if (!creditId) {
-            await reopen();
-            return { code: 402, body: apiError('out_of_credits') };
+            return refuse(402, apiError('out_of_credits'));
           }
           await db.update(schema.uploadSessions).set({ creditId, updatedAt: new Date() }).where(and(
             eq(schema.uploadSessions.id, sessionId),
@@ -382,6 +398,10 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       };
     });
     await queueAfterCommit(orgId, outcome);
+    if (outcome.code === 201) {
+      // The file is assembled and committed; its chunks are no longer needed.
+      await removeChunkDirs(dataDir, orgId, [sessionId]);
+    }
     return reply.code(outcome.code).send(outcome.body);
   });
 }

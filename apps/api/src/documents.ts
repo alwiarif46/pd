@@ -1,10 +1,10 @@
 import { createReadStream } from 'node:fs';
 import { rm, stat } from 'node:fs/promises';
-import { and, asc, eq, gte, lt, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, isNull, lt, lte, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { KEY_OVERRIDES_PER_BID, resolveOrgPath, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
-import { releaseBidCredit } from './credits.js';
+import { lockBid, releaseBidCredit } from './credits.js';
 import { apiError } from './errors.js';
 import { findBid, inOrg, findDocument, type Outcome, queueAfterCommit } from './scope.js';
 import { enqueueClassify } from './queue.js';
@@ -111,6 +111,9 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       const document = await findDocument(db, orgId, documentId);
       if (!document) {
         return respond(404, { error: 'Document not found' });
+      }
+      if (document.liveStatus === 'deleted') {
+        return respond(409, apiError('document_deleted'));
       }
       if (document.kind !== 'amendment') {
         return respond(409, apiError('not_an_amendment'));
@@ -282,8 +285,17 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       // release the reservation (the worker skips a deleted document, so it will not consume).
       // releaseBidCredit flips credit_status conditionally, so a concurrent consume or release
       // by the worker settles it at most once.
+      // Its archive copies go too: the purge job deletes expired copies (07 s2).
+      await db.update(schema.archiveObjects).set({ expiresAt: new Date(), updatedAt: new Date() }).where(and(
+        eq(schema.archiveObjects.documentId, documentId),
+        eq(schema.archiveObjects.orgId, orgId),
+        isNull(schema.archiveObjects.purgedAt),
+      ));
       let creditReleased = false;
       if (document.kind === 'solicitation') {
+        // Lock the bid (after this document, the same order as the worker) before counting, so
+        // two deletes of the bid's last two solicitations cannot both see the other as live.
+        await lockBid(db, orgId, document.bidId);
         const [remaining] = await db.select({ id: schema.documents.id }).from(schema.documents).where(and(
           eq(schema.documents.bidId, document.bidId),
           eq(schema.documents.orgId, orgId),

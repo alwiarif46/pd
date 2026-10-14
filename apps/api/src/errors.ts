@@ -6,6 +6,8 @@
 export const ERROR_MESSAGES = {
   out_of_credits: 'This organization has no RFP credits left this period. Upgrade, or wait for the next period.',
   key_mismatch: 'The solicitation number on this file does not match the bid. Start a new bid for a different solicitation.',
+  key_required: 'This bid already has its solicitation. Give the solicitation number on this file, or add it as an attachment.',
+  document_deleted: 'This file was deleted.',
   key_locked: 'This bid already holds an RFP credit for its solicitation number. Start a new bid for a different solicitation.',
   bid_cap_exceeded: 'This file is larger than the space left on this bid.',
   invalid_upload: 'fileName, kind, a whole-number declaredSize, a sha256 hex digest, and chunkCount are required.',

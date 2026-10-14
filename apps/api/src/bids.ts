@@ -3,7 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { isUuid, normalizeSolicitationKey, resolveOrgPath, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
-import { releaseBidCredit } from './credits.js';
+import { hasLiveSolicitation, releaseBidCredit } from './credits.js';
 import { apiError } from './errors.js';
 import { findBid, inOrg } from './scope.js';
 
@@ -126,7 +126,10 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
         // corrected, but not changed to a different solicitation.
         // Rows written before keys were normalized hold the raw number, so compare normalized.
         const currentKey = keyFor(bid.solicitationKey);
-        const holdsCredit = bid.creditStatus === 'reserved' || bid.creditStatus === 'consumed';
+        // A released credit (processing failed) still ties the bid to its solicitation while
+        // that file is on the bid: a retry reserves again and processes the same file.
+        const holdsCredit = bid.creditStatus === 'reserved' || bid.creditStatus === 'consumed'
+          || (bid.creditStatus === 'released' && await hasLiveSolicitation(db, orgId, id));
         if (holdsCredit && currentKey !== PENDING && nextKey !== currentKey) {
           return respond(409, apiError('key_locked'));
         }
@@ -176,6 +179,12 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
       if (!bid) {
         return respond(404, { error: 'Bid not found' });
       }
+      // Lock order: documents before the bid, as the worker does (document, then bid, then
+      // credit), so a delete and a matrix run settling the credit cannot deadlock.
+      await db.select({ id: schema.documents.id }).from(schema.documents).where(and(
+        eq(schema.documents.bidId, id),
+        eq(schema.documents.orgId, orgId),
+      )).for('update');
       await releaseBidCredit(db, orgId, id);
       const documents = await db.select({
         storagePath: schema.documents.storagePath,

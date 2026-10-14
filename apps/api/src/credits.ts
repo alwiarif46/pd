@@ -22,6 +22,25 @@ export type CreditRow = typeof schema.rfpCredits.$inferSelect;
 type OrgRow = typeof schema.organizations.$inferSelect;
 type SessionRow = typeof schema.uploadSessions.$inferSelect;
 
+/** Locks the bid row until the transaction ends and returns it (empty when not found). */
+export function lockBid(db: Db, orgId: string, bidId: string) {
+  return db.select().from(schema.bids).where(and(
+    eq(schema.bids.id, bidId),
+    eq(schema.bids.orgId, orgId),
+  )).for('update');
+}
+
+/** True when the bid has a solicitation document the user has not deleted. */
+export async function hasLiveSolicitation(db: Db, orgId: string, bidId: string): Promise<boolean> {
+  const [row] = await db.select({ id: schema.documents.id }).from(schema.documents).where(and(
+    eq(schema.documents.bidId, bidId),
+    eq(schema.documents.orgId, orgId),
+    eq(schema.documents.kind, 'solicitation'),
+    sql`${schema.documents.liveStatus} is distinct from 'deleted'`,
+  )).limit(1);
+  return Boolean(row);
+}
+
 /** Locks this organization's row until the transaction ends and returns it. */
 export async function lockOrg(db: Db, orgId: string): Promise<OrgRow | null> {
   const [org] = await db.select().from(schema.organizations).where(eq(schema.organizations.id, orgId)).for('update');
@@ -95,6 +114,13 @@ export async function ensureCreditPeriod(db: Db, org: OrgRow, now: Date): Promis
  * Returns the credit id, or null when the period has no credit left.
  */
 export async function reserveForBid(db: Db, org: OrgRow, bidId: string, now: Date): Promise<string | null> {
+  // Lock order everywhere: organizations, then documents, then bids, then rfp_credits. The bid
+  // row is taken before the credit row, as the worker's settle and releaseBidCredit do, so a
+  // reserve and a settle on one bid cannot deadlock.
+  const [locked] = await lockBid(db, org.id, bidId);
+  if (!locked) {
+    throw new Error(`reserveForBid: bid ${bidId} not found in organization ${org.id}`);
+  }
   const period = await ensureCreditPeriod(db, org, now);
   const [credit] = await db.update(schema.rfpCredits).set({
     reserved: sql`${schema.rfpCredits.reserved} + 1`,

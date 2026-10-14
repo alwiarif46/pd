@@ -103,10 +103,9 @@ describe('MB cap per bid', () => {
     expect(fitsBidCap('starter', 299 * MB, MB + 1)).toBe(false);
   });
 
-  // Suspected bug: a negative declared size passes the route's `!body.declaredSize` check and
-  // makes the cap arithmetic favourable. The completion step still rejects a size mismatch,
-  // so this is defence in depth. Fix would be in fitsBidCap or the route validation.
-  it.skip('refuses a negative or fractional incoming size', () => {
+  // Was a suspected bug: fixed in fitsBidCap, which refuses sizes that are not positive whole
+  // numbers, and in the upload route, which refuses them with 400 invalid_upload.
+  it('refuses a negative or fractional incoming size', () => {
     expect(fitsBidCap('free', 50 * MB, -1)).toBe(false);
     expect(fitsBidCap('free', 0, 0.5)).toBe(false);
   });
