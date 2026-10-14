@@ -63,6 +63,23 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE O
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO pd_app;
 --> statement-breakpoint
 
+-- Policies from the old hand-applied rls.sql, if this database was set up with it --
+DO $$
+DECLARE
+  old_table text;
+  old_policy text;
+BEGIN
+  FOREACH old_table IN ARRAY ARRAY['memberships', 'bids', 'documents'] LOOP
+    FOREACH old_policy IN ARRAY ARRAY['tenant_select', 'tenant_insert', 'tenant_update', 'tenant_delete'] LOOP
+      IF to_regclass(format('public.%I', old_table)) IS NOT NULL THEN
+        EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', old_policy, old_table);
+      END IF;
+    END LOOP;
+  END LOOP;
+END
+$$;
+--> statement-breakpoint
+
 -- Row-level security on every tenant table (the tables marked T in 03) -------
 -- One policy per table, for all commands, for pd_app only. Any other role that is not a
 -- superuser and has no BYPASSRLS sees no rows (FORCE applies the policies to the owner too).
