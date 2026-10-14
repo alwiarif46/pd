@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { isUuid, PLAN_LIMITS, type Plan, schema, withOrg } from '@pd/core';
+import { isUuid, PLAN_LIMITS, type Plan, schema, userMemberships, withOrg } from '@pd/core';
 import { requireAuth, requireUser } from './context.js';
 import { hashToken, isWorkEmail, logOutOfBand, newToken } from './security.js';
 
@@ -12,7 +12,9 @@ function seatLimit(plan: Plan): number {
 export async function registerOrg(app: FastifyInstance): Promise<void> {
   app.post('/api/org', { preHandler: requireUser }, async (request, reply) => {
     const auth = request.auth!;
-    if (auth.orgId!) {
+    // Check the user's memberships, not auth.orgId: an X-Org-Id header naming an org the
+    // user does not belong to leaves auth.orgId unset even when they belong to another.
+    if ((await userMemberships(auth.userId)).length > 0) {
       return reply.code(409).send({ error: 'You already belong to an organization' });
     }
     const name = ((request.body as { name?: string }).name ?? '').trim();
