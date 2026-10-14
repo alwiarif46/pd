@@ -4,7 +4,7 @@ import { and, asc, eq, gte, lte } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { resolveOrgPath, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
-import { findBid, findDocument, type Outcome, queueAfterCommit } from './scope.js';
+import { findBid, inOrg, findDocument, type Outcome, queueAfterCommit } from './scope.js';
 import { enqueueClassify } from './queue.js';
 import { newToken } from './security.js';
 
@@ -17,10 +17,10 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
   app.get('/api/bids/:id/documents', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const bidId = (request.params as { id: string }).id;
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const bid = await findBid(db, orgId, bidId);
       if (!bid) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       return db.select().from(schema.documents).where(and(eq(schema.documents.bidId, bidId), eq(schema.documents.orgId, orgId)));
     });
@@ -29,10 +29,10 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
   app.get('/api/documents/:id/view-token', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const documentId = (request.params as { id: string }).id;
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const document = await findDocument(db, orgId, documentId);
       if (!document) {
-        return reply.code(404).send({ error: 'Document not found' });
+        return respond(404, { error: 'Document not found' });
       }
       const token = newToken();
       viewTokens.set(token, {
@@ -105,17 +105,17 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
     }
     const documentId = (request.params as { id: string }).id;
     const orgId = auth.orgId!;
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const document = await findDocument(db, orgId, documentId);
       if (!document) {
-        return reply.code(404).send({ error: 'Document not found' });
+        return respond(404, { error: 'Document not found' });
       }
       const bid = await findBid(db, orgId, document.bidId);
       if (!bid) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       if (bid.keyOverridesUsed >= 2) {
-        return reply.code(409).send({ error: 'This bid has used its two key overrides' });
+        return respond(409, { error: 'This bid has used its two key overrides' });
       }
       await db.update(schema.bids).set({
         keyOverridesUsed: bid.keyOverridesUsed + 1,
@@ -148,10 +148,10 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
     const query = request.query as { from?: string; to?: string };
     const from = Number(query.from ?? 1);
     const to = Number(query.to ?? from);
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const document = await findDocument(db, orgId, documentId);
       if (!document) {
-        return reply.code(404).send({ error: 'Document not found' });
+        return respond(404, { error: 'Document not found' });
       }
       const rows = await db.select().from(schema.pages).where(and(
         eq(schema.pages.documentId, documentId),
@@ -172,41 +172,46 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
   app.get('/api/documents/:id/file', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const documentId = (request.params as { id: string }).id;
-    return withOrg(orgId, async (db) => {
+    const found = await inOrg(reply, orgId, async (db, respond) => {
       const document = await findDocument(db, orgId, documentId);
       if (!document?.storagePath) {
-        return reply.code(404).send({ error: 'Document not found' });
+        return respond(404, { error: 'Document not found' });
       }
       if (document.kind === 'resume' && document.liveStatus === 'deleted') {
-        return reply.code(410).send({ error: 'Resume deleted after 90 days' });
+        return respond(410, { error: 'Resume deleted after 90 days' });
       }
       if (document.liveStatus === 'archived' || document.liveStatus === 'deleted') {
-        return reply.code(409).send({ error: 'This file is archived. Restore it to open the full page.' });
+        return respond(409, { error: 'This file is archived. Restore it to open the full page.' });
       }
       // A stored path must stay inside this organization's folder.
       const absolute = resolveOrgPath(dataDir, orgId, document.viewerPath || document.storagePath);
       if (!absolute) {
-        return reply.code(404).send({ error: 'Document not found' });
+        return respond(404, { error: 'Document not found' });
       }
       try {
         await stat(absolute);
       } catch {
-        return reply.code(404).send({ error: 'The viewer copy is not on this server' });
+        return respond(404, { error: 'The viewer copy is not on this server' });
       }
-      return reply.type('application/pdf').send(createReadStream(absolute));
+      return { file: absolute };
     });
+    if (!('file' in found)) {
+      return reply;
+    }
+    // Stream after COMMIT; the stream does not need the transaction.
+    return reply.type('application/pdf').send(createReadStream((found as { file: string }).file));
   });
 
   app.post('/api/documents/:id/restore', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const documentId = (request.params as { id: string }).id;
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const document = await findDocument(db, orgId, documentId);
       if (!document) {
-        return reply.code(404).send({ error: 'Document not found' });
+        return respond(404, { error: 'Document not found' });
       }
       if (document.liveStatus !== 'archived') {
-        return reply.code(409).send({ error: 'This file is not archived' });
+        return respond(409, { error: 'This file is not archived' });
       }
       await db.update(schema.documents).set({
         liveStatus: 'restoring',
@@ -219,10 +224,10 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
   app.delete('/api/documents/:id', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const documentId = (request.params as { id: string }).id;
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const document = await findDocument(db, orgId, documentId);
       if (!document) {
-        return reply.code(404).send({ error: 'Document not found' });
+        return respond(404, { error: 'Document not found' });
       }
       await db.delete(schema.documents).where(and(eq(schema.documents.id, documentId), eq(schema.documents.orgId, orgId)));
       return { ok: true };

@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
-import { findBid } from './scope.js';
+import { findBid, inOrg } from './scope.js';
 
 export async function registerBids(app: FastifyInstance): Promise<void> {
   app.get('/api/bids', { preHandler: requireAuth }, async (request) => {
@@ -18,7 +18,7 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'Name and bid type are required' });
     }
     const solicitationNumber = body.solicitationNumber?.trim() || 'PENDING';
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const [bid] = await db.insert(schema.bids).values({
         orgId,
         name,
@@ -27,17 +27,17 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
         solicitationKey: solicitationNumber,
         status: 'draft',
       }).returning();
-      return reply.code(201).send(bid);
+      return respond(201, bid);
     });
   });
 
   app.get('/api/bids/:id', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const id = (request.params as { id: string }).id;
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const bid = await findBid(db, orgId, id);
       if (!bid) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       return bid;
     });
@@ -58,10 +58,10 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
       oralsEnabled?: boolean;
       retentionExtendedUntil?: string | null;
     };
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const bid = await findBid(db, orgId, id);
       if (!bid) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       const name = body.name?.trim();
       const solicitationNumber = body.solicitationNumber?.trim();
@@ -88,10 +88,10 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
   app.delete('/api/bids/:id', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const id = (request.params as { id: string }).id;
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const bid = await findBid(db, orgId, id);
       if (!bid) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       await db.delete(schema.bids).where(and(eq(schema.bids.id, id), eq(schema.bids.orgId, orgId)));
       return { ok: true };

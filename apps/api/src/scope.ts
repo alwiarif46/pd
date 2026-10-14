@@ -1,7 +1,36 @@
 import { and, eq } from 'drizzle-orm';
+import type { FastifyReply } from 'fastify';
 import { isUuid, schema, withOrg } from '@pd/core';
 
 export type Db = Parameters<Parameters<typeof withOrg>[1]>[0];
+
+const DEFERRED: unique symbol = Symbol('deferred reply');
+
+/** Records the reply to send once the transaction has committed. */
+export type Respond = (code: number, body: unknown) => typeof DEFERRED;
+
+/**
+ * `withOrg` for route handlers. Inside `fn`, answer with `respond(code, body)` (or return a
+ * value for a 200), never with `reply`: the reply is sent only after COMMIT, so a client
+ * never acts on rows that are not visible yet, or hears success for a transaction that then
+ * fails. ESLint forbids `reply` inside `withOrg`/`inOrg` callbacks (eslint.config.mjs).
+ */
+export async function inOrg<T>(
+  reply: FastifyReply,
+  orgId: string,
+  fn: (db: Db, respond: Respond) => Promise<T>,
+): Promise<Exclude<T, typeof DEFERRED> | FastifyReply> {
+  const state: { deferred: { code: number; body: unknown } | null } = { deferred: null };
+  const respond: Respond = (code, body) => {
+    state.deferred = { code, body };
+    return DEFERRED;
+  };
+  const value = await withOrg(orgId, (db) => fn(db, respond));
+  if (state.deferred) {
+    return reply.code(state.deferred.code).send(state.deferred.body);
+  }
+  return value as Exclude<T, typeof DEFERRED>;
+}
 
 /**
  * The bid, if it belongs to `orgId`. Row-level security already hides other

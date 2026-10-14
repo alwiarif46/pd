@@ -17,7 +17,7 @@ import {
   type Plan,
 } from '@pd/core';
 import { requireAuth } from './context.js';
-import { findBid, type Outcome, queueAfterCommit } from './scope.js';
+import { findBid, inOrg, type Outcome, queueAfterCommit } from './scope.js';
 import { enqueueScan } from './queue.js';
 
 const CHUNK_BYTES = 20 * 1024 * 1024;
@@ -54,20 +54,20 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
     if (!body.fileName || !isKind(kind) || !body.declaredSize || !body.sha256 || !body.chunkCount) {
       return reply.code(400).send({ error: 'fileName, kind, declaredSize, sha256, and chunkCount are required' });
     }
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const bid = await findBid(db, orgId, bidId);
       if (!bid) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       const [org] = await db.select().from(schema.organizations).where(eq(schema.organizations.id, orgId));
       const plan = (org?.plan ?? 'free') as Plan;
       const documents = await db.select().from(schema.documents).where(eq(schema.documents.bidId, bidId));
       const usedBytes = documents.reduce((sum, document) => sum + document.sizeBytes, 0);
       if (!fitsBidCap(plan, usedBytes, body.declaredSize!)) {
-        return reply.code(413).send({ error: 'This file exceeds the bid file cap' });
+        return respond(413, { error: 'This file exceeds the bid file cap' });
       }
       if (documents.some((document) => document.sha256 === body.sha256)) {
-        return reply.code(200).send({ duplicate: true });
+        return respond(200, { duplicate: true });
       }
       const solicitations = documents.filter((document) => document.kind === 'solicitation');
       const now = new Date();
@@ -98,7 +98,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       );
       if (!decision.ok) {
         const status = decision.reason === 'out_of_credits' ? 402 : 409;
-        return reply.code(status).send({ error: decision.reason });
+        return respond(status, { error: decision.reason });
       }
       if (decision.reserved) {
         await db.update(schema.rfpCredits).set({
@@ -123,7 +123,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
         status: 'open',
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       }).returning();
-      return reply.code(201).send({ id: session.id, expiresAt: session.expiresAt });
+      return respond(201, { id: session.id, expiresAt: session.expiresAt });
     });
   });
 
@@ -138,16 +138,16 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
     if (!isUuid(sessionId)) {
       return reply.code(404).send({ error: 'Upload session not found' });
     }
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const [session] = await db.select().from(schema.uploadSessions).where(and(
         eq(schema.uploadSessions.id, sessionId),
         eq(schema.uploadSessions.orgId, orgId),
       ));
       if (!session || session.expiresAt < new Date() || session.status !== 'open') {
-        return reply.code(404).send({ error: 'Upload session not found' });
+        return respond(404, { error: 'Upload session not found' });
       }
       if (!Number.isInteger(index) || index < 0 || index >= session.chunkCount) {
-        return reply.code(400).send({ error: 'Chunk index is out of range' });
+        return respond(400, { error: 'Chunk index is out of range' });
       }
       const dir = join(dataDir, orgId, 'chunks', sessionId);
       await mkdir(dir, { recursive: true });

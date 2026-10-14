@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { isUuid, PLAN_LIMITS, type Plan, schema, userMemberships, withOrg } from '@pd/core';
 import { requireAuth, requireUser } from './context.js';
+import { inOrg } from './scope.js';
 import { hashToken, isWorkEmail, logOutOfBand, newToken } from './security.js';
 
 function seatLimit(plan: Plan): number {
@@ -24,7 +25,14 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     // The new organization's id is chosen here so its first membership is written under
     // row-level security with app.org_id already set to it.
     const orgId = randomUUID();
-    const org = await withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
+      // Two concurrent creates for one user: serialize them on a per-user advisory lock held
+      // until this transaction ends, then check memberships again with a fresh snapshot.
+      await db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`org-create:${auth.userId}`}, 0))`);
+      const existing = await db.execute(sql`select 1 from pd_system.user_memberships(${auth.userId})`);
+      if (existing.rows.length > 0) {
+        return respond(409, { error: 'You already belong to an organization' });
+      }
       const [created] = await db.insert(schema.organizations).values({
         id: orgId,
         name,
@@ -36,9 +44,8 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
         userId: auth.userId,
         role: 'owner',
       });
-      return created;
+      return respond(201, { id: created.id, name: created.name, plan: created.plan });
     });
-    return reply.code(201).send({ id: org.id, name: org.name, plan: org.plan });
   });
 
   app.get('/api/org', { preHandler: requireAuth }, async (request) => {
@@ -89,12 +96,12 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     if (!isWorkEmail(email)) {
       return reply.code(400).send({ error: 'Use a work email address' });
     }
-    return withOrg(auth.orgId!, async (db) => {
+    return inOrg(reply, auth.orgId!, async (db, respond) => {
       const [org] = await db.select().from(schema.organizations).where(eq(schema.organizations.id, auth.orgId!));
       const members = await db.select().from(schema.memberships).where(eq(schema.memberships.orgId, auth.orgId!));
       const plan = (org?.plan ?? 'free') as Plan;
       if (members.length >= seatLimit(plan)) {
-        return reply.code(402).send({ error: 'This plan has no seats left' });
+        return respond(402, { error: 'This plan has no seats left' });
       }
       const token = newToken();
       await db.insert(schema.invites).values({
@@ -105,7 +112,7 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       });
       logOutOfBand('email', email, token);
-      return reply.code(201).send({ ok: true });
+      return respond(201, { ok: true });
     });
   });
 
@@ -121,13 +128,13 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     if (!isUuid(userId)) {
       return reply.code(404).send({ error: 'Member not found' });
     }
-    return withOrg(auth.orgId!, async (db) => {
+    return inOrg(reply, auth.orgId!, async (db, respond) => {
       const removed = await db.delete(schema.memberships).where(and(
         eq(schema.memberships.userId, userId),
         eq(schema.memberships.orgId, auth.orgId!),
       )).returning({ id: schema.memberships.id });
       if (removed.length === 0) {
-        return reply.code(404).send({ error: 'Member not found' });
+        return respond(404, { error: 'Member not found' });
       }
       return { ok: true };
     });
