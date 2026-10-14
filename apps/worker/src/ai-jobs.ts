@@ -8,6 +8,7 @@ import {
   processAmendment,
   type ComplianceRequirement,
   type PageText,
+  type PreScanHit,
 } from '@pd/ai';
 import { schema, withOrg } from '@pd/core';
 import type { JobPayload } from './redis.js';
@@ -114,6 +115,40 @@ async function settleCreditIn(db: Db, orgId: string, bidId: string, action: 'con
   }
 }
 
+/**
+ * Replaces the document's open "check these" hits with this run's requirement-kind hits, inside
+ * the caller's transaction (which holds the document row: lock order document, check_these,
+ * bid, credit). Deleting the open hits first makes a retry idempotent; a sentence the user
+ * already promoted or dismissed on this document is not offered again.
+ */
+async function replaceCheckThese(db: Db, payload: JobPayload, hits: PreScanHit[]): Promise<void> {
+  await db.delete(schema.checkThese).where(and(
+    eq(schema.checkThese.documentId, payload.documentId),
+    eq(schema.checkThese.orgId, payload.orgId),
+    eq(schema.checkThese.status, 'open'),
+  ));
+  const decided = new Set((await db.select({ sentence: schema.checkThese.sentence, pageNo: schema.checkThese.pageNo })
+    .from(schema.checkThese)
+    .where(and(eq(schema.checkThese.documentId, payload.documentId), eq(schema.checkThese.orgId, payload.orgId))))
+    .map((hit) => `${hit.pageNo}\u0000${hit.sentence}`));
+  const rows = new Map<string, { pageNo: number; sentence: string }>();
+  for (const hit of hits) {
+    const key = `${hit.pageNo}\u0000${hit.text}`;
+    if (hit.kind === 'requirement' && hit.text.trim() && !decided.has(key) && !rows.has(key)) {
+      rows.set(key, { pageNo: hit.pageNo, sentence: hit.text });
+    }
+  }
+  if (rows.size > 0) {
+    await db.insert(schema.checkThese).values([...rows.values()].map((hit) => ({
+      orgId: payload.orgId,
+      bidId: payload.bidId,
+      documentId: payload.documentId,
+      sentence: hit.sentence,
+      pageNo: hit.pageNo,
+    })));
+  }
+}
+
 export async function processCompliance(payload: JobPayload): Promise<void> {
   const started = Date.now();
   const { provider, config } = providerForJob();
@@ -133,10 +168,11 @@ export async function processCompliance(payload: JobPayload): Promise<void> {
     }
     const pages = await loadPages(payload.orgId, payload.documentId);
     const result = await extractComplianceMatrix({ pages, provider, config });
-    // Rows, the run record, and the credit consume commit together, so a crash between them
-    // cannot leave rows without a consumed credit or a credit still reserved for a built matrix.
-    // The document is re-checked under a row lock in the same transaction (lock order: document,
-    // bid, credit): a delete that committed meanwhile wins, and nothing is written.
+    // Rows, "check these" hits, the run record, and the credit consume commit together, so a
+    // crash between them cannot leave rows without a consumed credit or a credit still reserved
+    // for a built matrix. The document is re-checked under a row lock in the same transaction
+    // (lock order: document, check_these, bid, credit): a delete that committed meanwhile wins,
+    // and nothing is written.
     await withOrg(payload.orgId, async (db) => {
       const [current] = await db.select({ liveStatus: schema.documents.liveStatus })
         .from(schema.documents)
@@ -153,6 +189,7 @@ export async function processCompliance(payload: JobPayload): Promise<void> {
           return;
         }
       }
+      await replaceCheckThese(db, payload, result.checkThese ?? []);
       if (result.requirements.length > 0) {
         await db.insert(schema.complianceRows).values(result.requirements.map((row) => ({
           orgId: payload.orgId,
