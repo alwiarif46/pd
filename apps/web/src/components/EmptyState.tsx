@@ -1,0 +1,2 @@
+export interface EmptyStateProps { title: string; text: string; action?: { label: string; onClick: () => void } }
+export default function EmptyState({ title, text, action }: EmptyStateProps) { return <section className="pd-empty-state"><div className="pd-empty-icon" aria-hidden="true">—</div><h2>{title}</h2><p>{text}</p>{action && <button className="pd-primary-button" type="button" onClick={action.onClick}>{action.label}</button>}</section>; }

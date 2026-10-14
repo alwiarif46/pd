@@ -1,0 +1,3 @@
+import { useState } from 'react';
+export interface SourceLinkProps { page?: number; quote?: string; fileGone?: boolean; onOpen: (page: number, quote: string) => void }
+export default function SourceLink({ page = 1, quote = 'Source text unavailable.', fileGone = false, onOpen }: SourceLinkProps) { const [open, setOpen] = useState(false); return <span className="pd-source-wrap"><button className="pd-source-link" type="button" onClick={() => fileGone ? setOpen(!open) : onOpen(page, quote)}>{`p. ${page}`}</button>{open && fileGone ? <span className="pd-source-popover" role="status"><strong>{quote}</strong><small>File deleted after 90 days</small></span> : !fileGone && <span className="pd-source-tooltip">{quote}</span>}</span>; }

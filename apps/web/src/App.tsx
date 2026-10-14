@@ -1,3 +1,4 @@
+import Preview from './Preview';
 import { useEffect, useState } from 'react';
 import { ApiError, api, setToken, token } from './api';
 import type { Bid, OrgPayload, TabId } from './models';
@@ -28,6 +29,8 @@ function parseRoute(): Route {
 }
 
 export default function App() {
+  return <Preview />;
+  /*
   const [route, setRoute] = useState<Route>(parseRoute);
   const [org, setOrg] = useState<OrgPayload | null>(null);
   const [bids, setBids] = useState<Bid[]>([]);
@@ -97,4 +100,5 @@ export default function App() {
       ) : null}
     </div>
   );
+  */
 }

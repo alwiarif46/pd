@@ -1,0 +1,3 @@
+import type { Tab } from './AppShell';
+export interface LockedTabProps { tab: Tab; title: string; description: string; onUpgrade: () => void }
+export default function LockedTab({ title, description, onUpgrade }: LockedTabProps) { return <section className="pd-locked-card" aria-labelledby="locked-title"><div className="pd-locked-mark">Paid feature</div><h1 id="locked-title">{title}</h1><p>{description}</p><div className="pd-screenshot-placeholder"><span>Preview available on Starter</span></div><button className="pd-primary-button" type="button" onClick={onUpgrade}>Upgrade to Starter</button></section>; }
