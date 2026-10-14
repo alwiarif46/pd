@@ -17,7 +17,7 @@ import {
   type Plan,
 } from '@pd/core';
 import { requireAuth } from './context.js';
-import { findBid } from './scope.js';
+import { findBid, type Outcome, queueAfterCommit } from './scope.js';
 import { enqueueScan } from './queue.js';
 
 const CHUNK_BYTES = 20 * 1024 * 1024;
@@ -177,7 +177,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
     if (!isUuid(sessionId)) {
       return reply.code(404).send({ error: 'Upload session not found' });
     }
-    return withOrg(orgId, async (db) => {
+    const outcome = await withOrg(orgId, async (db): Promise<Outcome> => {
       // Claim the session with a conditional update. The row stays locked until this
       // transaction ends, so a second complete for the same session waits, then finds it
       // no longer open. A failed check below puts it back to open.
@@ -196,9 +196,9 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
           eq(schema.uploadSessions.orgId, orgId),
         ));
         if (existing?.status === 'complete') {
-          return reply.code(409).send({ error: 'This upload is already complete' });
+          return { code: 409, body: { error: 'This upload is already complete' } };
         }
-        return reply.code(404).send({ error: 'Upload session not found' });
+        return { code: 404, body: { error: 'Upload session not found' } };
       }
       const reopen = () => db.update(schema.uploadSessions).set({ status: 'open', updatedAt: new Date() }).where(and(
         eq(schema.uploadSessions.id, sessionId),
@@ -208,7 +208,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       const names = await readdir(dir).catch(() => [] as string[]);
       if (names.length !== session.chunkCount) {
         await reopen();
-        return reply.code(400).send({ error: 'Not every chunk has arrived' });
+        return { code: 400, body: { error: 'Not every chunk has arrived' } };
       }
       const targetDir = join(dataDir, orgId, 'docs');
       await mkdir(targetDir, { recursive: true });
@@ -230,7 +230,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       const digest = hash.digest('hex');
       if (digest !== session.sha256 || file.length !== session.declaredSize) {
         await reopen();
-        return reply.code(400).send({ error: 'The uploaded bytes do not match the declared file' });
+        return { code: 400, body: { error: 'The uploaded bytes do not match the declared file' } };
       }
       const [document] = await db.insert(schema.documents).values({
         orgId,
@@ -252,15 +252,23 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
         type: 'scan',
         status: 'pending',
       }).returning();
-      await enqueueScan({
-        orgId,
-        bidId: session.bidId,
-        documentId: document.id,
-        jobId: job.id,
-        storagePath,
-        kind: session.kind,
-      });
-      return reply.code(201).send({ documentId: document.id, jobId: job.id });
+      return {
+        code: 201,
+        body: { documentId: document.id, jobId: job.id },
+        queue: {
+          jobId: job.id,
+          enqueue: () => enqueueScan({
+            orgId,
+            bidId: session.bidId,
+            documentId: document.id,
+            jobId: job.id,
+            storagePath,
+            kind: session.kind,
+          }),
+        },
+      };
     });
+    await queueAfterCommit(orgId, outcome);
+    return reply.code(outcome.code).send(outcome.body);
   });
 }

@@ -5,7 +5,7 @@ import { and, asc, eq, gte, lte } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
-import { findBid, findDocument } from './scope.js';
+import { findBid, findDocument, type Outcome, queueAfterCommit } from './scope.js';
 import { enqueueClassify } from './queue.js';
 import { newToken } from './security.js';
 
@@ -48,17 +48,18 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
   app.post('/api/documents/:id/confirm-marking', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const documentId = (request.params as { id: string }).id;
-    return withOrg(orgId, async (db) => {
+    const outcome = await withOrg(orgId, async (db): Promise<Outcome> => {
       const document = await findDocument(db, orgId, documentId);
       if (!document || !document.storagePath) {
-        return reply.code(404).send({ error: 'Document not found' });
+        return { code: 404, body: { error: 'Document not found' } };
       }
       if (document.extractStatus === 'rejected') {
-        return reply.code(409).send({ error: 'Classified files are not accepted' });
+        return { code: 409, body: { error: 'Classified files are not accepted' } };
       }
       if (document.markingStatus !== 'blocked') {
-        return reply.code(409).send({ error: 'This file is not waiting for confirmation' });
+        return { code: 409, body: { error: 'This file is not waiting for confirmation' } };
       }
+      const storagePath = document.storagePath;
       await db.update(schema.documents).set({ markingStatus: 'confirmed', updatedAt: new Date() }).where(and(eq(schema.documents.id, documentId), eq(schema.documents.orgId, orgId)));
       await db.insert(schema.auditLog).values({
         orgId,
@@ -74,16 +75,24 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
         type: 'classify',
         status: 'pending',
       }).returning();
-      await enqueueClassify({
-        orgId,
-        bidId: document.bidId,
-        documentId,
-        jobId: job.id,
-        storagePath: document.storagePath,
-        kind: document.kind,
-      });
-      return { ok: true };
+      return {
+        code: 200,
+        body: { ok: true },
+        queue: {
+          jobId: job.id,
+          enqueue: () => enqueueClassify({
+            orgId,
+            bidId: document.bidId,
+            documentId,
+            jobId: job.id,
+            storagePath,
+            kind: document.kind,
+          }),
+        },
+      };
     });
+    await queueAfterCommit(orgId, outcome);
+    return reply.code(outcome.code).send(outcome.body);
   });
 
   app.post('/api/documents/:id/key-override', { preHandler: requireAuth }, async (request, reply) => {
