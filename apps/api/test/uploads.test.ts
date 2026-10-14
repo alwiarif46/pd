@@ -3,6 +3,7 @@ import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
+import pg from 'pg';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
 import { closeDb, getPool, schema, withOrg } from '@pd/core';
@@ -100,7 +101,28 @@ describe.skipIf(Boolean(unavailable))('upload complete', () => {
   it('lets only one of two concurrent completes succeed', async () => {
     const sessionId = await openSession('race.pdf');
     await sendChunk(sessionId);
-    const results = await Promise.all([complete(sessionId), complete(sessionId)]);
+    // Hold the session row from another connection so both requests are provably waiting
+    // on the claim at the same time, then let them go.
+    const holder = new pg.Client({ connectionString: inject('appUrl') });
+    await holder.connect();
+    await holder.query('begin');
+    await holder.query("select set_config('app.org_id', $1, true)", [tenant.orgId]);
+    await holder.query('select id from upload_sessions where id = $1 for update', [sessionId]);
+    const pending = Promise.all([complete(sessionId), complete(sessionId)]);
+    const deadline = Date.now() + 10_000;
+    let waiting = 0;
+    while (waiting < 2 && Date.now() < deadline) {
+      // pg_stat_activity is a per-transaction snapshot unless cleared.
+      await holder.query('select pg_stat_clear_snapshot()');
+      const result = await holder.query<{ n: number }>(
+        "select count(*)::int as n from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid() and wait_event_type = 'Lock'",
+      );
+      waiting = result.rows[0].n;
+    }
+    await holder.query('commit');
+    await holder.end();
+    expect(waiting).toBe(2);
+    const results = await pending;
     expect(results.map((result) => result.statusCode).sort()).toEqual([201, 409]);
     const documents = await withOrg(tenant.orgId, (db) => db.select().from(schema.documents).where(eq(schema.documents.storagePath, `docs/${sessionId}.pdf`)));
     expect(documents).toHaveLength(1);
