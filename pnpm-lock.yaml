@@ -9,10 +9,10 @@ importers:
   .:
     devDependencies:
       '@eslint/js':
-        specifier: ^9
+        specifier: ^9.39.5
         version: 9.39.5
       eslint:
-        specifier: ^9
+        specifier: ^9.39.5
         version: 9.39.5(jiti@2.7.0)
       eslint-plugin-react-hooks:
         specifier: ^7.1.1
