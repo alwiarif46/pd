@@ -56,7 +56,7 @@ describe.skipIf(Boolean(unavailable))('0006_tab_rows on a database with legacy t
       await client.query("insert into organizations (id, name, plan, plan_status) values ($1, 'Legacy', 'free', 'active')", [orgId]);
       const bid = (await client.query<{ id: string }>(
         `insert into bids (org_id, name, bid_type, solicitation_number, solicitation_key, status)
-         values ($1, 'B', 'sled', 'X', 'X', 'draft') returning id`,
+         values ($1, 'B', 'sled', 'X', 'X', 'planning') returning id`,
         [orgId],
       )).rows[0].id;
       const insert = async (sql: string, params: unknown[]) => (await client.query<{ id: string }>(sql, params)).rows.map((row) => row.id);
@@ -87,7 +87,8 @@ describe.skipIf(Boolean(unavailable))('0006_tab_rows on a database with legacy t
         "insert into candidates (org_id, bid_id, name, role) values ($1, $2, 'Pat', 'PM') returning id", [orgId, bid]))[0];
       const matches = await insert(
         `insert into resume_matches (org_id, candidate_id, requirement_id, result, reviewer_override) values
-         ($1, $2, $3, 'partial', false), ($1, $2, $3, 'meets', true) returning id`, [orgId, candidate, requirement]);
+         ($1, $2, $3, 'partial', false), ($1, $2, $3, 'meets', true),
+         ($1, $2, $3, ' Gap ', false), ($1, $2, $3, 'maybe', false) returning id`, [orgId, candidate, requirement]);
       const production = await insert(
         `insert into production_items (org_id, bid_id, category, rule, origin) values
          ($1, $2, 'Fonts', 'Confirm the required font and size', 'user'),
@@ -115,7 +116,8 @@ describe.skipIf(Boolean(unavailable))('0006_tab_rows on a database with legacy t
       expect(await values('outline_items', 'position', [volume, ...sections])).toEqual([0, 1, 0, 2]);
       expect(await values('reviews', 'status', reviews)).toEqual(['planned', 'planned', 'done']);
       expect(await values('review_findings', 'disposition', findings)).toEqual(['open', 'accepted', 'rejected']);
-      expect(await values('resume_matches', 'ai_result', matches)).toEqual(['partial', null]);
+      // An odd legacy result neither aborts the migration nor becomes an AI result.
+      expect(await values('resume_matches', 'ai_result', matches)).toEqual(['partial', null, 'gap', null]);
       expect(await values('production_items', 'category', production)).toEqual(['format', 'submission', 'format', 'other']);
       expect(await values('production_items', 'origin', production)).toEqual(['standard', 'standard', 'user', 'ai']);
       expect(await values('orals_items', 'category', orals)).toEqual(['rules', 'prep', 'prep']);
@@ -123,6 +125,8 @@ describe.skipIf(Boolean(unavailable))('0006_tab_rows on a database with legacy t
 
       await expect(client.query("update compliance_rows set status = 'started' where id = $1", [compliance[0]])).rejects.toThrow(/compliance_rows_status_check/);
       await expect(client.query('update orals_items set minutes = -1 where id = $1', [orals[0]])).rejects.toThrow(/orals_items_minutes_check/);
+      await expect(client.query("update production_items set category = 'Fonts' where id = $1", [production[0]])).rejects.toThrow(/production_items_category_check/);
+      await expect(client.query("update orals_items set category = 'other' where id = $1", [orals[0]])).rejects.toThrow(/orals_items_category_check/);
       await expect(client.query("update review_findings set disposition = null where id = $1", [findings[0]])).rejects.toThrow(/null value/);
 
       const forced = await client.query<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>(`

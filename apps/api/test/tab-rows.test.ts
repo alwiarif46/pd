@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
+import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it, vi } from 'vitest';
 import { closeDb, getDb, getPool, schema, withOrg } from '@pd/core';
 import { as, createTenant, type Tenant } from './helpers.js';
@@ -83,6 +84,48 @@ describe.skipIf(Boolean(unavailable))('tab rows', () => {
     });
   }
 
+  /** The page text a promoted sentence must still appear on. */
+  async function addPage(tenant: Tenant, documentId: string, pageNo: number, text: string) {
+    await withOrg(tenant.orgId, (db) => db.insert(schema.pages).values({ orgId: tenant.orgId, documentId, pageNo, text }));
+  }
+
+  /** Polls until `count` backends of this database wait on a lock (advisory or row). */
+  async function waitForWaiters(holder: pg.Client, count: number) {
+    for (let attempt = 0; attempt < 250; attempt += 1) {
+      // pg_stat_activity is snapshotted once per transaction; the holder polls inside one.
+      await holder.query('select pg_stat_clear_snapshot()');
+      const { rows } = await holder.query<{ n: number }>(
+        "select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'",
+      );
+      if (rows[0].n >= count) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error(`Fewer than ${count} backends waited on the lock`);
+  }
+
+  /**
+   * Holds `lockSql` in a transaction on its own superuser connection, starts `fire`, waits until
+   * `waiters` backends queue behind the lock, then releases it: the requests really contend.
+   */
+  async function contend<T>(lockSql: string, params: unknown[], waiters: number, fire: () => Promise<T>[]): Promise<T[]> {
+    const holder = new pg.Client({ connectionString: inject('adminUrl') });
+    await holder.connect();
+    try {
+      await holder.query('begin');
+      await holder.query(lockSql, params);
+      const pending = fire();
+      await waitForWaiters(holder, waiters);
+      await holder.query('commit');
+      return await Promise.all(pending);
+    } finally {
+      await holder.end();
+    }
+  }
+
+  const holdOutline = (bidId: string) => ['select pg_advisory_xact_lock(hashtextextended($1, 0))', [`outline:${bidId}`]] as const;
+
   const compliancePayload = (tenant: Tenant, documentId: string) => ({
     orgId: tenant.orgId, bidId: tenant.bidId, documentId, jobId: randomUUID(), storagePath: 'docs/x.pdf', kind: 'solicitation' as const,
   });
@@ -101,6 +144,18 @@ describe.skipIf(Boolean(unavailable))('tab rows', () => {
       expect((await asA('PATCH', rowUrl(a, 'compliance_rows', row.id), { fields: { status: 'drafted' } })).statusCode).toBe(200);
       const detail = await asA('GET', rowUrl(a, 'compliance_rows', row.id));
       expect(detail.json<{ row: { status: string } }>().row.status).toBe('drafted');
+    });
+
+    it('takes loosely written values and ignores an empty status from the legacy slider', async () => {
+      const created = await asA('POST', `/api/bids/${a.bidId}/tabs/compliance/rows`, { requirementText: 'Loose.', status: ' Done ' });
+      expect(created.statusCode).toBe(201);
+      const row = created.json<{ id: string; status: string }>();
+      expect(row.status).toBe('done');
+      expect((await asA('PATCH', rowUrl(a, 'compliance_rows', row.id), { fields: { status: '', owner: 'Ray' } })).statusCode).toBe(200);
+      expect((await asA('GET', rowUrl(a, 'compliance_rows', row.id))).json<{ row: { status: string; owner: string } }>().row)
+        .toMatchObject({ status: 'done', owner: 'Ray' });
+      expect((await asA('PATCH', rowUrl(a, 'compliance_rows', row.id), { fields: { status: 'Assigned' } })).statusCode).toBe(200);
+      expect((await asA('GET', rowUrl(a, 'compliance_rows', row.id))).json<{ row: { status: string } }>().row.status).toBe('assigned');
     });
 
     it('records only the fields a patch sends', async () => {
@@ -133,6 +188,7 @@ describe.skipIf(Boolean(unavailable))('tab rows', () => {
     it('promotes a hit to a sourced user row, once; a rerun does not offer it again', async () => {
       const document = await liveDocument(a);
       extract.hits = [{ text: 'The offeror must provide resumes.', pageNo: 7, kind: 'requirement' }];
+      await addPage(a, document.id, 7, 'C.4 Staffing.\nThe offeror must provide resumes. Resumes are two pages.');
       await worker.processCompliance(compliancePayload(a, document.id));
       const [hit] = (await asA('GET', `/api/bids/${a.bidId}/check-these`)).json<{ id: string; documentId: string }[]>()
         .filter((row) => row.documentId === document.id);
@@ -159,6 +215,7 @@ describe.skipIf(Boolean(unavailable))('tab rows', () => {
     it('two concurrent promotes of one hit create one row', async () => {
       const document = await liveDocument(a);
       extract.hits = [{ text: 'The offeror shall attend orals.', pageNo: 2, kind: 'requirement' }];
+      await addPage(a, document.id, 2, 'The offeror shall attend orals.');
       await worker.processCompliance(compliancePayload(a, document.id));
       const [hit] = (await asA('GET', `/api/bids/${a.bidId}/check-these`)).json<{ id: string; documentId: string }[]>()
         .filter((row) => row.documentId === document.id);
@@ -173,6 +230,62 @@ describe.skipIf(Boolean(unavailable))('tab rows', () => {
         eq(schema.complianceRows.requirementText, 'The offeror shall attend orals.'),
       )));
       expect(rows).toHaveLength(1);
+    });
+
+    it('writes a run with more hits than one insert statement takes', async () => {
+      const document = await liveDocument(a);
+      extract.hits = Array.from({ length: 1201 }, (_, index) => ({ text: `The offeror shall do task ${index}.`, pageNo: 1 + (index % 40), kind: 'requirement' as const }));
+      await worker.processCompliance(compliancePayload(a, document.id));
+      const count = await withOrg(a.orgId, (db) => db.select({ id: schema.checkThese.id }).from(schema.checkThese)
+        .where(eq(schema.checkThese.documentId, document.id)));
+      expect(count).toHaveLength(1201);
+    });
+
+    it('refuses to promote a sentence that is not on its page', async () => {
+      const document = await liveDocument(a);
+      extract.hits = [{ text: 'The offeror shall wear hats.', pageNo: 9, kind: 'requirement' }];
+      await addPage(a, document.id, 9, 'Nothing about hats here.');
+      await worker.processCompliance(compliancePayload(a, document.id));
+      const [hit] = (await asA('GET', `/api/bids/${a.bidId}/check-these`)).json<{ id: string; documentId: string }[]>()
+        .filter((row) => row.documentId === document.id);
+      const refused = await asA('POST', `/api/check-these/${hit.id}/promote`);
+      expect(refused.statusCode).toBe(409);
+      const [stored] = await withOrg(a.orgId, (db) => db.select().from(schema.checkThese).where(eq(schema.checkThese.id, hit.id)));
+      expect(stored.status).toBe('open');
+    });
+
+    it('a promote that waits behind a matrix rerun gets 409, and the rerun offers the sentence again', async () => {
+      const document = await liveDocument(a);
+      const sentence = 'The offeror shall staff a help desk.';
+      extract.hits = [{ text: sentence, pageNo: 4, kind: 'requirement' }];
+      await addPage(a, document.id, 4, sentence);
+      await worker.processCompliance(compliancePayload(a, document.id));
+      const [hit] = (await asA('GET', `/api/bids/${a.bidId}/check-these`)).json<{ id: string; documentId: string }[]>()
+        .filter((row) => row.documentId === document.id);
+      // Hold the document row; the rerun queues on it first, then the promote behind the rerun.
+      const holder = new pg.Client({ connectionString: inject('adminUrl') });
+      await holder.connect();
+      let promote: Awaited<ReturnType<Call>> | undefined;
+      try {
+        await holder.query('begin');
+        await holder.query('select 1 from documents where id = $1 for update', [document.id]);
+        const rerun = worker.processCompliance(compliancePayload(a, document.id));
+        await waitForWaiters(holder, 1);
+        const promoting = asA('POST', `/api/check-these/${hit.id}/promote`);
+        await waitForWaiters(holder, 2);
+        await holder.query('commit');
+        await rerun;
+        promote = await promoting;
+      } finally {
+        await holder.end();
+      }
+      expect(promote?.statusCode).toBe(409);
+      const after = (await asA('GET', `/api/bids/${a.bidId}/check-these`)).json<{ id: string; documentId: string; sentence: string }[]>()
+        .filter((row) => row.documentId === document.id);
+      expect(after).toEqual([expect.objectContaining({ sentence })]);
+      expect(after[0].id).not.toBe(hit.id);
+      const rows = await withOrg(a.orgId, (db) => db.select().from(schema.complianceRows).where(eq(schema.complianceRows.requirementText, sentence)));
+      expect(rows).toHaveLength(0);
     });
 
     it('dismisses a hit, and hides the hits of a deleted document', async () => {
@@ -231,11 +344,21 @@ describe.skipIf(Boolean(unavailable))('tab rows', () => {
       const s2 = await add('1.2', v1.id);
       expect([v1.position, s1.position, s2.position]).toEqual([0, 0, 1]);
       expect(s1.status).toBe('not_started');
-      expect((await asA('POST', `/api/bids/${bid}/tabs/outline/rows`, { title: 'x', status: 'not started' })).statusCode).toBe(400);
+      expect((await asA('POST', `/api/bids/${bid}/tabs/outline/rows`, { title: 'x', status: 'started' })).statusCode).toBe(400);
       expect((await asA('PATCH', `/api/bids/${bid}/rows/outline_items/${s1.id}`, { fields: { status: 'started' } })).statusCode).toBe(400);
       expect((await asA('PATCH', `/api/bids/${bid}/rows/outline_items/${s1.id}`, { fields: { status: 'in_progress' } })).statusCode).toBe(200);
       const tab = (await asA('GET', `/api/bids/${bid}/tabs/outline`)).json<{ items: (Item & { status: string })[] }>();
       expect(tab.items.find((item) => item.id === s1.id)?.status).toBe('in_progress');
+    });
+
+    it('takes the legacy spellings of outline statuses', async () => {
+      const { bid } = await outlineBid(a, asA);
+      const created = await asA('POST', `/api/bids/${bid}/tabs/outline/rows`, { title: 'Legacy', status: 'not started' });
+      expect(created.statusCode).toBe(201);
+      expect(created.json<{ status: string }>().status).toBe('not_started');
+      const id = created.json<{ id: string }>().id;
+      expect((await asA('PATCH', `/api/bids/${bid}/rows/outline_items/${id}`, { fields: { status: 'In progress' } })).statusCode).toBe(200);
+      expect((await asA('GET', `/api/bids/${bid}/rows/outline_items/${id}`)).json<{ row: { status: string } }>().row.status).toBe('in_progress');
     });
 
     it('reorders, moves to another volume, and records history', async () => {
@@ -274,35 +397,105 @@ describe.skipIf(Boolean(unavailable))('tab rows', () => {
       expect((await asA('POST', `/api/bids/${bid}/outline/move`, { id: randomUUID(), parentId: null, index: 0 })).statusCode).toBe(404);
     });
 
-    it('keeps positions contiguous under concurrent moves and after a delete', async () => {
+    /** Every sibling group's positions are 0..n-1. */
+    async function expectContiguous(bid: string) {
+      const all = (await asA('GET', `/api/bids/${bid}/tabs/outline`)).json<{ items: Item[] }>().items;
+      for (const parentId of new Set(all.map((item) => item.parentId))) {
+        const positions = all.filter((item) => item.parentId === parentId).map((item) => item.position).sort((x, y) => x - y);
+        expect(positions, String(parentId)).toEqual(positions.map((_, index) => index));
+      }
+      return all;
+    }
+
+    it('keeps positions contiguous when moves contend for the outline lock', async () => {
       const { bid, add } = await outlineBid(a, asA);
       const v1 = await add('V1');
       const v2 = await add('V2');
-      const items = [];
-      for (let index = 0; index < 6; index += 1) {
+      const items: { id: string }[] = [];
+      for (let index = 0; index < 5; index += 1) {
         items.push(await add(`S${index}`, index % 2 ? v2.id : v1.id));
       }
-      await Promise.all(items.map((item, index) => asA('POST', `/api/bids/${bid}/outline/move`, {
+      const [lockSql, params] = holdOutline(bid);
+      const results = await contend(lockSql, [...params], items.length, () => items.map((item, index) => asA('POST', `/api/bids/${bid}/outline/move`, {
         id: item.id, parentId: index % 3 ? v1.id : v2.id, index: (index * 7) % 4,
       })));
-      const check = async () => {
-        const all = (await asA('GET', `/api/bids/${bid}/tabs/outline`)).json<{ items: Item[] }>().items;
-        for (const parentId of [null, v1.id, v2.id]) {
-          const positions = all.filter((item) => item.parentId === parentId).map((item) => item.position).sort((x, y) => x - y);
-          expect(positions, String(parentId)).toEqual(positions.map((_, index) => index));
-        }
-        return all;
-      };
-      await check();
+      expect(results.map((result) => result.statusCode)).toEqual(items.map(() => 200));
+      const all = await expectContiguous(bid);
+      expect(all).toHaveLength(7);
+    });
+
+    it('an insert and a move that contend both land, contiguously', async () => {
+      const { bid, add } = await outlineBid(a, asA);
+      const v1 = await add('V1');
+      await add('S0', v1.id);
+      const s1 = await add('S1', v1.id);
+      const [lockSql, params] = holdOutline(bid);
+      const results = await contend(lockSql, [...params], 2, () => [
+        asA('POST', `/api/bids/${bid}/tabs/outline/rows`, { title: 'S2', parentId: v1.id }),
+        asA('POST', `/api/bids/${bid}/outline/move`, { id: s1.id, parentId: v1.id, index: 0 }),
+      ]);
+      expect(results.map((result) => result.statusCode)).toEqual([201, 200]);
+      const all = await expectContiguous(bid);
+      expect(children(all, v1.id)).toHaveLength(3);
+    });
+
+    it('a delete and a move that contend both land, contiguously', async () => {
+      const { bid, add } = await outlineBid(a, asA);
+      const v1 = await add('V1');
+      const v2 = await add('V2');
+      const s0 = await add('S0', v1.id);
+      await add('S1', v1.id);
+      await add('T0', v2.id);
+      const [lockSql, params] = holdOutline(bid);
+      const results = await contend(lockSql, [...params], 2, () => [
+        asA('DELETE', `/api/bids/${bid}/rows/outline_items/${v1.id}`),
+        asA('POST', `/api/bids/${bid}/outline/move`, { id: s0.id, parentId: v2.id, index: 0 }),
+      ]);
+      expect(results.map((result) => result.statusCode)).toEqual([200, 200]);
+      const all = await expectContiguous(bid);
+      expect(all.find((item) => item.id === v1.id)).toBeUndefined();
+      expect(children(all, v2.id)[0]).toBe('S0');
+    });
+
+    it('an insert under a parent deleted meanwhile is refused, not a server error', async () => {
+      const { bid, add } = await outlineBid(a, asA);
+      const v1 = await add('V1');
+      const [lockSql, params] = holdOutline(bid);
+      // The delete queues first, so the insert's parent check runs after it committed.
+      const holder = new pg.Client({ connectionString: inject('adminUrl') });
+      await holder.connect();
+      try {
+        await holder.query('begin');
+        await holder.query(lockSql, [...params]);
+        const deleting = asA('DELETE', `/api/bids/${bid}/rows/outline_items/${v1.id}`);
+        await waitForWaiters(holder, 1);
+        const inserting = asA('POST', `/api/bids/${bid}/tabs/outline/rows`, { title: 'Orphan', parentId: v1.id });
+        await waitForWaiters(holder, 2);
+        await holder.query('commit');
+        expect((await deleting).statusCode).toBe(200);
+        expect((await inserting).statusCode).toBe(400);
+      } finally {
+        await holder.end();
+      }
+    });
+
+    it('closes the gap after a delete and puts promoted sections after the volumes', async () => {
+      const { bid, add } = await outlineBid(a, asA);
+      const v1 = await add('V1');
+      await add('V2');
+      await add('S0', v1.id);
+      await add('S1', v1.id);
       expect((await asA('DELETE', `/api/bids/${bid}/rows/outline_items/${v1.id}`)).statusCode).toBe(200);
-      const after = await check();
-      expect(children(after, null)[0]).toBe('V2');
+      const all = await expectContiguous(bid);
+      expect(children(all, null)).toEqual(['V2', 'S0', 'S1']);
     });
 
     it('answers 404 for a move on another organization bid or item', async () => {
       const { bid, add } = await outlineBid(a, asA);
       const v1 = await add('V1');
       expect((await asB('POST', `/api/bids/${bid}/outline/move`, { id: v1.id, parentId: null, index: 0 })).statusCode).toBe(404);
+      // The bid is checked before the body: a bad index on another organization's bid is 404.
+      expect((await asB('POST', `/api/bids/${bid}/outline/move`, { id: v1.id, parentId: null, index: 'x' })).statusCode).toBe(404);
       expect((await asB('POST', `/api/bids/${b.bidId}/outline/move`, { id: v1.id, parentId: null, index: 0 })).statusCode).toBe(404);
       expect((await asA('POST', `/api/bids/${bid}/outline/move`, { id: v1.id, parentId: b.rows.outline_items, index: 0 })).statusCode).toBe(404);
     });
@@ -398,7 +591,11 @@ describe.skipIf(Boolean(unavailable))('tab rows', () => {
       expect(created.json<{ status: string; draftFileName: string | null }>()).toMatchObject({ status: 'planned', draftFileName: null });
       const id = created.json<{ id: string }>().id;
       await withOrg(a.orgId, (db) => db.update(schema.reviews).set({ draftDocumentId: draft.id }).where(eq(schema.reviews.id, id)));
-      expect((await asA('PATCH', rowUrl(a, 'reviews', id), { fields: { status: 'open' } })).statusCode).toBe(400);
+      expect((await asA('PATCH', rowUrl(a, 'reviews', id), { fields: { status: 'closed' } })).statusCode).toBe(400);
+      expect((await asA('PATCH', rowUrl(a, 'reviews', id), { fields: { status: 'done' } })).statusCode).toBe(200);
+      // The legacy 'open' is 'planned'.
+      expect((await asA('PATCH', rowUrl(a, 'reviews', id), { fields: { status: 'open' } })).statusCode).toBe(200);
+      expect((await asA('GET', rowUrl(a, 'reviews', id))).json<{ row: { status: string } }>().row.status).toBe('planned');
       expect((await asA('PATCH', rowUrl(a, 'reviews', id), { fields: { status: 'in_progress' } })).statusCode).toBe(200);
       const tab = (await asA('GET', `/api/bids/${a.bidId}/tabs/reviews`)).json<{ reviews: { id: string; status: string; draftFileName: string | null }[] }>();
       expect(tab.reviews.find((review) => review.id === id)).toMatchObject({ status: 'in_progress', draftFileName: 'red-team-draft.docx' });
@@ -415,8 +612,12 @@ describe.skipIf(Boolean(unavailable))('tab rows', () => {
       await withOrg(a.orgId, (db) => db.insert(schema.reviewFindings).values({
         orgId: a.orgId, reviewId: a.rows.reviews, kind: 'risk', text: 'AI risk', origin: 'ai',
       }));
-      expect((await asA('PATCH', rowUrl(a, 'review_findings', id), { fields: { disposition: 'accept' } })).statusCode).toBe(400);
-      expect((await asA('PATCH', rowUrl(a, 'review_findings', id), { fields: { disposition: 'accepted' } })).statusCode).toBe(200);
+      expect((await asA('PATCH', rowUrl(a, 'review_findings', id), { fields: { disposition: 'maybe' } })).statusCode).toBe(400);
+      expect((await asA('PATCH', rowUrl(a, 'review_findings', id), { fields: { disposition: null } })).statusCode).toBe(400);
+      // The legacy workspace sends 'reject' and 'accept'.
+      expect((await asA('PATCH', rowUrl(a, 'review_findings', id), { fields: { disposition: 'reject' } })).statusCode).toBe(200);
+      expect((await asA('GET', rowUrl(a, 'review_findings', id))).json<{ row: { disposition: string } }>().row.disposition).toBe('rejected');
+      expect((await asA('PATCH', rowUrl(a, 'review_findings', id), { fields: { disposition: 'accept' } })).statusCode).toBe(200);
       const tab = (await asA('GET', `/api/bids/${a.bidId}/tabs/reviews`)).json<{ findings: { id: string; text: string; author: string | null; disposition: string }[] }>();
       expect(tab.findings.find((finding) => finding.id === id)).toMatchObject({ author: 'Avery Writer', disposition: 'accepted' });
       expect(tab.findings.find((finding) => finding.text === 'AI risk')).toMatchObject({ author: null, disposition: 'open' });
@@ -438,13 +639,23 @@ describe.skipIf(Boolean(unavailable))('tab rows', () => {
       expect(orals.every((item) => item.origin === 'standard')).toBe(true);
     });
 
-    it('maps a legacy category when it reads, and refuses one on insert', async () => {
-      const tab = (await asA('GET', `/api/bids/${a.bidId}/tabs/production`)).json<{ items: { id: string; category: string }[] }>();
-      expect(tab.items.find((item) => item.id === a.rows.production_items)?.category).toBe('format');
-      const orals = (await asA('GET', rowUrl(a, 'orals_items', a.rows.orals_items))).json<{ row: { category: string } }>();
-      expect(orals.row.category).toBe('rules');
-      expect((await asA('POST', `/api/bids/${a.bidId}/tabs/production/rows`, { category: 'Fonts', rule: 'x' })).statusCode).toBe(400);
-      expect((await asA('POST', `/api/bids/${a.bidId}/tabs/orals/rows`, { category: 'other', item: 'x' })).statusCode).toBe(400);
+    it('maps legacy category labels on insert and refuses unknown ones', async () => {
+      const legacy = async (tab: 'production' | 'orals', category: string) => {
+        const body = tab === 'production' ? { category, rule: `Rule ${category}` } : { category, item: `Item ${category}` };
+        const response = await asA('POST', `/api/bids/${a.bidId}/tabs/${tab}/rows`, body);
+        return response.statusCode === 201 ? response.json<{ category: string }>().category : response.statusCode;
+      };
+      expect(await legacy('production', 'Fonts')).toBe('format');
+      expect(await legacy('production', 'Page limits')).toBe('format');
+      expect(await legacy('production', 'File naming')).toBe('files');
+      expect(await legacy('production', 'Portal')).toBe('submission');
+      expect(await legacy('production', 'Copies')).toBe('copies');
+      expect(await legacy('production', 'Binding')).toBe(400);
+      // The legacy workspace's "Session topic" form sends 'Session'.
+      expect(await legacy('orals', 'Session')).toBe('session');
+      expect(await legacy('orals', 'Rules')).toBe('rules');
+      expect(await legacy('orals', 'Checklist')).toBe('prep');
+      expect(await legacy('orals', 'other')).toBe(400);
       const added = await asA('POST', `/api/bids/${a.bidId}/tabs/orals/rows`, { category: 'session', item: 'Demo', owner: 'Kim', minutes: 15 });
       expect(added.statusCode).toBe(201);
       expect(added.json()).toMatchObject({ category: 'session', owner: 'Kim', minutes: 15, origin: 'user' });
