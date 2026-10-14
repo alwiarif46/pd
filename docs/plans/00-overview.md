@@ -1,7 +1,7 @@
 # Proposal Development Tool — Overview
 
 **Status:** Draft v2 · 13 Oct 2026 · Owner: Amaan
-**Folder:** `C:\Tools\PD\plans`
+**Folder:** `C:\Tools\PD\docs\plans`
 **How to use these plans:** each file covers one area. Update the "Decision log" in the relevant file when a decision changes during the build. Open items carry 🟨 **OPEN** and also appear in section 7 of this file.
 
 ## 1. What we are building
