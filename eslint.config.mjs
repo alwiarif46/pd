@@ -61,4 +61,15 @@ export default tseslint.config(
       'react-hooks/rules-of-hooks': 'error',
     },
   },
+  {
+    // api: a reply sent inside a withOrg/inOrg callback goes out before COMMIT. Use inOrg's
+    // `respond(code, body)` or return a value instead (apps/api/src/scope.ts).
+    files: ['apps/api/src/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': ['error', {
+        selector: "CallExpression[callee.name=/^(withOrg|inOrg)$/] > :function Identifier[name='reply']",
+        message: 'Do not use reply inside a withOrg/inOrg callback: it is sent before COMMIT. Use respond() from inOrg, or return a value.',
+      }],
+    },
+  },
 );
