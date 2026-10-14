@@ -222,7 +222,9 @@ export const pages = pgTable('pages', {
 export const archiveObjects = pgTable('archive_objects', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  documentId: uuid('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
+  // Null once the document (or its bid) is deleted: the row stays so the purge job can delete
+  // the archive copy (07 s2).
+  documentId: uuid('document_id').references(() => documents.id, { onDelete: 'set null' }),
   objectType: text('object_type').notNull().$type<'original' | 'viewer'>(),
   archiveKey: text('archive_key').notNull(),
   archivedAt: timestamp('archived_at').notNull(),

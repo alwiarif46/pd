@@ -1,7 +1,7 @@
 import { rm } from 'node:fs/promises';
 import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { normalizeSolicitationKey, resolveOrgPath, schema, withOrg } from '@pd/core';
+import { isUuid, normalizeSolicitationKey, resolveOrgPath, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
 import { releaseBidCredit } from './credits.js';
 import { apiError } from './errors.js';
@@ -88,13 +88,22 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
     let retention: Date | null | undefined;
     if (extendsRetention) {
       const parsed = parseDate(body.retentionExtendedUntil ?? null);
-      if (parsed === 'invalid') {
-        return reply.code(400).send(apiError('invalid_date'));
+      // An extension ends in the future; null clears it.
+      if (parsed === 'invalid' || (parsed !== null && parsed.getTime() <= Date.now())) {
+        return reply.code(400).send(apiError('invalid_date', 'The live-until date must be a valid date in the future.'));
       }
       retention = parsed;
     }
+    if (!isUuid(id)) {
+      return reply.code(404).send({ error: 'Bid not found' });
+    }
     return inOrg(reply, orgId, async (db, respond) => {
-      const bid = await findBid(db, orgId, id);
+      // Locked until COMMIT: an upload start that sets the key or reserves a credit for this bid
+      // either finishes first (and this sees its result) or waits for this update.
+      const [bid] = await db.select().from(schema.bids).where(and(
+        eq(schema.bids.id, id),
+        eq(schema.bids.orgId, orgId),
+      )).for('update');
       if (!bid) {
         return respond(404, { error: 'Bid not found' });
       }
@@ -115,8 +124,10 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
         const nextKey = keyFor(solicitationNumber);
         // A bid that holds a credit is tied to its solicitation (06 s4): the number may be
         // corrected, but not changed to a different solicitation.
+        // Rows written before keys were normalized hold the raw number, so compare normalized.
+        const currentKey = keyFor(bid.solicitationKey);
         const holdsCredit = bid.creditStatus === 'reserved' || bid.creditStatus === 'consumed';
-        if (holdsCredit && bid.solicitationKey !== PENDING && nextKey !== bid.solicitationKey) {
+        if (holdsCredit && currentKey !== PENDING && nextKey !== currentKey) {
           return respond(409, apiError('key_locked'));
         }
         solicitationKey = nextKey;
@@ -151,7 +162,7 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * Deletes the bid and everything under it (cascades from migration 0002), plus the row
+   * Deletes the bid and everything under it (cascades from migration 0003), plus the row
    * history of its rows, which has no foreign key. A reserved credit is released; a consumed
    * one is not returned (06 s4). Server files go after COMMIT.
    */
@@ -182,6 +193,22 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
           }
         }
       }
+      const exported = await db.select({ storagePath: schema.exports.storagePath }).from(schema.exports).where(and(
+        eq(schema.exports.bidId, id),
+        eq(schema.exports.orgId, orgId),
+      ));
+      for (const file of exported) {
+        const absolute = resolveOrgPath(dataDir, orgId, file.storagePath);
+        if (absolute) {
+          files.push(absolute);
+        }
+      }
+      // Archive copies live off the server. Their rows outlive the bid (migration 0004 sets
+      // archive_objects.document_id to null instead of cascading) and are marked to expire now,
+      // so the purge job deletes the copies (07 s2).
+      await db.execute(sql`update archive_objects set expires_at = now(), updated_at = now()
+        where org_id = ${orgId} and purged_at is null
+          and document_id in (select id from documents where bid_id = ${id} and org_id = ${orgId})`);
       for (const session of sessions) {
         const absolute = resolveOrgPath(dataDir, orgId, `chunks/${session.id}`);
         if (absolute) {

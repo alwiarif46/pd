@@ -86,6 +86,52 @@ describe.skipIf(Boolean(unavailable))('bids and documents', () => {
       expect((await bidRow(tenant.orgId, tenant.bidId)).solicitationKey).toBe('SOLKEYLOCK');
     });
 
+    it('compares against a legacy raw key in normalized form', async () => {
+      const tenant = await createTenant(app, 'legacy-key');
+      await holdCredit(tenant.orgId, tenant.bidId, 'consumed');
+      await withOrg(tenant.orgId, (db) => db.update(schema.bids).set({ solicitationKey: 'rfp-2026/7' }).where(eq(schema.bids.id, tenant.bidId)));
+      const call = as(app, tenant.token);
+      expect((await call('PATCH', `/api/bids/${tenant.bidId}`, { solicitationNumber: 'RFP 2026 7' })).statusCode).toBe(200);
+      expect((await bidRow(tenant.orgId, tenant.bidId)).solicitationKey).toBe('RFP20267');
+      expect((await call('PATCH', `/api/bids/${tenant.bidId}`, { solicitationNumber: 'RFP 2026 8' })).statusCode).toBe(409);
+    });
+
+    it('a key change and a solicitation upload on a pending bid never both win', async () => {
+      const tenant = await createTenant(app, 'key-race');
+      const call = as(app, tenant.token);
+      await setPlan(tenant.orgId, 'starter');
+      for (let round = 0; round < 5; round += 1) {
+        const bid = (await call('POST', '/api/bids', { name: `Race ${round}`, bidType: 'sled' })).json<{ id: string }>().id;
+        const [patched, uploaded] = await Promise.all([
+          call('PATCH', `/api/bids/${bid}`, { solicitationNumber: `PATCH-${round}` }),
+          call('POST', `/api/bids/${bid}/uploads`, {
+            fileName: 'rfp.pdf', kind: 'solicitation', declaredSize: 10, sha256: createHash('sha256').update(`r${round}`).digest('hex'),
+            chunkCount: 1, solicitationNumber: `UPLOAD-${round}`,
+          }),
+        ]);
+        const row = await bidRow(tenant.orgId, bid);
+        if (uploaded.statusCode === 201) {
+          // The upload ran first and fixed the key; the PATCH then saw a reserved credit.
+          expect(patched.statusCode).toBe(409);
+          expect(row.solicitationKey).toBe(`UPLOAD${round}`);
+          expect(row.creditStatus).toBe('reserved');
+        } else {
+          expect(patched.statusCode).toBe(200);
+          expect(uploaded.statusCode).toBe(409);
+          expect(row.solicitationKey).toBe(`PATCH${round}`);
+          expect(row.creditStatus).toBeNull();
+        }
+      }
+    });
+
+    it('refuses a retention date in the past', async () => {
+      const tenant = await createTenant(app, 'retention-past');
+      await setPlan(tenant.orgId, 'starter');
+      const response = await as(app, tenant.token)('PATCH', `/api/bids/${tenant.bidId}`, { retentionExtendedUntil: '2020-01-01T00:00:00.000Z' });
+      expect(response.statusCode).toBe(400);
+      expect(response.json<{ code: string }>().code).toBe('invalid_date');
+    });
+
     it('only the owner, on a paid plan, can extend retention, and it is audited', async () => {
       const tenant = await createTenant(app, 'retention');
       const until = '2027-06-30T00:00:00.000Z';
@@ -184,10 +230,13 @@ describe.skipIf(Boolean(unavailable))('bids and documents', () => {
       const docsDir = join(dataDir, tenant.orgId, 'docs');
       await mkdir(docsDir, { recursive: true });
       await writeFile(join(docsDir, 'rfp.pdf'), 'x');
+      const exportsDir = join(dataDir, tenant.orgId, 'exports');
+      await mkdir(exportsDir, { recursive: true });
+      await writeFile(join(exportsDir, 'x.xlsx'), 'x');
       await withOrg(tenant.orgId, async (db) => {
         await db.update(schema.documents).set({ storagePath: 'docs/rfp.pdf' }).where(eq(schema.documents.id, tenant.documentId));
         await db.insert(schema.archiveObjects).values({ orgId: tenant.orgId, documentId: tenant.documentId, objectType: 'original', archiveKey: 'k', archivedAt: new Date() });
-        await db.insert(schema.exports).values({ orgId: tenant.orgId, bidId: tenant.bidId, tab: 'compliance', format: 'xlsx', storagePath: 'exports/x.xlsx', createdBy: tenant.userId, expiresAt: new Date() });
+        await db.insert(schema.exports).values({ orgId: tenant.orgId, bidId: tenant.bidId, tab: 'compliance', format: 'xlsx', storagePath: 'exports/x.xlsx', createdBy: tenant.userId, expiresAt: new Date(Date.now() + 60_000) });
         await db.insert(schema.aiRuns).values({ orgId: tenant.orgId, bidId: tenant.bidId, task: 'compliance', provider: 'p', model: 'm', status: 'completed' });
         await db.insert(schema.outlineItems).values({ orgId: tenant.orgId, bidId: tenant.bidId, title: 'Child', parentId: tenant.rows.outline_items });
         await db.update(schema.complianceRows).set({ documentId: tenant.documentId }).where(eq(schema.complianceRows.id, tenant.rows.compliance_rows));
@@ -214,6 +263,12 @@ describe.skipIf(Boolean(unavailable))('bids and documents', () => {
         expect(credit.used).toBe(0);
       });
       expect(await readdir(docsDir)).toEqual([]);
+      expect(await readdir(exportsDir)).toEqual([]);
+      // The archive row outlives the bid so the purge job can delete the off-server copy.
+      const archived = await withOrg(tenant.orgId, (db) => db.select().from(schema.archiveObjects).where(eq(schema.archiveObjects.archiveKey, 'k')));
+      expect(archived).toHaveLength(1);
+      expect(archived[0].documentId).toBeNull();
+      expect(archived[0].expiresAt).not.toBeNull();
     });
 
     it('does not return a consumed credit', async () => {
@@ -272,6 +327,47 @@ describe.skipIf(Boolean(unavailable))('bids and documents', () => {
       const again = await upload(sha);
       expect(again.statusCode).toBe(413);
       expect(again.json<{ duplicate?: boolean }>().duplicate).toBeUndefined();
+    });
+  });
+
+  describe('DELETE /api/documents/:id on a solicitation', () => {
+    async function solicitation(tenant: Tenant): Promise<string> {
+      return withOrg(tenant.orgId, async (db) => {
+        const [row] = await db.insert(schema.documents).values({
+          orgId: tenant.orgId, bidId: tenant.bidId, fileName: 's.pdf', mime: 'application/pdf', sizeBytes: 5,
+          sha256: randomUUID(), kind: 'solicitation', liveStatus: 'live',
+        }).returning();
+        return row.id;
+      });
+    }
+    const creditRow = (orgId: string, creditId: string) => withOrg(orgId, async (db) => {
+      const [row] = await db.select().from(schema.rfpCredits).where(eq(schema.rfpCredits.id, creditId));
+      return row;
+    });
+
+    it('releases the reserved credit when the last solicitation goes before its matrix settled', async () => {
+      const tenant = await createTenant(app, 'del-sol');
+      // createTenant's own solicitation is the other one; delete it first.
+      const call = as(app, tenant.token);
+      const creditId = await holdCredit(tenant.orgId, tenant.bidId, 'reserved');
+      const extra = await solicitation(tenant);
+      const first = await call('DELETE', `/api/documents/${tenant.documentId}`);
+      expect(first.json<{ creditReleased: boolean }>().creditReleased).toBe(false);
+      expect((await creditRow(tenant.orgId, creditId)).reserved).toBe(1);
+      const last = await call('DELETE', `/api/documents/${extra}`);
+      expect(last.json<{ creditReleased: boolean }>().creditReleased).toBe(true);
+      expect((await creditRow(tenant.orgId, creditId)).reserved).toBe(0);
+      expect((await bidRow(tenant.orgId, tenant.bidId)).creditStatus).toBe('released');
+    });
+
+    it('does not return a consumed credit', async () => {
+      const tenant = await createTenant(app, 'del-sol-used');
+      const creditId = await holdCredit(tenant.orgId, tenant.bidId, 'consumed');
+      const response = await as(app, tenant.token)('DELETE', `/api/documents/${tenant.documentId}`);
+      expect(response.json<{ creditReleased: boolean }>().creditReleased).toBe(false);
+      const credit = await creditRow(tenant.orgId, creditId);
+      expect(credit.used).toBe(1);
+      expect((await bidRow(tenant.orgId, tenant.bidId)).creditStatus).toBe('consumed');
     });
   });
 

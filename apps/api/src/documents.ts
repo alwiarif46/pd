@@ -4,6 +4,7 @@ import { and, asc, eq, gte, lt, lte, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { KEY_OVERRIDES_PER_BID, resolveOrgPath, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
+import { releaseBidCredit } from './credits.js';
 import { apiError } from './errors.js';
 import { findBid, inOrg, findDocument, type Outcome, queueAfterCommit } from './scope.js';
 import { enqueueClassify } from './queue.js';
@@ -251,8 +252,8 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
    * Deletes a file (05 s3.10): the server copies go and its MB is freed, but the document row,
    * its page text, and the tab rows and quotes it produced stay, so every source link still
    * opens the page text (07 s2 keeps page text until the bid is deleted). The row is marked
-   * `live_status = 'deleted'`. A second delete is a no-op. Credits are not touched: a
-   * reservation is settled by processing, which reads the page text, not the file.
+   * `live_status = 'deleted'`. A second delete is a no-op. Deleting the bid's last
+   * solicitation while its credit is still reserved releases that credit.
    */
   app.delete('/api/documents/:id', { preHandler: requireAuth }, async (request, reply) => {
     const auth = request.auth!;
@@ -277,6 +278,22 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       if (!deleted) {
         return { ok: true };
       }
+      // The bid's last solicitation is gone before its compliance matrix settled the credit:
+      // release the reservation (the worker skips a deleted document, so it will not consume).
+      // releaseBidCredit flips credit_status conditionally, so a concurrent consume or release
+      // by the worker settles it at most once.
+      let creditReleased = false;
+      if (document.kind === 'solicitation') {
+        const [remaining] = await db.select({ id: schema.documents.id }).from(schema.documents).where(and(
+          eq(schema.documents.bidId, document.bidId),
+          eq(schema.documents.orgId, orgId),
+          eq(schema.documents.kind, 'solicitation'),
+          sql`${schema.documents.liveStatus} is distinct from 'deleted'`,
+        )).limit(1);
+        if (!remaining) {
+          creditReleased = await releaseBidCredit(db, orgId, document.bidId);
+        }
+      }
       for (const path of [document.storagePath, document.viewerPath]) {
         const absolute = path ? resolveOrgPath(dataDir, orgId, path) : null;
         if (absolute) {
@@ -289,9 +306,9 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
         action: 'delete_document',
         targetType: 'document',
         targetId: documentId,
-        detail: { kind: document.kind },
+        detail: { kind: document.kind, creditReleased },
       });
-      return { ok: true };
+      return { ok: true, creditReleased };
     });
     await Promise.all(files.map((file) => rm(file, { force: true }).catch(() => undefined)));
     return result;

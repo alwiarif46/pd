@@ -74,6 +74,11 @@ describe.skipIf(Boolean(unavailable))('0003_credits_and_cascades on a database w
          values ($1, 'B', 'sled', 'X', 'X', 'draft', $2, 'reserved') returning id`,
         [orgId, ids[1]],
       );
+      const legacy = await client.query<{ id: string }>(
+        `insert into bids (org_id, name, bid_type, solicitation_number, solicitation_key, status)
+         values ($1, 'L1', 'sled', 'w912-26 r', 'w912-26 r', 'draft'), ($1, 'L2', 'sled', '--', '--', 'draft') returning id`,
+        [orgId],
+      );
 
       await migrate(drizzle(migrator), { migrationsFolder });
 
@@ -87,6 +92,11 @@ describe.skipIf(Boolean(unavailable))('0003_credits_and_cascades on a database w
       ]);
       const bidRow = await client.query<{ credit_id: string }>('select credit_id from bids where id = $1', [bid.rows[0].id]);
       expect(bidRow.rows[0].credit_id).toBe(ids[0]);
+      const keys = await client.query<{ solicitation_key: string }>(
+        'select solicitation_key from bids where id = any($1) order by name',
+        [legacy.rows.map((row) => row.id)],
+      );
+      expect(keys.rows.map((row) => row.solicitation_key)).toEqual(['W91226R', 'PENDING']);
       const forced = await client.query<{ relname: string; relforcerowsecurity: boolean }>(
         "select relname, relforcerowsecurity from pg_class where relname in ('rfp_credits', 'bids', 'upload_sessions') order by relname",
       );

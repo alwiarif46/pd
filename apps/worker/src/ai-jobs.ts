@@ -106,6 +106,16 @@ export async function processCompliance(payload: JobPayload): Promise<void> {
   const started = Date.now();
   const { provider, config } = providerForJob();
   try {
+    // A solicitation the user deleted before its matrix was built is not processed: the api
+    // released its credit, so building the matrix now would give it away for free. The credit
+    // is left alone here: if another solicitation of the bid is still live, its own run settles
+    // it; if not, the api already released it.
+    const [document] = await withOrg(payload.orgId, (db) => db.select({ liveStatus: schema.documents.liveStatus })
+      .from(schema.documents)
+      .where(and(eq(schema.documents.id, payload.documentId), eq(schema.documents.orgId, payload.orgId))));
+    if (!document || document.liveStatus === 'deleted') {
+      return;
+    }
     const pages = await loadPages(payload.orgId, payload.documentId);
     const result = await extractComplianceMatrix({ pages, provider, config });
     await withOrg(payload.orgId, async (db) => {
