@@ -1,0 +1,13 @@
+'use client';
+
+import { CalendarDays, Plus } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+
+export interface OralItem { id: string; category: string; rule: string; owner: string | null; scheduledAt: string | null; status: 'todo' | 'in_progress' | 'done'; sourcePage: number | null }
+export interface OralsTabProps { items: OralItem[]; selectedRowId: string | null; onToggle: (id: string, done: boolean) => void; onEdit: (id: string, edit: { rule?: string; owner?: string | null; scheduledAt?: string | null }) => void; onAdd: (category: string, rule: string) => void; onOpenRow: (id: string) => void; onOpenSource: (id: string) => void }
+
+export function OralsTab({ items, onToggle, onEdit, onAdd, onOpenSource }: OralsTabProps) { return <main className="flex w-full flex-col gap-5 font-sans text-ink"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Orals</p><h1 className="text-2xl font-semibold">Prepare the room</h1><p className="text-sm text-muted-foreground">Turn oral presentation rules into owners, sessions, and practice tasks.</p></div><Button onClick={() => onAdd('prep', 'New oral preparation task')}><Plus className="size-4" /> Add task</Button></div><div className="flex flex-col gap-3">{['rules', 'prep', 'session'].map((category) => <section key={category} className="rounded-md border border-line bg-paper"><div className="border-b border-line p-4"><h2 className="font-semibold capitalize">{category}</h2></div>{items.filter((item) => item.category === category).map((item) => <div key={item.id} className="flex flex-wrap items-center gap-3 border-b border-line p-4 last:border-0"><button type="button" className="flex size-5 items-center justify-center rounded border border-line" onClick={() => onToggle(item.id, item.status !== 'done')} aria-label={`Mark ${item.rule} ${item.status === 'done' ? 'not done' : 'done'}`}>{item.status === 'done' && '✓'}</button><Input className="min-w-56 flex-1" value={item.rule} onChange={(event) => onEdit(item.id, { rule: event.target.value })} /><Badge variant={item.status === 'done' ? 'secondary' : 'outline'}>{item.status.replace('_', ' ')}</Badge>{item.scheduledAt && <span className="flex items-center gap-1 text-xs text-muted-foreground"><CalendarDays className="size-4" />{item.scheduledAt}</span>}{item.sourcePage && <button type="button" className="text-xs text-muted-foreground underline" onClick={() => onOpenSource(item.id)}>Source · page {item.sourcePage}</button>}</div>)}</section>)}</div></main>; }
+
+export default OralsTab;
