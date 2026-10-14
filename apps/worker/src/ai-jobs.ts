@@ -138,8 +138,8 @@ async function replaceCheckThese(db: Db, payload: JobPayload, hits: PreScanHit[]
       rows.set(key, { pageNo: hit.pageNo, sentence: hit.text });
     }
   }
-  if (rows.size > 0) {
-    await db.insert(schema.checkThese).values([...rows.values()].map((hit) => ({
+  for (const chunk of chunks([...rows.values()])) {
+    await db.insert(schema.checkThese).values(chunk.map((hit) => ({
       orgId: payload.orgId,
       bidId: payload.bidId,
       documentId: payload.documentId,
@@ -147,6 +147,18 @@ async function replaceCheckThese(db: Db, payload: JobPayload, hits: PreScanHit[]
       pageNo: hit.pageNo,
     })));
   }
+}
+
+/**
+ * Splits a multi-row insert so one statement stays well below Postgres's 65,535 bind
+ * parameters (a compliance row binds about 20).
+ */
+function chunks<T>(items: T[], size = 500): T[][] {
+  const out: T[][] = [];
+  for (let start = 0; start < items.length; start += size) {
+    out.push(items.slice(start, start + size));
+  }
+  return out;
 }
 
 export async function processCompliance(payload: JobPayload): Promise<void> {
@@ -190,8 +202,8 @@ export async function processCompliance(payload: JobPayload): Promise<void> {
         }
       }
       await replaceCheckThese(db, payload, result.checkThese ?? []);
-      if (result.requirements.length > 0) {
-        await db.insert(schema.complianceRows).values(result.requirements.map((row) => ({
+      for (const chunk of chunks(result.requirements)) {
+        await db.insert(schema.complianceRows).values(chunk.map((row) => ({
           orgId: payload.orgId,
           bidId: payload.bidId,
           reqId: row.id,
