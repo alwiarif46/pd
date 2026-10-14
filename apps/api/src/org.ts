@@ -43,7 +43,7 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
         id: orgId,
         name,
         plan: 'free',
-        planStatus: 'active',
+        planStatus: 'free',
       }).returning();
       await db.insert(schema.memberships).values({
         orgId,

@@ -36,6 +36,13 @@
       "when": 1792008270621,
       "tag": "0004_archive_and_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792015770098,
+      "tag": "0007_plan_status_and_customer",
+      "breakpoints": true
     }
   ]
 }

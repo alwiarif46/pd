@@ -30,11 +30,16 @@ export const organizations = pgTable('organizations', {
   plan: text('plan').notNull().$type<'free' | 'starter' | 'growth'>(),
   stripeCustomerId: text('stripe_customer_id'),
   stripeSubscriptionId: text('stripe_subscription_id'),
-  planStatus: text('plan_status').notNull(),
+  // 'free' on the free plan; 'active' or 'past_due' on a paid plan (06 s5). CHECK in 0007.
+  planStatus: text('plan_status').notNull().$type<'active' | 'past_due' | 'free'>(),
   cycleStart: timestamp('cycle_start'),
   cycleEnd: timestamp('cycle_end'),
   freeFirstMonthEnds: timestamp('free_first_month_ends'),
-});
+}, (table) => ({
+  // One organization per Stripe customer. NULLs are distinct in a unique index, so
+  // organizations without a customer are not constrained.
+  stripeCustomer: uniqueIndex('organizations_stripe_customer_uq').on(table.stripeCustomerId),
+}));
 
 export const memberships = pgTable('memberships', {
   ...baseColumns,
