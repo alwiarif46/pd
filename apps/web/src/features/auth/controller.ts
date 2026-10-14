@@ -107,12 +107,15 @@ export async function verifyPhoneAction(deps: AuthApi, phone: string, code: stri
   return status;
 }
 
+/** The API answers 200 for every address, so the message must not say a message was sent. */
+const RESEND_MESSAGE = 'If the account needs it, we sent a new message.';
+
 export function resendEmailAction(deps: AuthApi, email: string): Promise<AuthStatus> {
-  return attempt(() => deps.resendEmail(email), 'We sent a new link. Check your email.');
+  return attempt(() => deps.resendEmail(email), RESEND_MESSAGE);
 }
 
-export function resendCodeAction(deps: AuthApi): Promise<AuthStatus> {
-  return attempt(() => deps.resendCode(), 'We sent a new code.');
+export function resendCodeAction(deps: AuthApi, email: string): Promise<AuthStatus> {
+  return attempt(() => deps.resendCode(email), RESEND_MESSAGE);
 }
 
 export function requestResetAction(deps: AuthApi, email: string): Promise<AuthStatus> {

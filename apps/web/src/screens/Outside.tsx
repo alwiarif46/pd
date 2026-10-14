@@ -204,6 +204,7 @@ export function Account() {
   const [me, setMe] = useState<{ name: string | null; email: string; phone: string | null } | null>(null);
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -218,7 +219,7 @@ export function Account() {
     <main className="page">
       <form className="card stack" style={{ maxWidth: 480 }} onSubmit={(event) => {
         event.preventDefault();
-        api('/api/me', { method: 'PATCH', body: JSON.stringify({ name, ...(password ? { password } : {}) }) })
+        api('/api/me', { method: 'PATCH', body: JSON.stringify({ name, ...(password ? { password, currentPassword } : {}) }) })
           .then(() => setMessage('Saved.'))
           .catch((err: Error) => setError(err.message));
       }}>
@@ -227,6 +228,9 @@ export function Account() {
         <p>Phone {me?.phone}</p>
         <label className="field">Name
           <input value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <label className="field">Current password (needed to change the password)
+          <input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
         </label>
         <label className="field">New password
           <input type="password" minLength={12} value={password} onChange={(event) => setPassword(event.target.value)} />

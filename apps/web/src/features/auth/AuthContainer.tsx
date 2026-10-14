@@ -128,7 +128,7 @@ function VerifyView({ api, token }: { api: AuthApi; token: string | null }) {
         void run(() => resendEmailAction(api, email));
       }}
       onResendCode={() => {
-        void run(() => resendCodeAction(api));
+        void run(() => resendCodeAction(api, email));
       }}
       onLogIn={() => {
         setStatus(IDLE);

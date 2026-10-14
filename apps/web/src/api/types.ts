@@ -89,6 +89,8 @@ export interface MeDto {
 export interface MePatch {
   name?: string;
   password?: string;
+  /** Required by the API whenever `password` is sent (400 if missing, 403 if wrong). */
+  currentPassword?: string;
 }
 
 export interface SignUpInput {

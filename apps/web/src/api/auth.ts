@@ -16,19 +16,19 @@ export function verifyPhone(phone: string, code: string, opts?: CallOptions): Pr
 }
 
 /**
- * Sends a new email verification link. UNRECONCILED: the body `{ email }` is a best guess until the
- * API agent's final shape for POST /api/auth/resend-email lands.
+ * Sends a new email verification link. Always 200 `{ ok: true }` (even for unknown or verified
+ * addresses); 400 for a bad body, 429 on daily caps.
  */
 export function resendEmail(email: string, opts?: CallOptions): Promise<Ok> {
   return request('/api/auth/resend-email', { method: 'POST', json: { email }, signal: opts?.signal });
 }
 
 /**
- * Sends a new SMS code. UNRECONCILED: assumed authenticated (bearer token) with no body until the
- * API agent's final shape for POST /api/auth/resend-code lands.
+ * Sends a new SMS code. Unauthenticated; the server looks up the phone from the email. Same
+ * responses as `resendEmail`.
  */
-export function resendCode(opts?: CallOptions): Promise<Ok> {
-  return request('/api/auth/resend-code', { method: 'POST', signal: opts?.signal });
+export function resendCode(email: string, opts?: CallOptions): Promise<Ok> {
+  return request('/api/auth/resend-code', { method: 'POST', json: { email }, signal: opts?.signal });
 }
 
 /** Signs in and stores the session token. */

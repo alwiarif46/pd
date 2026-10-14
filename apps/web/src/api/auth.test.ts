@@ -3,7 +3,7 @@ import { callAt, jsonBody, jsonResponse, lastCall, mockFetch } from '../test/fet
 import { isSignedIn, logIn, logOut, resendCode, resendEmail, resetPassword, signUp } from './auth';
 import { ApiError } from './errors';
 import { getMe, updateMe } from './me';
-import { getToken, setToken } from './session';
+import { getToken, onUnauthorized, setToken } from './session';
 
 describe('logIn', () => {
   it('stores the token', async () => {
@@ -85,15 +85,14 @@ describe('resend (shapes unreconciled with the API)', () => {
     expect(jsonBody(call)).toEqual({ email: 'a@acme.com' });
   });
 
-  it('resendCode posts with the token and no body', async () => {
-    setToken('tok');
+  it('resendCode posts the email without a token', async () => {
     const fetchMock = mockFetch(jsonResponse(200, { ok: true }));
-    await resendCode();
+    await resendCode('a@acme.com');
     const call = lastCall(fetchMock);
     expect(call.url).toBe('/api/auth/resend-code');
     expect(call.method).toBe('POST');
-    expect(call.headers.get('Authorization')).toBe('Bearer tok');
-    expect(call.headers.has('Content-Type')).toBe(false);
+    expect(call.headers.has('Authorization')).toBe(false);
+    expect(jsonBody(call)).toEqual({ email: 'a@acme.com' });
   });
 });
 
@@ -109,5 +108,27 @@ describe('me', () => {
     expect(call.url).toBe('/api/me');
     expect(call.method).toBe('PATCH');
     expect(jsonBody(call)).toEqual({ name: 'Annie' });
+  });
+
+  it('sends currentPassword with a password change', async () => {
+    setToken('tok');
+    const fetchMock = mockFetch(jsonResponse(200, { ok: true }));
+    await updateMe({ password: 'a new password', currentPassword: 'the old one' });
+    expect(jsonBody(lastCall(fetchMock))).toEqual({ password: 'a new password', currentPassword: 'the old one' });
+  });
+
+  it('keeps the session on 403 and 400 from a password change', async () => {
+    setToken('tok');
+    const listener = vi.fn();
+    const off = onUnauthorized(listener);
+    mockFetch(jsonResponse(403, { error: 'Current password is wrong' }), jsonResponse(400, { error: 'Enter your current password' }));
+    await expect(updateMe({ password: 'x'.repeat(12), currentPassword: 'bad' })).rejects.toMatchObject({
+      status: 403,
+      message: 'Current password is wrong',
+    });
+    await expect(updateMe({ password: 'x'.repeat(12) })).rejects.toMatchObject({ status: 400 });
+    off();
+    expect(listener).not.toHaveBeenCalled();
+    expect(getToken()).toBe('tok');
   });
 });

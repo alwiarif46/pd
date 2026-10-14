@@ -130,14 +130,31 @@ describe('verify', () => {
     const api = mockApi();
     expect((await resendEmailAction(api, 'a@acme.com')).state).toBe('done');
     expect(api.resendEmail).toHaveBeenCalledWith('a@acme.com');
-    expect((await resendCodeAction(api)).state).toBe('done');
-    expect(api.resendCode).toHaveBeenCalledWith();
+    expect(await resendCodeAction(api, 'a@acme.com')).toEqual({
+      state: 'done',
+      message: 'If the account needs it, we sent a new message.',
+    });
+    expect(api.resendCode).toHaveBeenCalledWith('a@acme.com');
+  });
+
+  it('shows the sign-up and phone-attempt limit messages as given', async () => {
+    const api = mockApi();
+    api.signUp.mockRejectedValue(new ApiError('An account with that email already exists', 409));
+    expect(await signUpAction(api, { email: 'a@acme.com', name: 'A', password: 'twelve chars!', phone: '+15555550100' })).toEqual({
+      state: 'error',
+      message: 'An account with that email already exists',
+    });
+    api.verifyPhone.mockRejectedValue(new ApiError('Too many attempts. Ask for a new code.', 429));
+    expect(await verifyPhoneAction(api, '+15555550100', '111111')).toEqual({
+      state: 'error',
+      message: 'Too many attempts. Ask for a new code.',
+    });
   });
 
   it('shows a resend failure', async () => {
     const api = mockApi();
     api.resendCode.mockRejectedValue(new ApiError('Wait a minute before asking again', 429));
-    expect(await resendCodeAction(api)).toEqual({
+    expect(await resendCodeAction(api, 'a@acme.com')).toEqual({
       state: 'error',
       message: 'Wait a minute before asking again',
     });
