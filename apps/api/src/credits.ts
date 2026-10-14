@@ -1,6 +1,6 @@
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { and, desc, eq, gt, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, lte, sql } from 'drizzle-orm';
 import { periodAllowance, periodContaining, type Plan, schema } from '@pd/core';
 import type { Db } from './scope.js';
 
@@ -107,11 +107,16 @@ export async function reserveForBid(db: Db, org: OrgRow, bidId: string, now: Dat
   if (!credit) {
     return null;
   }
-  await db.update(schema.bids).set({
+  const [bid] = await db.update(schema.bids).set({
     creditId: credit.id,
     creditStatus: 'reserved',
     updatedAt: now,
-  }).where(and(eq(schema.bids.id, bidId), eq(schema.bids.orgId, org.id)));
+  }).where(and(eq(schema.bids.id, bidId), eq(schema.bids.orgId, org.id))).returning({ id: schema.bids.id });
+  if (!bid) {
+    // Rolls the whole transaction back, the counter increment with it: a credit is never held
+    // for a bid that is not there.
+    throw new Error(`reserveForBid: bid ${bidId} not found in organization ${org.id}`);
+  }
   return credit.id;
 }
 
@@ -156,10 +161,14 @@ export async function releaseSessionCredit(db: Db, orgId: string, session: Sessi
   if (!session.creditId) {
     return false;
   }
+  // Only a solicitation that arrived at or after this session started can have taken over its
+  // reservation. An older one was settled before this session could reserve (a session reserves
+  // only when the bid holds no reserved or consumed credit), so it must not block the release.
   const [solicitation] = await db.select({ id: schema.documents.id }).from(schema.documents).where(and(
     eq(schema.documents.bidId, session.bidId),
     eq(schema.documents.orgId, orgId),
     eq(schema.documents.kind, 'solicitation'),
+    gte(schema.documents.createdAt, session.createdAt),
   )).limit(1);
   if (solicitation) {
     return false;

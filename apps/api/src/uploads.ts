@@ -116,8 +116,15 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       }
 
       const plan = (org.plan ?? 'free') as Plan;
-      // Re-read the bid under the org lock: its credit state may have changed meanwhile.
-      const current = (await findBid(db, orgId, bidId))!;
+      // Re-read and lock the bid: its credit state may have changed meanwhile, and a PATCH that
+      // changes the key (which also locks the row) must not interleave with the key check below.
+      const [current] = await db.select().from(schema.bids).where(and(
+        eq(schema.bids.id, bidId),
+        eq(schema.bids.orgId, orgId),
+      )).for('update');
+      if (!current) {
+        return respond(404, { error: 'Bid not found' });
+      }
       const usedBytes = await bidBytesInUse(db, orgId, bidId, now);
       if (!fitsBidCap(plan, usedBytes, declaredSize)) {
         return respond(413, apiError('bid_cap_exceeded'));
@@ -292,24 +299,6 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
         await reopen();
         return { code: 400, body: { error: 'Not every chunk has arrived' } };
       }
-      // A solicitation never reaches a bid without a credit behind it. Normally its session
-      // reserved one at start; if that reservation went back (another session for this bid was
-      // abandoned) or processing released it, reserve again now, under the org lock.
-      if (session.kind === 'solicitation') {
-        const org = await lockOrg(db, orgId);
-        const bid = await findBid(db, orgId, session.bidId);
-        if (!org || !bid) {
-          await reopen();
-          return { code: 404, body: { error: 'Bid not found' } };
-        }
-        if (bid.creditStatus !== 'reserved' && bid.creditStatus !== 'consumed') {
-          const creditId = await reserveForBid(db, org, bid.id, new Date());
-          if (!creditId) {
-            await reopen();
-            return { code: 402, body: apiError('out_of_credits') };
-          }
-        }
-      }
       const targetDir = join(dataDir, orgId, 'docs');
       await mkdir(targetDir, { recursive: true });
       // The stored name is server-generated. The client's file name is kept only as a label
@@ -331,6 +320,30 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       if (digest !== session.sha256 || file.length !== session.declaredSize) {
         await reopen();
         return { code: 400, body: { error: 'The uploaded bytes do not match the declared file' } };
+      }
+      // A solicitation never reaches a bid without a credit behind it. Normally its session
+      // reserved one at start; if that reservation went back (another session for this bid was
+      // abandoned) or processing released it, reserve again now. This runs after the bytes are
+      // verified, so a refused complete never leaves a reservation behind, and the org lock is
+      // not held while the file is assembled. The session records the credit it now owns.
+      if (session.kind === 'solicitation') {
+        const org = await lockOrg(db, orgId);
+        const bid = await findBid(db, orgId, session.bidId);
+        if (!org || !bid) {
+          await reopen();
+          return { code: 404, body: { error: 'Bid not found' } };
+        }
+        if (bid.creditStatus !== 'reserved' && bid.creditStatus !== 'consumed') {
+          const creditId = await reserveForBid(db, org, bid.id, new Date());
+          if (!creditId) {
+            await reopen();
+            return { code: 402, body: apiError('out_of_credits') };
+          }
+          await db.update(schema.uploadSessions).set({ creditId, updatedAt: new Date() }).where(and(
+            eq(schema.uploadSessions.id, sessionId),
+            eq(schema.uploadSessions.orgId, orgId),
+          ));
+        }
       }
       const [document] = await db.insert(schema.documents).values({
         orgId,

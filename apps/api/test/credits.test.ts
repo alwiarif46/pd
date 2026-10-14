@@ -254,4 +254,50 @@ describe.skipIf(Boolean(unavailable))('RFP credits and uploads', () => {
     const documents = await withOrg(org.orgId, (db) => db.select().from(schema.documents).where(and(eq(schema.documents.bidId, bidId))));
     expect(documents).toHaveLength(0);
   });
+
+  it('a complete that fails the byte check reserves nothing; the next good complete reserves and records it', async () => {
+    const org = await newOrg('late-reserve', { plan: 'starter', createdDaysAgo: 1 });
+    const bidId = await org.bid();
+    const first = (await start(org, bidId)).json<{ id: string }>().id;
+    const bytes = randomBytes(32);
+    const secondId = (await start(org, bidId, { declaredSize: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })).json<{ id: string }>().id;
+    expect((await org.call('DELETE', `/api/uploads/${first}`)).statusCode).toBe(200);
+    const put = (payload: Buffer) => app.inject({
+      method: 'PUT',
+      url: `/api/uploads/${secondId}/chunks/0`,
+      headers: { authorization: `Bearer ${org.token}`, 'content-type': 'application/octet-stream' },
+      payload,
+    });
+    expect((await put(randomBytes(32))).statusCode).toBe(200);
+    expect((await org.call('POST', `/api/uploads/${secondId}/complete`)).statusCode).toBe(400);
+    expect((await credits(org.orgId))[0].reserved).toBe(0);
+    expect((await bidRow(org.orgId, bidId)).creditStatus).toBe('released');
+
+    expect((await put(bytes)).statusCode).toBe(200);
+    expect((await org.call('POST', `/api/uploads/${secondId}/complete`)).statusCode).toBe(201);
+    const [row] = await credits(org.orgId);
+    expect(row.reserved).toBe(1);
+    const [session] = await withOrg(org.orgId, (db) => db.select().from(schema.uploadSessions).where(eq(schema.uploadSessions.id, secondId)));
+    expect(session.creditId).toBe(row.id);
+    expect((await bidRow(org.orgId, bidId)).creditStatus).toBe('reserved');
+  });
+
+  it('a retry after a failed first solicitation releases its credit when abandoned', async () => {
+    const org = await newOrg('retry', { plan: 'starter', createdDaysAgo: 1 });
+    const bidId = await org.bid();
+    // The first solicitation's processing failed and released its credit.
+    await withOrg(org.orgId, async (db) => {
+      await db.insert(schema.documents).values({
+        orgId: org.orgId, bidId, fileName: 'old.pdf', mime: 'application/pdf', sizeBytes: 10,
+        sha256: 'f'.repeat(64), kind: 'solicitation', liveStatus: 'live', createdAt: new Date(Date.now() - 60_000),
+      });
+      await db.update(schema.bids).set({ creditStatus: 'released' }).where(eq(schema.bids.id, bidId));
+    });
+    const retry = await start(org, bidId);
+    expect(retry.json<{ creditReserved: boolean }>().creditReserved).toBe(true);
+    const cancelled = await org.call('DELETE', `/api/uploads/${retry.json<{ id: string }>().id}`);
+    expect(cancelled.json<{ creditReleased: boolean }>().creditReleased).toBe(true);
+    expect((await credits(org.orgId))[0].reserved).toBe(0);
+    expect((await bidRow(org.orgId, bidId)).creditStatus).toBe('released');
+  });
 });
