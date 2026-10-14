@@ -3,8 +3,9 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { isUuid, PLAN_LIMITS, type Plan, schema, userMemberships, withOrg } from '@pd/core';
 import { requireAuth, requireUser } from './context.js';
+import { BODY_REQUIRED, readBody, text } from './body.js';
 import { inOrg } from './scope.js';
-import { hashToken, isWorkEmail, logOutOfBand, newToken } from './security.js';
+import { hashToken, isWorkEmail, newToken, sendOutOfBand } from './security.js';
 
 function seatLimit(plan: Plan): number {
   return PLAN_LIMITS[plan].maxUsers;
@@ -18,7 +19,11 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     if ((await userMemberships(auth.userId)).length > 0) {
       return reply.code(409).send({ error: 'You already belong to an organization' });
     }
-    const name = ((request.body as { name?: string }).name ?? '').trim();
+    const body = readBody(request);
+    if (!body) {
+      return reply.code(400).send(BODY_REQUIRED);
+    }
+    const name = text(body, 'name').trim();
     if (!name) {
       return reply.code(400).send({ error: 'Organization name is required' });
     }
@@ -73,7 +78,11 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     if (auth.role !== 'owner') {
       return reply.code(403).send({ error: 'Only the owner can change the organization' });
     }
-    const name = ((request.body as { name?: string }).name ?? '').trim();
+    const body = readBody(request);
+    if (!body) {
+      return reply.code(400).send(BODY_REQUIRED);
+    }
+    const name = text(body, 'name').trim();
     return withOrg(auth.orgId!, async (db) => {
       await db.update(schema.organizations).set({ name, updatedAt: new Date() }).where(eq(schema.organizations.id, auth.orgId!));
       return { ok: true };
@@ -92,11 +101,17 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     if (auth.role !== 'owner') {
       return reply.code(403).send({ error: 'Only the owner can invite' });
     }
-    const email = ((request.body as { email?: string }).email ?? '').trim().toLowerCase();
+    const body = readBody(request);
+    if (!body) {
+      return reply.code(400).send(BODY_REQUIRED);
+    }
+    const email = text(body, 'email').trim().toLowerCase();
     if (!isWorkEmail(email)) {
       return reply.code(400).send({ error: 'Use a work email address' });
     }
-    return inOrg(reply, auth.orgId!, async (db, respond) => {
+    // Delivered only after COMMIT, so the link never names an invite that rolled back.
+    let issued = null as string | null;
+    const result = await inOrg(reply, auth.orgId!, async (db, respond) => {
       const [org] = await db.select().from(schema.organizations).where(eq(schema.organizations.id, auth.orgId!));
       const members = await db.select().from(schema.memberships).where(eq(schema.memberships.orgId, auth.orgId!));
       const plan = (org?.plan ?? 'free') as Plan;
@@ -104,6 +119,7 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
         return respond(402, { error: 'This plan has no seats left' });
       }
       const token = newToken();
+      issued = token;
       await db.insert(schema.invites).values({
         orgId: auth.orgId!,
         email,
@@ -111,9 +127,12 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
         tokenHash: hashToken(token),
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       });
-      logOutOfBand('email', email, token);
       return respond(201, { ok: true });
     });
+    if (issued) {
+      void sendOutOfBand({ channel: 'email', purpose: 'invite', to: email, secret: issued });
+    }
+    return result;
   });
 
   app.delete('/api/org/members/:userId', { preHandler: requireAuth }, async (request, reply) => {
