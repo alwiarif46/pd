@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs';
 import { rm, stat } from 'node:fs/promises';
-import { and, asc, eq, gte, inArray, isNull, lt, lte, max, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, isNull, lt, lte, max, or, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import {
   canRestore,
@@ -363,6 +363,18 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       if (document.liveStatus !== 'archived') {
         return respond(409, { error: 'This file is not archived' });
       }
+      // Nothing to restore from: no archive copy that is neither purged nor expired. The file
+      // stays archived (its page text and quotes still show).
+      const [copy] = await db.select({ id: schema.archiveObjects.id }).from(schema.archiveObjects).where(and(
+        eq(schema.archiveObjects.documentId, documentId),
+        eq(schema.archiveObjects.orgId, orgId),
+        isNull(schema.archiveObjects.purgedAt),
+        or(isNull(schema.archiveObjects.expiresAt), gt(schema.archiveObjects.expiresAt, new Date())),
+      )).limit(1);
+      if (!copy) {
+        // A local code: errors.ts is shared, and this refusal is specific to restore.
+        return respond(409, { error: 'There is no archive copy of this file to restore.', code: 'no_archive_copy' });
+      }
       const settings = restoreSettings(await readSettings(db, [SETTING_RESTORE_FREE_ALLOWED, SETTING_RESTORE_WINDOW_DAYS]));
       if (!canRestore(await orgPlan(db, orgId), settings)) {
         return respond(402, apiError('plan_required', 'Restoring archived files needs a Starter or Growth plan.'));
@@ -379,7 +391,11 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       if (!moved) {
         // Another request changed the file first (this UPDATE waited for it and re-checked).
         const current = await findDocument(db, orgId, documentId);
-        if (current && isRestorePending(current.liveStatus)) {
+        if (!current) {
+          // A concurrent document or bid delete removed it.
+          return respond(404, { error: 'Document not found' });
+        }
+        if (isRestorePending(current.liveStatus)) {
           return { status: current.liveStatus };
         }
         return respond(409, { error: 'This file is not archived' });
@@ -393,6 +409,7 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
         eq(schema.archiveObjects.documentId, documentId),
         eq(schema.archiveObjects.orgId, orgId),
         isNull(schema.archiveObjects.purgedAt),
+        or(isNull(schema.archiveObjects.expiresAt), gt(schema.archiveObjects.expiresAt, new Date())),
       ));
       await db.insert(schema.auditLog).values({
         orgId,

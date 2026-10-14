@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
+import pg from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, inject, it, vi } from 'vitest';
 import { closeDb, getDb, getPool, schema, withOrg } from '@pd/core';
 import { as, createTenant, type Tenant } from './helpers.js';
@@ -254,17 +255,109 @@ describe.skipIf(Boolean(unavailable))('documents and bids (0005)', () => {
       expect(await auditRows(tenant, documentId)).toHaveLength(1);
     });
 
-    it('concurrent requests record one restore', async () => {
+    /**
+     * Holds the document row FOR UPDATE from a separate (superuser) connection, so requests that
+     * reach the conditional UPDATE queue behind it. `waitForLockWaiters` polls pg_stat_activity.
+     */
+    async function holdDocument(documentId: string) {
+      const holder = new pg.Client({ connectionString: inject('adminUrl') });
+      await holder.connect();
+      await holder.query('begin');
+      await holder.query('select id from documents where id = $1 for update', [documentId]);
+      // pg_stat_activity is snapshotted once per transaction; clear it so each poll is fresh.
+      const waiters = async () => (await holder.query('select pg_stat_clear_snapshot()'), Number((await holder.query<{ count: string }>(
+        `select count(*) from pg_stat_activity
+         where datname = current_database() and wait_event_type = 'Lock' and pid <> pg_backend_pid()`,
+      )).rows[0].count));
+      return {
+        holder,
+        async waitForLockWaiters(count: number) {
+          const deadline = Date.now() + 15_000;
+          let seen = await waiters();
+          while (seen < count) {
+            if (Date.now() > deadline) {
+              throw new Error(`expected ${count} lock waiters, saw ${seen}`);
+            }
+            await new Promise((done) => setTimeout(done, 25));
+            seen = await waiters();
+          }
+          return seen;
+        },
+        async finish(statement?: { text: string; values: unknown[] }) {
+          try {
+            if (statement) {
+              await holder.query(statement.text, statement.values);
+            }
+            await holder.query('commit');
+          } finally {
+            await holder.end();
+          }
+        },
+      };
+    }
+
+    it('concurrent requests that all reach the UPDATE record one restore', async () => {
       const tenant = await createTenant(app, 'restore-race');
       const documentId = await addDocument(tenant, { liveStatus: 'archived' });
       await addArchive(tenant, documentId);
       const call = as(app, tenant.token);
-      const responses = await Promise.all([1, 2, 3, 4].map(() => call('POST', `/api/documents/${documentId}/restore`)));
+      const lock = await holdDocument(documentId);
+      let pending: Promise<Awaited<ReturnType<typeof call>>[]>;
+      try {
+        pending = Promise.all([1, 2, 3, 4].map(() => call('POST', `/api/documents/${documentId}/restore`)));
+        // All four read the file as archived and now wait on the row: one will move it, and
+        // the other three must take the lost-race branch (re-read, answer the current state).
+        expect(await lock.waitForLockWaiters(4)).toBe(4);
+      } finally {
+        await lock.finish();
+      }
+      const responses = await pending!;
       for (const response of responses) {
         expect(response.statusCode, response.body).toBe(200);
         expect(response.json()).toEqual({ status: 'restore_requested' });
       }
       expect(await auditRows(tenant, documentId)).toHaveLength(1);
+      expect(byId(await listDocuments(tenant), documentId).liveStatus).toBe('restore_requested');
+    });
+
+    it('a request that loses to a concurrent delete answers 404', async () => {
+      const tenant = await createTenant(app, 'restore-vs-delete');
+      const documentId = await addDocument(tenant, { liveStatus: 'archived' });
+      await addArchive(tenant, documentId);
+      const lock = await holdDocument(documentId);
+      let pending: ReturnType<ReturnType<typeof as>>;
+      try {
+        pending = as(app, tenant.token)('POST', `/api/documents/${documentId}/restore`);
+        await lock.waitForLockWaiters(1);
+      } finally {
+        // The holder deletes the row (as a bid delete's cascade does) and commits.
+        await lock.finish({ text: 'delete from documents where id = $1', values: [documentId] });
+      }
+      const response = await pending!;
+      expect(response.statusCode, response.body).toBe(404);
+      expect(await auditRows(tenant, documentId)).toHaveLength(0);
+    });
+
+    it('refuses an archived file with no usable archive copy, and leaves it archived', async () => {
+      const tenant = await createTenant(app, 'restore-no-copy');
+      const call = as(app, tenant.token);
+      const none = await addDocument(tenant, { liveStatus: 'archived' });
+      const purgedOnly = await addDocument(tenant, { liveStatus: 'archived' });
+      await addArchive(tenant, purgedOnly, { purgedAt: new Date() });
+      const expiredOnly = await addDocument(tenant, { liveStatus: 'archived' });
+      const expired = await addArchive(tenant, expiredOnly);
+      await withOrg(tenant.orgId, (db) => db.update(schema.archiveObjects).set({ expiresAt: new Date(Date.now() - 1000) })
+        .where(eq(schema.archiveObjects.id, expired)));
+      for (const documentId of [none, purgedOnly, expiredOnly]) {
+        const response = await call('POST', `/api/documents/${documentId}/restore`);
+        expect(response.statusCode).toBe(409);
+        expect(response.json<{ code: string; error: string }>()).toMatchObject({ code: 'no_archive_copy' });
+        expect(byId(await listDocuments(tenant), documentId).liveStatus).toBe('archived');
+        expect(await auditRows(tenant, documentId)).toHaveLength(0);
+      }
+      const copies = await withOrg(tenant.orgId, (db) => db.select().from(schema.archiveObjects)
+        .where(inArray(schema.archiveObjects.documentId, [purgedOnly, expiredOnly])));
+      expect(copies.every((row) => row.restoreStatus === 'none')).toBe(true);
     });
 
     it('refuses a file that is not archived', async () => {
@@ -297,6 +390,7 @@ describe.skipIf(Boolean(unavailable))('documents and bids (0005)', () => {
     it('free organizations restore by default (no setting)', async () => {
       const tenant = await createTenant(app, 'restore-default');
       const documentId = await addDocument(tenant, { liveStatus: 'archived' });
+      await addArchive(tenant, documentId);
       const response = await as(app, tenant.token)('POST', `/api/documents/${documentId}/restore`);
       expect(response.statusCode).toBe(200);
     });

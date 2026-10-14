@@ -50,7 +50,7 @@ export function overrideSolicitationKey(
 /**
  * Asks for an archived file back. Answers `{ status: 'restore_requested' }`, or the current state
  * when a restore is already pending. 402 `plan_required` when free restores are turned off;
- * 409 when the file is not archived.
+ * 409 when the file is not archived, or (code `no_archive_copy`) when no archive copy is left to restore from.
  */
 export function restoreDocument(documentId: string, opts?: CallOptions): Promise<RestoreDocumentDto> {
   return request(`/api/documents/${seg(documentId)}/restore`, { method: 'POST', signal: opts?.signal });
