@@ -61,6 +61,47 @@ export interface Tenant {
   memberUserId: string;
 }
 
+type Db = Parameters<Parameters<typeof withOrg>[1]>[0];
+
+/** One row in every row table of a bid, plus a second compliance row. Run under withOrg(orgId). */
+export async function seedBidRows(db: Db, orgId: string, bidId: string, label: string) {
+  const base = { orgId, bidId };
+  const [fact] = await db.insert(schema.bidFacts).values({ ...base, field: 'agency', value: `Agency ${label}` }).returning();
+  const [kickoff] = await db.insert(schema.kickoffItems).values({ ...base, label: 'Roles' }).returning();
+  const [activity] = await db.insert(schema.scheduleActivities).values({ ...base, label: 'Draft', startDate: new Date() }).returning();
+  const [compliance] = await db.insert(schema.complianceRows).values({ ...base, reqId: 'L.1', requirementText: `The offeror shall ${label}.` }).returning();
+  const [compliance2] = await db.insert(schema.complianceRows).values({ ...base, reqId: 'L.2', requirementText: `The offeror shall also ${label}.` }).returning();
+  const [outline] = await db.insert(schema.outlineItems).values({ ...base, title: 'Technical' }).returning();
+  const [requirement] = await db.insert(schema.personnelRequirements).values({ ...base, role: 'PM', requirement: 'PMP' }).returning();
+  const [candidate] = await db.insert(schema.candidates).values({ ...base, name: 'Pat', role: 'PM' }).returning();
+  const [match] = await db.insert(schema.resumeMatches).values({ orgId, candidateId: candidate.id, requirementId: requirement.id, result: 'meets' }).returning();
+  const [review] = await db.insert(schema.reviews).values({ ...base, type: 'red' }).returning();
+  const [assignment] = await db.insert(schema.reviewAssignments).values({ orgId, reviewId: review.id, reviewerName: 'Sam' }).returning();
+  const [finding] = await db.insert(schema.reviewFindings).values({ orgId, reviewId: review.id, kind: 'strength', text: 'Clear' }).returning();
+  const [production] = await db.insert(schema.productionItems).values({ ...base, category: 'Fonts', rule: '12pt' }).returning();
+  const [oral] = await db.insert(schema.oralsItems).values({ ...base, category: 'Rules', item: '30 minutes' }).returning();
+  const [lesson] = await db.insert(schema.lessons).values({ ...base, question: 'What worked?', answer: '' }).returning();
+  return {
+    rows: {
+      bid_facts: fact.id,
+      kickoff_items: kickoff.id,
+      schedule_activities: activity.id,
+      compliance_rows: compliance.id,
+      outline_items: outline.id,
+      personnel_requirements: requirement.id,
+      candidates: candidate.id,
+      resume_matches: match.id,
+      reviews: review.id,
+      review_assignments: assignment.id,
+      review_findings: finding.id,
+      production_items: production.id,
+      orals_items: oral.id,
+      lessons: lesson.id,
+    } satisfies Record<RowTableName, string>,
+    compliance2: compliance2.id,
+  };
+}
+
 export function as(app: FastifyInstance, token: string) {
   return (method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, payload?: unknown) => app.inject({
     method,
@@ -94,21 +135,8 @@ export async function createTenant(app: FastifyInstance, label: string): Promise
   const ids = await withOrg(orgId, async (db) => {
     await db.insert(schema.memberships).values({ orgId, userId: member.userId, role: 'member' });
     const base = { orgId, bidId };
-    const [fact] = await db.insert(schema.bidFacts).values({ ...base, field: 'agency', value: `Agency ${label}` }).returning();
-    const [kickoff] = await db.insert(schema.kickoffItems).values({ ...base, label: 'Roles' }).returning();
-    const [activity] = await db.insert(schema.scheduleActivities).values({ ...base, label: 'Draft', startDate: new Date() }).returning();
-    const [compliance] = await db.insert(schema.complianceRows).values({ ...base, reqId: 'L.1', requirementText: `The offeror shall ${label}.` }).returning();
-    const [compliance2] = await db.insert(schema.complianceRows).values({ ...base, reqId: 'L.2', requirementText: `The offeror shall also ${label}.` }).returning();
-    const [outline] = await db.insert(schema.outlineItems).values({ ...base, title: 'Technical' }).returning();
-    const [requirement] = await db.insert(schema.personnelRequirements).values({ ...base, role: 'PM', requirement: 'PMP' }).returning();
-    const [candidate] = await db.insert(schema.candidates).values({ ...base, name: 'Pat', role: 'PM' }).returning();
-    const [match] = await db.insert(schema.resumeMatches).values({ orgId, candidateId: candidate.id, requirementId: requirement.id, result: 'meets' }).returning();
-    const [review] = await db.insert(schema.reviews).values({ ...base, type: 'red' }).returning();
-    const [assignment] = await db.insert(schema.reviewAssignments).values({ orgId, reviewId: review.id, reviewerName: 'Sam' }).returning();
-    const [finding] = await db.insert(schema.reviewFindings).values({ orgId, reviewId: review.id, kind: 'strength', text: 'Clear' }).returning();
-    const [production] = await db.insert(schema.productionItems).values({ ...base, category: 'Fonts', rule: '12pt' }).returning();
-    const [oral] = await db.insert(schema.oralsItems).values({ ...base, category: 'Rules', item: '30 minutes' }).returning();
-    const [lesson] = await db.insert(schema.lessons).values({ ...base, question: 'What worked?', answer: '' }).returning();
+    const seeded = await seedBidRows(db, orgId, bidId, label);
+    const compliance = { id: seeded.rows.compliance_rows };
     const [document] = await db.insert(schema.documents).values({
       ...base,
       fileName: 'rfp.pdf',
@@ -157,23 +185,7 @@ export async function createTenant(app: FastifyInstance, label: string): Promise
       changedAt: new Date(),
     }).returning();
     return {
-      rows: {
-        bid_facts: fact.id,
-        kickoff_items: kickoff.id,
-        schedule_activities: activity.id,
-        compliance_rows: compliance.id,
-        outline_items: outline.id,
-        personnel_requirements: requirement.id,
-        candidates: candidate.id,
-        resume_matches: match.id,
-        reviews: review.id,
-        review_assignments: assignment.id,
-        review_findings: finding.id,
-        production_items: production.id,
-        orals_items: oral.id,
-        lessons: lesson.id,
-      } satisfies Record<RowTableName, string>,
-      compliance2: compliance2.id,
+      ...seeded,
       documentId: document.id,
       jobId: job.id,
       amendmentId: amendment.id,

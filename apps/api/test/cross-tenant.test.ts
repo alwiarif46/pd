@@ -9,7 +9,7 @@ import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
 import { closeDb, getPool, schema, withOrg } from '@pd/core';
-import { as, createTenant, ROW_TABLES, TABS, type Tenant } from './helpers.js';
+import { as, createTenant, ROW_TABLES, seedBidRows, TABS, type Tenant } from './helpers.js';
 
 vi.mock('../src/queue.js', () => ({
   enqueueScan: vi.fn(async () => undefined),
@@ -177,6 +177,36 @@ describe.skipIf(Boolean(unavailable)).each(MODES)('cross-tenant access through t
     expect((await asA('DELETE', `/api/org/members/${b.memberUserId}`)).statusCode).toBe(404);
     const members = await asA('GET', '/api/org/members');
     expect(members.json<{ orgId: string }[]>().every((member) => member.orgId === a.orgId)).toBe(true);
+  });
+
+  it('returns 404 for a row of another bid in the same organization', async () => {
+    const created = await asA('POST', '/api/bids', { name: 'Bid a2', bidType: 'sled' });
+    expect(created.statusCode).toBe(201);
+    const bidA2 = created.json<{ id: string }>().id;
+    const a2 = await withOrg(a.orgId, (db) => seedBidRows(db, a.orgId, bidA2, 'a2'));
+    for (const table of ROW_TABLES) {
+      const url = `/api/bids/${a.bidId}/rows/${table}/${a2.rows[table]}`;
+      expect((await asA('GET', url)).statusCode, `GET ${table}`).toBe(404);
+      expect((await asA('PATCH', url, { fields: { status: 'moved', value: 'moved', done: true } })).statusCode, `PATCH ${table}`).toBe(404);
+      expect((await asA('DELETE', url)).statusCode, `DELETE ${table}`).toBe(404);
+      expect((await asA('GET', `/api/bids/${bidA2}/rows/${table}/${a2.rows[table]}`)).statusCode, `control ${table}`).toBe(200);
+    }
+    const ids = [a2.rows.compliance_rows, a2.compliance2];
+    expect((await asA('POST', `/api/bids/${a.bidId}/compliance/merge`, { ids })).statusCode).toBe(404);
+    expect((await asA('POST', `/api/bids/${a.bidId}/compliance/merge`, { ids: [a.rows.compliance_rows, a2.compliance2] })).statusCode).toBe(404);
+    expect((await asA('POST', `/api/bids/${a.bidId}/compliance/split`, { rowId: a2.rows.compliance_rows, at: 5 })).statusCode).toBe(404);
+    const rows = await withOrg(a.orgId, (db) => db.select().from(schema.complianceRows).where(eq(schema.complianceRows.bidId, bidA2)));
+    expect(rows.map((row) => row.requirementText).sort()).toEqual(['The offeror shall a2.', 'The offeror shall also a2.']);
+  });
+
+  it('keeps the one-organization rule whatever X-Org-Id says', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/org',
+      headers: { authorization: `Bearer ${a.token}`, 'x-org-id': b.orgId },
+      payload: { name: 'Second org' },
+    });
+    expect(response.statusCode).toBe(409);
   });
 
   it('does not let a user pick an organization they do not belong to', async () => {
