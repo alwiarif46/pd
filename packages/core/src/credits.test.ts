@@ -5,6 +5,8 @@ import {
   consumeCredit,
   fitsBidCap,
   freeAllowance,
+  periodAllowance,
+  periodContaining,
   releaseCredit,
   reserveCredit,
 } from './credits.ts';
@@ -82,4 +84,32 @@ test('consume and release move a reserved credit', () => {
 test('an upload that would pass the plan MB cap is refused', () => {
   assert.equal(fitsBidCap('free', 40 * 1024 * 1024, 20 * 1024 * 1024), false);
   assert.equal(fitsBidCap('starter', 40 * 1024 * 1024, 20 * 1024 * 1024), true);
+});
+
+test('paid allowances come from PLAN_LIMITS', () => {
+  assert.equal(periodAllowance('starter', { isFirstPeriod: true, returningToFree: false }), 10);
+  assert.equal(periodAllowance('growth', { isFirstPeriod: false, returningToFree: false }), 20);
+  assert.equal(periodAllowance('free', { isFirstPeriod: true, returningToFree: false }), 2);
+});
+
+test('periodContaining finds the clamped month that holds now', () => {
+  const anchor = new Date(Date.UTC(2026, 0, 31, 12));
+  const first = periodContaining(anchor, new Date(Date.UTC(2026, 1, 10)));
+  assert.equal(first.index, 0);
+  assert.equal(first.end.toISOString().slice(0, 10), '2026-02-28');
+  const third = periodContaining(anchor, new Date(Date.UTC(2026, 2, 31, 13)));
+  assert.equal(third.index, 2);
+  assert.equal(third.start.toISOString().slice(0, 10), '2026-03-31');
+  const second = periodContaining(anchor, new Date(Date.UTC(2026, 2, 31, 11)));
+  assert.equal(second.index, 1);
+  assert.equal(second.start.toISOString().slice(0, 10), '2026-02-28');
+});
+
+test('fitsBidCap refuses negative, zero, and fractional sizes', () => {
+  assert.equal(fitsBidCap('free', 0, -1), false);
+  assert.equal(fitsBidCap('free', 0, 0), false);
+  assert.equal(fitsBidCap('free', 0, 1.5), false);
+  assert.equal(fitsBidCap('free', -100, 10), false);
+  assert.equal(fitsBidCap('free', 0, 50 * 1024 * 1024), true);
+  assert.equal(fitsBidCap('free', 1, 50 * 1024 * 1024), false);
 });

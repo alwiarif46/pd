@@ -15,6 +15,13 @@
       "when": 1791999325802,
       "tag": "0001_tenant_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792006597521,
+      "tag": "0002_credits_and_cascades",
+      "breakpoints": true
     }
   ]
 }
