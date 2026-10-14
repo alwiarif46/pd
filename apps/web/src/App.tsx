@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { ApiError, api, setToken, token } from './legacy-api';
 import type { Bid, OrgPayload, TabId } from './models';
-import { Account, AuthPage, BidsHome, NewBid, Organization, Privacy } from './screens/Outside';
+import { AuthContainer } from './features/auth/AuthContainer';
+import { Account, BidsHome, NewBid, Organization, Privacy } from './screens/Outside';
 import { Workspace } from './screens/Workspace';
 
 type Route =
@@ -15,7 +16,7 @@ function isTab(value: string | undefined): value is TabId {
 }
 
 function parseRoute(): Route {
-  const parts = window.location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  const parts = window.location.hash.replace(/^#\/?/, '').split('?')[0].split('/').filter(Boolean);
   const [head, second, third] = parts;
   if (head === 'signup' || head === 'verify' || head === 'reset' || head === 'privacy') return { name: head };
   if (head === 'org') return { name: 'org' };
@@ -57,6 +58,13 @@ export default function App() {
     window.location.hash = '#/login';
   }
 
+  const isAuthRoute = route.name === 'login' || route.name === 'signup' || route.name === 'verify' || route.name === 'reset';
+  // Auth screens render outside `.app-shell` (v0 styles, no legacy CSS). Signed-out visitors
+  // see them everywhere except the privacy page.
+  if (isAuthRoute || (!signedIn && route.name !== 'privacy')) {
+    return <AuthContainer onSignedIn={() => { window.location.hash = '#/bids'; }} />;
+  }
+
   const credits = org?.credits;
   const left = credits ? credits.allowed - credits.used - credits.reserved : null;
 
@@ -74,13 +82,7 @@ export default function App() {
           </nav>
         ) : null}
       </header>
-      {route.name === 'login' || route.name === 'signup' || route.name === 'verify' || route.name === 'reset' ? (
-        <AuthPage mode={route.name} onDone={() => { window.location.hash = '#/bids'; }} />
-      ) : null}
       {route.name === 'privacy' ? <Privacy /> : null}
-      {!signedIn && route.name !== 'login' && route.name !== 'signup' && route.name !== 'verify' && route.name !== 'reset' && route.name !== 'privacy' ? (
-        <AuthPage mode="login" onDone={() => { window.location.hash = '#/bids'; }} />
-      ) : null}
       {signedIn && route.name === 'bids' ? <BidsHome onOpen={(id) => { window.location.hash = `#/bids/${id}/overview`; }} /> : null}
       {signedIn && route.name === 'new' ? <NewBid onCreated={(id) => { window.location.hash = `#/bids/${id}/documents`; }} /> : null}
       {signedIn && route.name === 'org' ? <Organization /> : null}
