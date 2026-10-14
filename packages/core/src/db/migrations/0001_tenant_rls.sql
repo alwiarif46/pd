@@ -126,16 +126,21 @@ CREATE POLICY tenant_isolation ON public.organizations AS PERMISSIVE FOR ALL TO 
 -- pd_system owns one SECURITY DEFINER function that returns only (org_id, role) for one
 -- user id. pd_system may read just those memberships columns, through its own policy.
 -- pd_app may execute the function but cannot become pd_system.
+-- The migrator owns memberships, so it grants pd_system's access and policy itself. The
+-- schema contents are created as pd_system (SET ROLE, which the role block made possible),
+-- so a migrator without INHERIT on pd_system needs no rights in that schema.
 CREATE SCHEMA IF NOT EXISTS pd_system AUTHORIZATION pd_system;
---> statement-breakpoint
-REVOKE ALL ON SCHEMA pd_system FROM PUBLIC;
---> statement-breakpoint
-GRANT USAGE ON SCHEMA pd_system TO pd_app;
 --> statement-breakpoint
 GRANT SELECT (org_id, user_id, role, created_at) ON public.memberships TO pd_system;
 --> statement-breakpoint
 CREATE POLICY system_membership_lookup ON public.memberships AS PERMISSIVE FOR SELECT TO pd_system
   USING (true);
+--> statement-breakpoint
+SET ROLE pd_system;
+--> statement-breakpoint
+REVOKE ALL ON SCHEMA pd_system FROM PUBLIC;
+--> statement-breakpoint
+GRANT USAGE ON SCHEMA pd_system TO pd_app;
 --> statement-breakpoint
 CREATE FUNCTION pd_system.user_memberships(p_user_id uuid)
   RETURNS TABLE (org_id uuid, role text)
@@ -150,8 +155,8 @@ AS $$
   ORDER BY m.created_at, m.org_id
 $$;
 --> statement-breakpoint
-ALTER FUNCTION pd_system.user_memberships(uuid) OWNER TO pd_system;
---> statement-breakpoint
 REVOKE ALL ON FUNCTION pd_system.user_memberships(uuid) FROM PUBLIC;
 --> statement-breakpoint
 GRANT EXECUTE ON FUNCTION pd_system.user_memberships(uuid) TO pd_app;
+--> statement-breakpoint
+RESET ROLE;
