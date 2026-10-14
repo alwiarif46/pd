@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { ApiError, api, uploadFile } from '../api';
+import { ApiError, api, uploadFile } from '../legacy-api';
 import { Dialog } from '../components/Dialog';
 import { RowDetail } from '../components/RowDetail';
 import { SourceViewer } from '../components/SourceViewer';

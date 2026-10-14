@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ApiError, api, setToken, token } from './api';
+import { ApiError, api, setToken, token } from './legacy-api';
 import type { Bid, OrgPayload, TabId } from './models';
 import { Account, AuthPage, BidsHome, NewBid, Organization, Privacy } from './screens/Outside';
 import { Workspace } from './screens/Workspace';

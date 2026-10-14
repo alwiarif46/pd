@@ -49,9 +49,24 @@ jobs:
       - run: pnpm install
       - run: pnpm build
 
+  test-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install
+      - run: pnpm --filter @pd/web test
+
   test-api:
-    # Tenant-isolation tests against a real Postgres. The tests migrate a fresh database as
-    # the superuser below, then connect as pd_app so row-level security is exercised.
+    # Tenant-isolation tests against a real Postgres. With the superuser below, the tests
+    # create a non-superuser owner role, migrate a fresh database as that owner, then connect
+    # as pd_app so row-level security is exercised.
     runs-on: ubuntu-latest
     services:
       postgres:

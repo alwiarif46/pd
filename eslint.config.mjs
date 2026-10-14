@@ -38,6 +38,17 @@ export default tseslint.config(
     },
   },
   {
+    // v0 screens integrated as-is (CLAUDE.md: keep v0's code so re-integration is a clean diff).
+    // Changes here go through v0, so only rules that flag real bugs apply.
+    files: ['apps/web/src/ui/**'],
+    rules: {
+      // False positive on ref objects passed to custom props such as `inputRef={refs.password}`.
+      'react-hooks/refs': 'off',
+      // v0 puts small helpers beside components; this only affects dev hot reload.
+      'react-refresh/only-export-components': 'off',
+    },
+  },
+  {
     // Legacy hand-written screens, retired as v0 screens replace them (CLAUDE.md, "Front-end setup").
     // Only the hooks rule that catches real bugs; the compiler-era rules apply to new code.
     files: [
