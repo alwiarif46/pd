@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, boolean, integer, jsonb, decimal } from 'drizzle-orm/pg-core';
+import { type AnyPgColumn, pgTable, uuid, text, timestamp, boolean, integer, jsonb, decimal } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
 // Base columns for all tables
@@ -419,7 +419,7 @@ export const outlineItems = pgTable('outline_items', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
   bidId: uuid('bid_id').notNull().references(() => bids.id),
-  parentId: uuid('parent_id').references(() => outlineItems.id),
+  parentId: uuid('parent_id').references((): AnyPgColumn => outlineItems.id),
   number: text('number'),
   title: text('title').notNull(),
   pageLimit: integer('page_limit'),

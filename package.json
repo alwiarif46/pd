@@ -5,7 +5,8 @@
   "description": "Proposal Development Tool for government contractors",
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "evals"
   ],
   "scripts": {
     "dev": "turbo run dev",

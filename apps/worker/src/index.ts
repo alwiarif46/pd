@@ -1,39 +1,37 @@
 import { Worker } from 'bullmq';
-import Redis from 'ioredis';
+import { processAmendmentJob, processCompliance, processDates, processOverview } from './ai-jobs.js';
+import { processClassify } from './classify-job.js';
+import { processFile } from './file-job.js';
+import { processMarking } from './marking-job.js';
+import { redisOptions, type JobPayload } from './redis.js';
+import { processScan } from './scan.js';
 
-const connection = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: Number(process.env.REDIS_PORT) || 6379,
-});
+function start(name: string, handler: (payload: JobPayload) => Promise<void>): Worker<JobPayload> {
+  return new Worker<JobPayload>(name, async (job) => {
+    await handler(job.data);
+  }, { connection: redisOptions });
+}
 
-console.log('Worker starting...');
-
-// Scan job
-const scanWorker = new Worker(
-  'scan',
-  async (job) => {
-    console.log('Processing scan job:', job.id);
-    // TODO: Implement ClamAV scan
-    return { success: true };
-  },
-  { connection }
-);
-
-// File processing job
-const fileWorker = new Worker(
-  'file',
-  async (job) => {
-    console.log('Processing file job:', job.id);
-    // TODO: Implement file processing via sandbox
-    return { success: true };
-  },
-  { connection }
-);
+const workers = [
+  start('scan', processScan),
+  start('file', processFile),
+  start('marking', processMarking),
+  start('classify', processClassify),
+  start('ai:compliance', processCompliance),
+  start('ai:dates', processDates),
+  start('ai:overview', processOverview),
+  start('ai:amendment', processAmendmentJob),
+];
 
 console.log('Worker running');
 
-process.on('SIGTERM', async () => {
-  await scanWorker.close();
-  await fileWorker.close();
-  await connection.quit();
+async function shutdown(): Promise<void> {
+  await Promise.all(workers.map((worker) => worker.close()));
+}
+
+process.on('SIGTERM', () => {
+  shutdown().catch((error: unknown) => {
+    console.error(error);
+    process.exit(1);
+  });
 });

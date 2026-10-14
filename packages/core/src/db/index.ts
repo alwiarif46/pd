@@ -1,28 +1,39 @@
-import { drizzle } from 'drizzle-orm/pg-core';
+import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import * as schema from './schema';
 
 const { Pool } = pg;
 
-let pool: Pool | null = null;
-let db: ReturnType<typeof drizzle> | null = null;
+export type AppDatabase = NodePgDatabase<typeof schema>;
 
-export function getDb(connectionString?: string) {
-  if (!db) {
+let pool: pg.Pool | null = null;
+let db: AppDatabase | null = null;
+
+export function getPool(connectionString?: string): pg.Pool {
+  if (!pool) {
     pool = new Pool({
       connectionString: connectionString || process.env.DATABASE_URL,
     });
-    db = drizzle(pool, { schema });
+  }
+  return pool;
+}
+
+export function getDb(connectionString?: string): AppDatabase {
+  if (!db) {
+    db = drizzle(getPool(connectionString), { schema });
   }
   return db;
 }
 
-export function closeDb() {
-  if (pool) {
-    pool.end();
-    pool = null;
-    db = null;
+export function closeDb(): Promise<void> {
+  const current = pool;
+  pool = null;
+  db = null;
+  if (!current) {
+    return Promise.resolve();
   }
+  return current.end();
 }
 
 export { schema };
+export { withOrg } from './tenant';

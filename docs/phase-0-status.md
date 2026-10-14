@@ -1,7 +1,29 @@
 # Phase 0 Status
 
 **Updated:** 14 Oct 2026
-**Status:** Local setup complete, external tasks pending
+**Status:** Backend through the AI pipeline is in the repo. The plan 05 screens are in `apps/web`. Production is not live. Stripe, archive, and paid-tab AI jobs are not started.
+
+## Code now in the repo
+
+- Quote check at 95% on the cited page or the next page. The eval harness uses a separate 80% overlap, both ways.
+- Marking check for the plan 04 list. Classified markings reject the file. Other hits wait for confirmation.
+- Compliance passes 1 to 6 and amendment diff run on page text. They do not open files or talk to Postgres.
+- Sandbox image is Debian and extracts in the container. The worker passes a path to ClamAV and to the sandbox runner.
+- Auth, organizations, bids, chunked uploads, documents, jobs, and amendment confirm/reject are API routes. Email and SMS are written to the log. There is no Stripe.
+- `evals` scores `evals/golden-set/example.json` with a fake provider when `DEEPINFRA_API_KEY` is unset. That score is not a model selection.
+
+## Still external
+
+- OVH VPS, Cloudflare, and `https://pd.shaavir.com/health`
+- Telnyx 10DLC or toll-free verification
+- Written zero-retention terms from DeepInfra
+- The real golden set of 5 solicitations
+- `DEEPINFRA_API_KEY` and the live benchmark
+
+## Not started
+
+- Stripe Checkout. The Organization screen shows the billing button disabled until then.
+- Archive, retention, and paid-tab AI jobs. The paid tabs render, and stay locked on the free plan.
 
 ## Phase 0 Requirements (from 08-build-phases.md)
 
@@ -145,17 +167,14 @@ From 00-overview.md, these are still open:
 
 ## Next Steps
 
-### Immediate (can proceed now)
-1. Complete Phase 1 locally: model test harness
-2. Implement document processing in sandbox
-3. Write skill instructions for compliance-matrix and bid-summary
+The plan 05 screens live in `apps/web`: sign-up, bids, the bid workspace, and the shared row slider and source viewer. Stripe and archive restore are still out of this build. Restore sets the file to "restoring" and stops there.
 
 ### Before Production
-1. Complete all pending external tasks above
-2. Run deployment on OVH VPS
-3. Verify health endpoint through Cloudflare
-4. Confirm DeepInfra terms or limit golden set
-5. Assemble golden set documents
+1. Complete the pending external tasks above
+2. Run deployment on the OVH VPS
+3. Verify the health endpoint through Cloudflare
+4. Confirm DeepInfra terms or limit the golden set
+5. Assemble the golden set documents and run the live benchmark
 
 ### Decision Points
 1. Staging VPS: separate small VPS or skip?

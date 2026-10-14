@@ -1,33 +1,28 @@
-FROM node:20-alpine
+FROM node:20-bookworm-slim
 
-# Install dependencies for file processing
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     qpdf \
     poppler-utils \
-    libreoffice \
+    libreoffice-writer \
     tesseract-ocr \
     tesseract-ocr-eng \
-    tesseract-ocr-data \
-    python3 \
-    py3-pip
-
-# Install OCRmyPDF
-RUN pip3 install --no-cache-dir ocrmypdf
+    ghostscript \
+    ocrmypdf \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml* ./
-RUN npm install -g pnpm && pnpm install --frozen-lockfile --prod
+COPY package.json ./
+RUN npm install -g pnpm && pnpm install
 
 COPY . .
 RUN pnpm build
 
-# Non-root user
-RUN addgroup -g 1000 sandbox && \
-    adduser -D -u 1000 -G sandbox sandbox
-USER sandbox
+RUN mkdir -p /input /output \
+    && usermod -l sandbox node \
+    && groupmod -n sandbox node \
+    && chown -R sandbox:sandbox /input /output /app
 
-# Input and output directories
-RUN mkdir -p /input /output
+USER sandbox
 
 ENTRYPOINT ["node", "dist/index.js"]

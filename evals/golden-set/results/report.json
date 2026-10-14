@@ -1,0 +1,103 @@
+{
+  "goldenSet": [
+    "doc-001"
+  ],
+  "heldOut": [
+    "doc-001"
+  ],
+  "tuning": [],
+  "results": [
+    {
+      "documentId": "doc-001",
+      "documentName": "Sample Federal Solicitation",
+      "matches": [
+        {
+          "goldenReq": {
+            "id": "req-001",
+            "sectionRef": "L.2",
+            "requirementText": "The offeror shall submit a technical proposal not exceeding 50 pages.",
+            "instrRef": "L.2.1",
+            "evalRef": "M.2.1",
+            "responseSection": "Technical Volume",
+            "sourcePage": 5,
+            "sourcePageEnd": 5,
+            "sourceQuote": "The offeror shall submit a technical proposal not exceeding 50 pages.",
+            "reqType": "shall"
+          },
+          "extractedReq": {
+            "id": "L.2-01",
+            "sectionRef": "L.2",
+            "requirementText": "The offeror shall submit a technical proposal not exceeding 50 pages.",
+            "sourcePage": 5,
+            "sourceQuote": "The offeror shall submit a technical proposal not exceeding 50 pages.",
+            "reqType": "shall",
+            "confidence": 0.95,
+            "amendmentNo": 0,
+            "origin": "ai",
+            "flags": [],
+            "supersedeStatus": "active",
+            "sourcePageEnd": 5
+          },
+          "matchType": "exact",
+          "overlapScore": 1,
+          "quoteVerified": true,
+          "quoteMissing": false
+        },
+        {
+          "goldenReq": {
+            "id": "req-002",
+            "sectionRef": "L.3",
+            "requirementText": "All offerors must provide past performance references from at least 3 clients.",
+            "instrRef": "L.3.1",
+            "evalRef": "M.3.1",
+            "responseSection": "Past Performance",
+            "sourcePage": 7,
+            "sourcePageEnd": 7,
+            "sourceQuote": "All offerors must provide past performance references from at least 3 clients.",
+            "reqType": "must"
+          },
+          "extractedReq": {
+            "id": "L.3-01",
+            "sectionRef": "L.3",
+            "requirementText": "All offerors must provide past performance references from at least 3 clients.",
+            "sourcePage": 7,
+            "sourceQuote": "All offerors must provide past performance references from at least 3 clients.",
+            "reqType": "must",
+            "confidence": 0.95,
+            "amendmentNo": 0,
+            "origin": "ai",
+            "flags": [],
+            "supersedeStatus": "active",
+            "sourcePageEnd": 7
+          },
+          "matchType": "exact",
+          "overlapScore": 1,
+          "quoteVerified": true,
+          "quoteMissing": false
+        }
+      ],
+      "metrics": {
+        "recall": 1,
+        "precision": 1,
+        "dueDateCorrect": true,
+        "quoteCheckFailureRate": 0,
+        "droppedRows": 0,
+        "totalGolden": 2,
+        "totalExtracted": 2,
+        "truePositives": 2,
+        "falsePositives": 0,
+        "falseNegatives": 0
+      },
+      "processingTimeMs": 4,
+      "tokensUsed": 0,
+      "costUsd": 0
+    }
+  ],
+  "benchmarks": [],
+  "summary": {
+    "bestModel": "fixture",
+    "bestRecall": 1,
+    "bestPrecision": 1,
+    "recommendation": "Scored the fixture with a fake provider. This is not a model selection. Set DEEPINFRA_API_KEY to run the live benchmark."
+  }
+}

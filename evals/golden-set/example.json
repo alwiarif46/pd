@@ -1,0 +1,39 @@
+[
+  {
+    "id": "doc-001",
+    "name": "Sample Federal Solicitation",
+    "source": "federal",
+    "filePath": "/path/to/document.pdf",
+    "humanMatrix": {
+      "requirements": [
+        {
+          "id": "req-001",
+          "sectionRef": "L.2",
+          "requirementText": "The offeror shall submit a technical proposal not exceeding 50 pages.",
+          "instrRef": "L.2.1",
+          "evalRef": "M.2.1",
+          "responseSection": "Technical Volume",
+          "sourcePage": 5,
+          "sourcePageEnd": 5,
+          "sourceQuote": "The offeror shall submit a technical proposal not exceeding 50 pages.",
+          "reqType": "shall"
+        },
+        {
+          "id": "req-002",
+          "sectionRef": "L.3",
+          "requirementText": "All offerors must provide past performance references from at least 3 clients.",
+          "instrRef": "L.3.1",
+          "evalRef": "M.3.1",
+          "responseSection": "Past Performance",
+          "sourcePage": 7,
+          "sourcePageEnd": 7,
+          "sourceQuote": "All offerors must provide past performance references from at least 3 clients.",
+          "reqType": "must"
+        }
+      ],
+      "dueDate": "2026-12-15",
+      "dueTime": "17:00",
+      "timeZone": "America/New_York"
+    }
+  }
+]
