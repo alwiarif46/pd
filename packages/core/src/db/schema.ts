@@ -1,4 +1,4 @@
-import { type AnyPgColumn, pgTable, uuid, text, timestamp, boolean, integer, jsonb, decimal } from 'drizzle-orm/pg-core';
+import { type AnyPgColumn, pgTable, uuid, text, timestamp, boolean, integer, jsonb, decimal, index } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
 // Base columns for all tables
@@ -85,11 +85,16 @@ export const rfpCredits = pgTable('rfp_credits', {
 
 export const phoneCodes = pgTable('phone_codes', {
   ...baseColumns,
+  /** The account the code was sent for. verify-phone accepts only that account's latest code. */
+  userId: uuid('user_id').references(() => users.id),
   phoneE164: text('phone_e164').notNull(),
   codeHash: text('code_hash').notNull(),
   expiresAt: timestamp('expires_at').notNull(),
   attempts: integer('attempts').notNull().default(0),
-});
+  usedAt: timestamp('used_at'),
+}, (table) => ({
+  userCreatedIdx: index('phone_codes_user_id_created_at_idx').on(table.userId, table.createdAt),
+}));
 
 export const stripeEvents = pgTable('stripe_events', {
   ...baseColumns,
