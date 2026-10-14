@@ -65,8 +65,7 @@ async function runInSandbox(
       '-v',
       `${outputDir}:/output`,
       'sandbox',
-      'node',
-      'dist/index.js',
+      // The image ENTRYPOINT is `node dist/index.js`; these are its arguments.
       mountedInput,
       '/output',
     ];
