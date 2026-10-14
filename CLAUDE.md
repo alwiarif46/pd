@@ -1,0 +1,36 @@
+# PD web app
+
+## Who edits what
+- `design/v0/**` is v0's drop folder. Read it, never edit it. It is outside every package and excluded from the build, type-check, lint, and tests. When ESLint or Vitest is added, ignore `design/**` there too.
+- `apps/web/src/ui/**` holds screens you integrate from `design/v0/`. During integration: strip Next.js imports and `"use client"`,
+  remove any fetch or router code, map types to `@/types`, and keep markup, class names, and styles exactly as v0 made them,
+  so a later re-integration is a clean diff. Do not restyle.
+- `apps/web/src/features/**`, `schedule/**`, `api/**`, and everything under `apps/api` and `apps/worker` is yours.
+- UI components take data as props and report user actions through callbacks. They never fetch, route, or store.
+- `apps/web/src/components/ui/**` is shadcn/ui, added with the shadcn CLI (`apps/web/components.json`). Do not hand-edit it, except that `sonner.tsx` has `next-themes` removed and its colors mapped to the `--color-*` tokens. The CLI wrote `from "cn"` imports; they were changed to `@/lib/utils`, so check this after each CLI run.
+
+## Integration task, when asked
+1. Read `design/v0/<screen>/`.
+2. Write or update `apps/web/src/ui/<screen>/` as above.
+3. Write or keep the container in `apps/web/src/features/<screen>/`. On a re-integration, the container does not change
+   unless the props contract changed.
+4. Run type-check and tests. Commit as `ui: <screen> from v0` and `feature: <screen> container` separately.
+
+## Front-end setup
+- React 19, Vite 5, Tailwind v4 through `@tailwindcss/vite`. There is no `tailwind.config.ts`.
+- Design tokens: `apps/web/src/styles/tokens.css` (`@theme`). Entry: `apps/web/src/styles/globals.css`.
+- Tailwind preflight is off and Tailwind scans only `src/ui`, `src/features`, `src/components/ui`, and `src/lib`. Reason: the legacy screens in `src/screens` and `src/components/*.tsx` are styled by `src/index.css` and must not change. Do not add Tailwind classes to legacy files. Turn preflight on only when the legacy screens are retired.
+- Dark variants apply only under a `.dark` class, which the app does not set.
+- `@/` maps to `apps/web/src`.
+- Commands: `pnpm --filter @pd/web dev | typecheck | build`.
+
+## Conventions
+- TypeScript strict. Shared types live in `apps/web/src/types` and `packages/core`.
+- Every AI-extracted row carries `sourcePage` and `sourceQuote`. Never render a row without a source control.
+- Every tab handles: no solicitation, processing, failed, empty, locked (free plan), out of credits.
+- Dates are ISO strings in data; display formatting happens in ui components.
+- Tenant safety: the API sets `app.org_id` per request. Never query without it.
+- The default branch is `master`. v0 syncs to `v0-ui`.
+
+## Plans
+- Product and build plans are in `docs/plans/`, the only copy (`plans/` holds just a pointer). Read `00-overview.md`, `05-ui.md`, and `09-ui-workflow.md` before UI work.

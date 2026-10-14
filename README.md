@@ -35,7 +35,8 @@ pd/
 ├── skills/           AI skill instructions
 ├── evals/            Model evaluation harness
 ├── infra/            Docker Compose, nginx configs
-└── docs/plans/       Project plans
+├── design/v0/        v0 drop folder (not built)
+└── docs/plans/       Project plans (only copy)
 ```
 
 ## Development
