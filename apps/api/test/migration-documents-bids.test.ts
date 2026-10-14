@@ -75,16 +75,42 @@ describe.skipIf(Boolean(unavailable))('0005_documents_and_bids on a database wit
       const noCopies = await doc('no-copies', 'restoring');
       const working = await doc('working', 'restoring');
       const archived = await doc('archived', 'archived');
-      const archive = async (documentId: string, restoreStatus: string | null, purged = false) => (await client.query<{ id: string }>(
-        `insert into archive_objects (org_id, document_id, object_type, archive_key, archived_at, restore_status, purged_at)
-         values ($1, $2, 'original', $3, now(), $4, $5) returning id`,
-        [orgId, documentId, randomUUID(), restoreStatus, purged ? new Date() : null],
+      const purgedOnly = await doc('purged-only', 'restoring');
+      const expiredOnly = await doc('expired-only', 'restoring');
+      const archive = async (documentId: string, restoreStatus: string | null, gone: 'purged' | 'expired' | null = null) => (await client.query<{ id: string }>(
+        `insert into archive_objects (org_id, document_id, object_type, archive_key, archived_at, restore_status, purged_at, expires_at)
+         values ($1, $2, 'original', $3, now(), $4, $5, $6) returning id`,
+        [
+          orgId, documentId, randomUUID(), restoreStatus,
+          gone === 'purged' ? new Date() : null,
+          gone === 'expired' ? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().replace('Z', '') : null,
+        ],
       )).rows[0].id;
       const pendingCopy = await archive(pending, 'none');
       const pendingNull = await archive(pending, null);
-      const pendingPurged = await archive(pending, 'none', true);
+      const pendingPurged = await archive(pending, 'none', 'purged');
+      const pendingExpired = await archive(pending, 'none', 'expired');
       const workingCopy = await archive(working, 'restoring');
       const archivedCopy = await archive(archived, 'none');
+      await archive(purgedOnly, 'none', 'purged');
+      await archive(expiredOnly, 'none', 'expired');
+
+      // A busy table (here: a reader holding documents, as the running api would) makes the
+      // migration give up after lock_timeout and roll back, instead of queueing requests behind it.
+      const reader = new pg.Client({ connectionString: url.toString() });
+      await reader.connect();
+      try {
+        await reader.query('begin');
+        await reader.query('lock table documents in access share mode');
+        const started = Date.now();
+        await expect(migrate(drizzle(migrator), { migrationsFolder })).rejects.toThrow(/lock timeout/);
+        expect(Date.now() - started).toBeLessThan(20_000);
+        await reader.query('rollback');
+      } finally {
+        await reader.end();
+      }
+      const rolledBack = await client.query("select 1 from information_schema.columns where table_name = 'documents' and column_name = 'marking_page'");
+      expect(rolledBack.rowCount).toBe(0);
 
       await migrate(drizzle(migrator), { migrationsFolder });
 
@@ -111,7 +137,10 @@ describe.skipIf(Boolean(unavailable))('0005_documents_and_bids on a database wit
       );
       const statusOf = (id: string) => docs.rows.find((row) => row.id === id)!.live_status;
       expect(statusOf(pending)).toBe('restore_requested');
-      expect(statusOf(noCopies)).toBe('restore_requested');
+      // Nothing to restore from: back to archived.
+      expect(statusOf(noCopies)).toBe('archived');
+      expect(statusOf(purgedOnly)).toBe('archived');
+      expect(statusOf(expiredOnly)).toBe('archived');
       expect(statusOf(working)).toBe('restoring');
       expect(statusOf(archived)).toBe('archived');
 
@@ -125,7 +154,7 @@ describe.skipIf(Boolean(unavailable))('0005_documents_and_bids on a database wit
         expect(copy(id).restore_requested_at).not.toBeNull();
       }
       expect(copy(pendingPurged).restore_status).toBe('none');
-      expect(copy(workingCopy).restore_status).toBe('restoring');
+      expect(copy(pendingExpired).restore_status).toBe('none');      expect(copy(workingCopy).restore_status).toBe('restoring');
       expect(copy(archivedCopy).restore_status).toBe('none');
 
       const column = await client.query("select 1 from information_schema.columns where table_name = 'documents' and column_name = 'marking_page'");
