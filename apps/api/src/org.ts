@@ -1,6 +1,7 @@
-import { eq } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { getDb, PLAN_LIMITS, type Plan, schema, withOrg } from '@pd/core';
+import { isUuid, PLAN_LIMITS, type Plan, schema, withOrg } from '@pd/core';
 import { requireAuth, requireUser } from './context.js';
 import { hashToken, isWorkEmail, logOutOfBand, newToken } from './security.js';
 
@@ -18,16 +19,22 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     if (!name) {
       return reply.code(400).send({ error: 'Organization name is required' });
     }
-    const db = getDb();
-    const [org] = await db.insert(schema.organizations).values({
-      name,
-      plan: 'free',
-      planStatus: 'active',
-    }).returning();
-    await db.insert(schema.memberships).values({
-      orgId: org.id,
-      userId: auth.userId,
-      role: 'owner',
+    // The new organization's id is chosen here so its first membership is written under
+    // row-level security with app.org_id already set to it.
+    const orgId = randomUUID();
+    const org = await withOrg(orgId, async (db) => {
+      const [created] = await db.insert(schema.organizations).values({
+        id: orgId,
+        name,
+        plan: 'free',
+        planStatus: 'active',
+      }).returning();
+      await db.insert(schema.memberships).values({
+        orgId,
+        userId: auth.userId,
+        role: 'owner',
+      });
+      return created;
     });
     return reply.code(201).send({ id: org.id, name: org.name, plan: org.plan });
   });
@@ -109,8 +116,17 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     if (userId === auth.userId) {
       return reply.code(400).send({ error: 'Transfer ownership before leaving' });
     }
+    if (!isUuid(userId)) {
+      return reply.code(404).send({ error: 'Member not found' });
+    }
     return withOrg(auth.orgId!, async (db) => {
-      await db.delete(schema.memberships).where(eq(schema.memberships.userId, userId));
+      const removed = await db.delete(schema.memberships).where(and(
+        eq(schema.memberships.userId, userId),
+        eq(schema.memberships.orgId, auth.orgId!),
+      )).returning({ id: schema.memberships.id });
+      if (removed.length === 0) {
+        return reply.code(404).send({ error: 'Member not found' });
+      }
       return { ok: true };
     });
   });
