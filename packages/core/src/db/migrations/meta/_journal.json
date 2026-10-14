@@ -36,6 +36,13 @@
       "when": 1792008270621,
       "tag": "0004_archive_and_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792015758185,
+      "tag": "0006_tab_rows",
+      "breakpoints": true
     }
   ]
 }
