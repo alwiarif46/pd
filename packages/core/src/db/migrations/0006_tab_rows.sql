@@ -127,7 +127,7 @@ FROM (
   SELECT "id", row_number() OVER (
     PARTITION BY "bid_id", "parent_id"
     ORDER BY
-      ("number" ~ '^[0-9]{1,9}(\.[0-9]{1,9})*$') DESC,
+      coalesce("number" ~ '^[0-9]{1,9}(\.[0-9]{1,9})*$', false) DESC,
       CASE WHEN "number" ~ '^[0-9]{1,9}(\.[0-9]{1,9})*$' THEN string_to_array("number", '.')::int[] END,
       "number",
       "created_at",
