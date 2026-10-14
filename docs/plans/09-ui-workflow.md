@@ -1,17 +1,17 @@
 # 09 — UI Workflow: v0, Claude Code, Cursor
 
-**Status:** Draft v2 · 14 Oct 2026
+**Status:** Draft v3 · 14 Oct 2026
 
 v0 builds the screens into a drop folder. Claude Code integrates them into the app and builds everything behind them. Cursor edits the app. v0 is connected to the GitHub repo and reads the plans from it, so the drop folder is the fence: v0 writes nowhere else, and the app never builds from it.
 
 ## 1. Setup (Claude Code, once)
 
 1. Create the project: Vite + React + TypeScript in `apps/web`.
-2. Install Tailwind and shadcn/ui, then add the base components v0 relies on: `button`, `input`, `select`, `checkbox`, `table`, `dialog`, `sheet`, `tabs`, `badge`, `dropdown-menu`, `tooltip`, `toast`.
-3. Put the design tokens in `tailwind.config.ts` and `src/styles/tokens.css` (section 4).
-4. Create the folders in section 2, the `CLAUDE.md` in section 3, and the `design/v0/README.md` in section 3.
-5. Exclude `design/` from the build, lint, type-check, and tests (`tsconfig` exclude, ESLint ignore, Vitest exclude), so files v0 generates can never fail CI.
-6. In v0's GitHub settings, point the sync at a branch named `v0-ui`, never `main`.
+2. Install Tailwind v4 (`@tailwindcss/vite`) and shadcn/ui (primitives in `src/components/ui/`), then add the base components v0 relies on: `button`, `input`, `label`, `select`, `checkbox`, `table`, `dialog`, `sheet`, `tabs`, `badge`, `dropdown-menu`, `tooltip`, `sonner` (shadcn's replacement for `toast`). Use React 19 (current shadcn components need it).
+3. Put the design tokens in `src/styles/tokens.css` as a Tailwind v4 `@theme` block (section 4). Tailwind v4 has no `tailwind.config.ts`. Preflight stays off until the legacy screens are retired.
+4. Create the folders in section 2, then `CLAUDE.md`, `AGENTS.md`, and `design/v0/README.md` (section 3).
+5. Exclude `design/` from the build, lint, type-check, and tests. It sits at the repo root, outside every package, so package builds, `tsc`, Vite, Tailwind, and Turbo never see it; the root `tsconfig.json` excludes it; ESLint and Vitest must ignore it when they are added. Files v0 generates can then never fail CI.
+6. In v0's GitHub settings, point the sync at a branch named `v0-ui`, never `master`.
 
 ## 2. Folder rules
 
@@ -35,6 +35,8 @@ repo/
     │   ├── documents/ DocumentsPanel
     │   ├── settings/  BidSettings
     │   └── common/    ProcessingBanner, EmptyState, FilterBar, SourceLink
+    ├── components/ui/ shadcn/ui primitives, added by the shadcn CLI. Not edited by hand.
+    ├── styles/   globals.css (Tailwind entry), tokens.css
     ├── features/  Claude Code. One container per screen: loads data, holds state, calls the API, renders the ui component.
     ├── schedule/  Claude Code. Port of the offline Proposal Schedule Builder. Not v0.
     ├── api/       Claude Code. Typed client for the Fastify API.
@@ -49,59 +51,27 @@ Who writes where:
 | `apps/web/src/ui/` | Never | Writes during integration; styling kept as v0 made it | Small fixes |
 | Everything else | Never | Writes | Edits |
 
-## 3. CLAUDE.md (put at the repo root)
+## 3. Repo instruction files
 
-```markdown
-# PD web app
+- `/CLAUDE.md`: rules for Claude Code and integration.
+- `/AGENTS.md`: short rules for v0.
+- `/design/v0/README.md`: drop-folder rules v0 sees.
 
-## Who edits what
-- `design/v0/**` is v0's drop folder. Read it, never edit it. It is excluded from the build.
-- `apps/web/src/ui/**` holds screens you integrate from `design/v0/`. During integration: strip Next.js imports,
-  remove any fetch or router code, map types to `@/types`, and keep markup, class names, and styles exactly as v0 made them,
-  so a later re-integration is a clean diff. Do not restyle.
-- `apps/web/src/features/**`, `schedule/**`, `api/**`, and everything under `apps/api` and `apps/worker` is yours.
-- UI components take data as props and report user actions through callbacks. They never fetch, route, or store.
-
-## Integration task, when asked
-1. Read `design/v0/<screen>/`.
-2. Write or update `apps/web/src/ui/<screen>/` as above.
-3. Write or keep the container in `apps/web/src/features/<screen>/`. On a re-integration, the container does not change
-   unless the props contract changed.
-4. Run type-check and tests. Commit as `ui: <screen> from v0` and `feature: <screen> container` separately.
-
-## Conventions
-- TypeScript strict. Shared types live in `apps/web/src/types` and `packages/core`.
-- Every AI-extracted row carries `sourcePage` and `sourceQuote`. Never render a row without a source control.
-- Every tab handles: no solicitation, processing, failed, empty, locked (free plan), out of credits.
-- Dates are ISO strings in data; display formatting happens in ui components.
-- Tenant safety: the API sets `app.org_id` per request. Never query without it.
-
-## Plans
-- Product and build plans are in `docs/plans/` (copied from C:\Tools\PD\plans). Read `00-overview.md`, `05-ui.md`, and `09-ui-workflow.md` before UI work.
-```
-
-Also put this `design/v0/README.md` in the repo so v0 sees it:
-
-```markdown
-# v0 drop folder
-Write every file for a screen under `design/v0/<screen>/`. Touch nothing outside this folder.
-Build presentational components only: props in, callbacks out, sample data as constants, no fetching, no routing, no global state.
-Read the screen description in `docs/plans/05-ui.md` and the props contract in `docs/plans/09-ui-workflow.md` section 5.
-Shared types (`Tab`, `ProcessingState`, `SourceLinkProps`) already exist; import them from `@/types`, do not redefine them.
-```
+The repo files are the source. This plan does not copy them, so they cannot drift.
 
 ## 4. Design tokens for v0
 
 Paste this at the start of every v0 chat, then name the screen, point v0 at its section in the plans, and tell it the drop folder.
 
 ```
-Design system for the Shaavir PD app. Plain React + Vite + TypeScript, Tailwind, shadcn/ui. No Next.js imports.
+Design system for the Shaavir PD app. Plain React + Vite + TypeScript, Tailwind v4, shadcn/ui. No Next.js imports.
 Colors: ink #1C2A3A (text, top bar), canvas #EBEFF4 (page), paper #FFFFFF (cards), line #D5DBE3, muted text #5B6878,
 accent #1F4E79 (primary buttons), due red #B42318, today blue #1F6FEB, weekend #F3F5F8, holiday #FFF4DC, warning #B54708.
 Color team colors: Blue #2F6FD6, Pink #E58AAE, Red #C62828, Green #3C9A4A, Gold #D4A017, White Glove #E9ECF0.
 Type: UI text "Segoe UI", system-ui. Dates and big numbers: Bahnschrift, "DIN Alternate", "Roboto Condensed", with tabular numerals.
 Rules: visible labels on every input, no placeholder-only fields; verb-first button labels; destructive actions name the item and
 default focus to Cancel; tables scroll inside their own container; sentence case; no decorative gradients.
+Theme classes: text-ink, bg-canvas, bg-paper, border-line, text-muted-foreground, bg-primary (the accent), text-due, text-today, bg-weekend, bg-holiday, text-warning, bg-team-blue/-pink/-red/-green/-gold/-white-glove, font-numeric with tabular-nums. shadcn components are at @/components/ui/<name>.
 The component is presentational: props in, callbacks out, sample data inside, no fetching, no routing, no global state.
 Write all files under design/v0/<screen>/ and touch nothing else. Shared types already exist in @/types; do not redefine them.
 ```
@@ -252,7 +222,7 @@ interface EmptyStateProps { title: string; text: string; action?: { label: strin
 
 The Schedule tab is not a v0 chat. Claude Code ports it from the offline builder into `src/schedule/`.
 
-Each chat ends the same way: v0 pushes to the `v0-ui` branch, you merge it to `main` (the folder cannot break the build), then you ask Claude Code to integrate that screen.
+Each chat ends the same way: v0 pushes to the `v0-ui` branch, you merge it to `master` (the folder cannot break the build), then you ask Claude Code to integrate that screen.
 
 ## 7. Round trip for a change
 
@@ -275,3 +245,4 @@ Each chat ends the same way: v0 pushes to the `v0-ui` branch, you merge it to `m
 |---|---|
 | 14 Oct 2026 | v0 for presentational components only; Claude Code owns containers, API, worker, and the schedule port |
 | 14 Oct 2026 | v0 connected to the repo: writes only to `design/v0/` on branch `v0-ui`; Claude Code integrates into `src/ui/` |
+| 14 Oct 2026 | Tailwind v4 CSS-first (no `tailwind.config.ts`), React 19, sonner replaces toast, label added, preflight off until legacy screens retire; plans live only in `docs/plans`; `AGENTS.md` for v0 |
