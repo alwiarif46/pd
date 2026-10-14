@@ -113,6 +113,7 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     return withOrg(orgId, async (db) => {
       // `users` has no row-level security; the join starts from this organization's memberships.
       const rows = await db.select({
+        orgId: schema.memberships.orgId,
         userId: schema.memberships.userId,
         name: schema.users.name,
         email: schema.users.email,

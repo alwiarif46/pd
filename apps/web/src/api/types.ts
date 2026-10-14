@@ -150,6 +150,7 @@ export type PlanStatus = 'active' | 'past_due' | 'free';
 
 /** One member of the organization, oldest first (GET /api/org/members). */
 export interface OrgMemberDto {
+  orgId: string;
   userId: string;
   name: string | null;
   email: string;
