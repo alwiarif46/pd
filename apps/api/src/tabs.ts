@@ -596,7 +596,7 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         return row;
       }
       return null;
-    case 'schedule':
+    case 'schedule': {
       if (!text(body.label)) return null;
       const [activity] = await db.insert(schema.scheduleActivities).values({
         orgId,
@@ -607,7 +607,8 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         origin: 'user',
       }).returning();
       return activity;
-    case 'compliance':
+    }
+    case 'compliance': {
       if (!text(body.requirementText)) return null;
       const [compliance] = await db.insert(schema.complianceRows).values({
         orgId,
@@ -621,7 +622,8 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         origin: 'user',
       }).returning();
       return compliance;
-    case 'outline':
+    }
+    case 'outline': {
       if (!text(body.title)) return null;
       const [outline] = await db.insert(schema.outlineItems).values({
         orgId,
@@ -635,7 +637,8 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         origin: 'user',
       }).returning();
       return outline;
-    case 'resumes':
+    }
+    case 'resumes': {
       if (body.kind === 'candidate' && text(body.name) && text(body.role)) {
         const [row] = await db.insert(schema.candidates).values({
           orgId,
@@ -665,7 +668,8 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         origin: 'user',
       }).returning();
       return requirement;
-    case 'reviews':
+    }
+    case 'reviews': {
       if (body.kind === 'finding' && text(body.reviewId) && text(body.text)) {
         const kind = body.findingKind === 'strength' || body.findingKind === 'weakness' || body.findingKind === 'deficiency' || body.findingKind === 'risk' || body.findingKind === 'comment' ? body.findingKind : 'comment';
         const [row] = await db.insert(schema.reviewFindings).values({
@@ -698,7 +702,8 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         status: 'open',
       }).returning();
       return review;
-    case 'production':
+    }
+    case 'production': {
       if (!text(body.category) || !text(body.rule)) return null;
       const [production] = await db.insert(schema.productionItems).values({
         orgId,
@@ -708,7 +713,8 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         origin: 'user',
       }).returning();
       return production;
-    case 'orals':
+    }
+    case 'orals': {
       if (!text(body.category) || !text(body.item)) return null;
       const [oral] = await db.insert(schema.oralsItems).values({
         orgId,
@@ -718,7 +724,8 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         origin: 'user',
       }).returning();
       return oral;
-    case 'lessons':
+    }
+    case 'lessons': {
       if (!text(body.question)) return null;
       const [lesson] = await db.insert(schema.lessons).values({
         orgId,
@@ -728,6 +735,7 @@ async function insertRow(db: Db, orgId: string, bidId: string, tab: TabName, bod
         author: text(body.author),
       }).returning();
       return lesson;
+    }
     default: {
       const unreachable: never = tab;
       return unreachable;
