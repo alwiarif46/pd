@@ -48,7 +48,7 @@ From the plan, Phase 0 requires:
 - [x] Skills directory for AI instructions
 - [x] Evals directory for model test harness
 - [x] Infra directory for Docker and deployment scripts
-- [x] Documentation with plans copied to docs/plans
+- [x] Plans live in docs/plans (the only copy)
 
 ### 2. Database Setup
 - [x] Drizzle ORM schema with all tables from data model
