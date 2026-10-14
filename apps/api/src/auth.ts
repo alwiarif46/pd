@@ -1,6 +1,7 @@
 import { and, desc, eq, gt, isNull, lt, ne, sql } from 'drizzle-orm';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { getDb, schema } from '@pd/core';
+import { BODY_REQUIRED, readBody, text } from './body.js';
 import { requireUser } from './context.js';
 import {
   hashesMatch,
@@ -34,23 +35,45 @@ const EMAILS_PER_HOUR = 3;
  */
 const RESEND_MIN_MS = 300;
 
-const BODY_REQUIRED = { error: 'Send a JSON object in the request body' } as const;
 const CODE_INVALID = { error: 'That code is not valid' } as const;
 const EMAIL_TAKEN = { error: 'An account with this email already exists. Log in or reset your password.' } as const;
 const PHONE_TAKEN = { error: 'That phone number is already verified on an account' } as const;
+const WRONG_CREDENTIALS = { error: 'Email or password is wrong' } as const;
 
-type Body = Record<string, unknown>;
+const PASSWORD_MIN = 12;
+/** Bounds the scrypt input, so a huge password cannot tie up the server. */
+const PASSWORD_MAX = 256;
 
-/** The JSON object body, or null when the body is missing or not an object. */
-function readBody(request: FastifyRequest): Body | null {
-  const body: unknown = request.body;
-  return body !== null && typeof body === 'object' && !Array.isArray(body) ? (body as Body) : null;
+/** The error for a new password that is too short or too long, or null when it is fine. */
+function passwordProblem(password: string): { error: string } | null {
+  if (password.length < PASSWORD_MIN) {
+    return { error: `Password must be at least ${PASSWORD_MIN} characters` };
+  }
+  if (password.length > PASSWORD_MAX) {
+    return { error: `Password must be at most ${PASSWORD_MAX} characters` };
+  }
+  return null;
 }
 
-/** A string field, or '' when it is missing or not a string. */
-function text(body: Body, field: string): string {
-  const value = body[field];
-  return typeof value === 'string' ? value : '';
+type Tx = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0];
+
+/**
+ * After a password change: revokes the user's sessions (all, or all but `keepSessionId`) and
+ * expires every unused reset link, so neither an old session nor an old link outlives it.
+ */
+async function afterPasswordChange(tx: Tx, userId: string, keepSessionId?: string): Promise<void> {
+  const now = new Date();
+  await tx.update(schema.sessions).set({ revokedAt: now, updatedAt: now }).where(and(
+    eq(schema.sessions.userId, userId),
+    isNull(schema.sessions.revokedAt),
+    ...(keepSessionId ? [ne(schema.sessions.id, keepSessionId)] : []),
+  ));
+  await tx.update(schema.authTokens).set({ expiresAt: now, updatedAt: now }).where(and(
+    eq(schema.authTokens.userId, userId),
+    eq(schema.authTokens.purpose, 'reset_password'),
+    isNull(schema.authTokens.usedAt),
+    gt(schema.authTokens.expiresAt, now),
+  ));
 }
 
 /** The constraint a unique violation (23505) names, or null for any other error. */
@@ -87,11 +110,18 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
     if (!email.includes('@') || !isWorkEmail(email)) {
       return reply.code(400).send({ error: 'Use a work email address' });
     }
-    if (password.length < 12) {
-      return reply.code(400).send({ error: 'Password must be at least 12 characters' });
+    const weak = passwordProblem(password);
+    if (weak) {
+      return reply.code(400).send(weak);
     }
     if (!isUsPhone(phone)) {
       return reply.code(400).send({ error: 'Use a +1 US phone number' });
+    }
+    // Every well-formed attempt counts against the caps, including ones answered 409 below,
+    // so the 409s cannot be used to probe for accounts without limit.
+    const cap = recordSmsSend(request.ip, [`email:${email}`, `phone:${phone}`]);
+    if (!cap.ok) {
+      return reply.code(429).send({ error: cap.reason });
     }
     const db = getDb();
     const [existingEmail] = await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.email, email));
@@ -108,10 +138,6 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
     ));
     if (recentCodes.length >= CODES_PER_HOUR) {
       return reply.code(429).send({ error: 'Too many codes for this number. Try again later.' });
-    }
-    const cap = recordSmsSend(request.ip, [`email:${email}`, `phone:${phone}`]);
-    if (!cap.ok) {
-      return reply.code(429).send({ error: cap.reason });
     }
     const passwordHash = await hashPassword(password);
     const emailToken = newToken();
@@ -356,22 +382,40 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
     }
     const email = text(body, 'email').trim().toLowerCase();
     const db = getDb();
+    const password = text(body, 'password');
     const [user] = await db.select().from(schema.users).where(eq(schema.users.email, email));
-    if (!user || !(await passwordMatches(text(body, 'password'), user.passwordHash))) {
-      return reply.code(401).send({ error: 'Email or password is wrong' });
+    if (!user || password.length > PASSWORD_MAX || !(await passwordMatches(password, user.passwordHash))) {
+      return reply.code(401).send(WRONG_CREDENTIALS);
     }
     if (!user.emailVerifiedAt || !user.phoneVerifiedAt) {
       return reply.code(403).send({ error: 'Verify email and phone before signing in' });
     }
     const token = newToken();
-    await db.insert(schema.sessions).values({
-      userId: user.id,
-      tokenHash: hashToken(token),
-      expiresAt: new Date(Date.now() + 14 * DAY),
-      ip: request.ip,
-      userAgent: request.headers['user-agent'] ?? null,
+    // A reset or password change may have committed since the hash above was read. Lock the
+    // user row and create the session only if the hash is still the one the password matched:
+    // a change that commits first is seen here, and one that commits later (it updates this
+    // row first, so it waits for this lock) revokes the session this creates.
+    const created = await db.transaction(async (tx) => {
+      const [current] = await tx.select({ passwordHash: schema.users.passwordHash })
+        .from(schema.users)
+        .where(eq(schema.users.id, user.id))
+        .for('update');
+      if (!current || current.passwordHash !== user.passwordHash) {
+        return false;
+      }
+      await tx.insert(schema.sessions).values({
+        userId: user.id,
+        tokenHash: hashToken(token),
+        expiresAt: new Date(Date.now() + 14 * DAY),
+        ip: request.ip,
+        userAgent: request.headers['user-agent'] ?? null,
+      });
+      await tx.update(schema.users).set({ lastLoginAt: new Date() }).where(eq(schema.users.id, user.id));
+      return true;
     });
-    await db.update(schema.users).set({ lastLoginAt: new Date() }).where(eq(schema.users.id, user.id));
+    if (!created) {
+      return reply.code(401).send(WRONG_CREDENTIALS);
+    }
     return { token };
   });
 
@@ -389,15 +433,27 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
     const db = getDb();
     const resetToken = text(body, 'token');
     if (resetToken) {
+      const invalid = { error: 'That reset link is not valid' };
       const password = text(body, 'password');
-      if (password.length < 12) {
-        return reply.code(400).send({ error: 'Password must be at least 12 characters' });
+      const weak = passwordProblem(password);
+      if (weak) {
+        return reply.code(400).send(weak);
+      }
+      const live = and(
+        eq(schema.authTokens.tokenHash, hashToken(resetToken)),
+        eq(schema.authTokens.purpose, 'reset_password'),
+        isNull(schema.authTokens.usedAt),
+        gt(schema.authTokens.expiresAt, new Date()),
+      );
+      // Check the link before spending a password hash on it; the transaction checks again.
+      const [candidate] = await db.select({ id: schema.authTokens.id }).from(schema.authTokens).where(live);
+      if (!candidate) {
+        return reply.code(400).send(invalid);
       }
       const passwordHash = await hashPassword(password);
       const reset = await db.transaction(async (tx) => {
         const [row] = await tx.update(schema.authTokens).set({ usedAt: new Date(), updatedAt: new Date() }).where(and(
-          eq(schema.authTokens.tokenHash, hashToken(resetToken)),
-          eq(schema.authTokens.purpose, 'reset_password'),
+          eq(schema.authTokens.id, candidate.id),
           isNull(schema.authTokens.usedAt),
           gt(schema.authTokens.expiresAt, new Date()),
         )).returning({ userId: schema.authTokens.userId });
@@ -405,31 +461,31 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
           return false;
         }
         await tx.update(schema.users).set({ passwordHash, updatedAt: new Date() }).where(eq(schema.users.id, row.userId));
-        // 07 s1: sessions are revoked on password change.
-        await tx.update(schema.sessions).set({ revokedAt: new Date(), updatedAt: new Date() }).where(and(
-          eq(schema.sessions.userId, row.userId),
-          isNull(schema.sessions.revokedAt),
-        ));
+        // 07 s1: sessions are revoked on password change; other reset links die with them.
+        await afterPasswordChange(tx, row.userId);
         return true;
       });
       if (!reset) {
-        return reply.code(400).send({ error: 'That reset link is not valid' });
+        return reply.code(400).send(invalid);
       }
       return { ok: true };
     }
+    // Requesting a link answers the same, in about the same time, whether or not the account exists.
     const email = text(body, 'email').trim().toLowerCase();
-    const [user] = await db.select().from(schema.users).where(eq(schema.users.email, email));
-    if (!user) {
-      return { ok: true };
-    }
-    const token = newToken();
-    await db.insert(schema.authTokens).values({
-      userId: user.id,
-      purpose: 'reset_password',
-      tokenHash: hashToken(token),
-      expiresAt: new Date(Date.now() + HOUR),
+    await atLeast(RESEND_MIN_MS, async () => {
+      const [user] = await db.select().from(schema.users).where(eq(schema.users.email, email));
+      if (!user) {
+        return;
+      }
+      const token = newToken();
+      await db.insert(schema.authTokens).values({
+        userId: user.id,
+        purpose: 'reset_password',
+        tokenHash: hashToken(token),
+        expiresAt: new Date(Date.now() + HOUR),
+      });
+      void sendOutOfBand({ channel: 'email', purpose: 'reset_password', to: user.email, secret: token });
     });
-    void sendOutOfBand({ channel: 'email', purpose: 'reset_password', to: user.email, secret: token });
     return reply.send({ ok: true });
   });
 
@@ -459,10 +515,12 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'Name must be text' });
     }
     const name = typeof body.name === 'string' ? body.name.trim() : undefined;
-    let passwordHash: string | undefined;
+    const wrongCurrent = { error: 'Current password is wrong' };
+    let change: { from: string; to: string } | undefined;
     if (body.password !== undefined) {
-      if (typeof body.password !== 'string' || body.password.length < 12) {
-        return reply.code(400).send({ error: 'Password must be at least 12 characters' });
+      const weak = passwordProblem(typeof body.password === 'string' ? body.password : '');
+      if (weak || typeof body.password !== 'string') {
+        return reply.code(400).send(weak ?? { error: 'Password must be text' });
       }
       const currentPassword = text(body, 'currentPassword');
       if (!currentPassword) {
@@ -470,29 +528,36 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
       }
       const db = getDb();
       const [user] = await db.select({ passwordHash: schema.users.passwordHash }).from(schema.users).where(eq(schema.users.id, userId));
-      if (!user || !(await passwordMatches(currentPassword, user.passwordHash))) {
-        return reply.code(403).send({ error: 'Current password is wrong' });
+      if (!user || currentPassword.length > PASSWORD_MAX || !(await passwordMatches(currentPassword, user.passwordHash))) {
+        return reply.code(403).send(wrongCurrent);
       }
-      passwordHash = await hashPassword(body.password);
+      change = { from: user.passwordHash, to: await hashPassword(body.password) };
     }
-    if (name === undefined && passwordHash === undefined) {
+    if (name === undefined && change === undefined) {
       return { ok: true };
     }
-    await getDb().transaction(async (tx) => {
-      await tx.update(schema.users).set({
+    const saved = await getDb().transaction(async (tx) => {
+      // The password changes only if it is still the one `currentPassword` matched.
+      const [updated] = await tx.update(schema.users).set({
         ...(name !== undefined ? { name } : {}),
-        ...(passwordHash !== undefined ? { passwordHash } : {}),
+        ...(change !== undefined ? { passwordHash: change.to } : {}),
         updatedAt: new Date(),
-      }).where(eq(schema.users.id, userId));
-      if (passwordHash !== undefined) {
-        // 07 s1: sessions are revoked on password change; this one stays.
-        await tx.update(schema.sessions).set({ revokedAt: new Date(), updatedAt: new Date() }).where(and(
-          eq(schema.sessions.userId, userId),
-          ne(schema.sessions.id, sessionId),
-          isNull(schema.sessions.revokedAt),
-        ));
+      }).where(and(
+        eq(schema.users.id, userId),
+        ...(change !== undefined ? [eq(schema.users.passwordHash, change.from)] : []),
+      )).returning({ id: schema.users.id });
+      if (!updated) {
+        return false;
       }
+      if (change !== undefined) {
+        // 07 s1: sessions are revoked on password change; this one stays.
+        await afterPasswordChange(tx, userId, sessionId);
+      }
+      return true;
     });
+    if (!saved) {
+      return reply.code(403).send(wrongCurrent);
+    }
     return { ok: true };
   });
 }
