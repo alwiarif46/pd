@@ -1,9 +1,10 @@
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
-import { and, asc, eq, gte, lte } from 'drizzle-orm';
+import { rm, stat } from 'node:fs/promises';
+import { and, asc, eq, gte, lt, lte, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { resolveOrgPath, schema, withOrg } from '@pd/core';
+import { KEY_OVERRIDES_PER_BID, resolveOrgPath, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
+import { apiError } from './errors.js';
 import { findBid, inOrg, findDocument, type Outcome, queueAfterCommit } from './scope.js';
 import { enqueueClassify } from './queue.js';
 import { newToken } from './security.js';
@@ -110,26 +111,47 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       if (!document) {
         return respond(404, { error: 'Document not found' });
       }
-      const bid = await findBid(db, orgId, document.bidId);
-      if (!bid) {
-        return respond(404, { error: 'Bid not found' });
+      if (document.kind !== 'amendment') {
+        return respond(409, apiError('not_an_amendment'));
       }
-      if (bid.keyOverridesUsed >= 2) {
-        return respond(409, { error: 'This bid has used its two key overrides' });
+      // The amendment whose solicitation number did not match, not yet accepted. Locked until
+      // COMMIT, so two overrides of one amendment cannot both pass and spend two overrides.
+      const [amendment] = await db.select().from(schema.amendments).where(and(
+        eq(schema.amendments.documentId, documentId),
+        eq(schema.amendments.orgId, orgId),
+        eq(schema.amendments.solicitationKeyFound, false),
+        eq(schema.amendments.keyOverride, false),
+      )).limit(1).for('update');
+      if (!amendment) {
+        return respond(409, apiError('override_not_needed'));
       }
-      await db.update(schema.bids).set({
-        keyOverridesUsed: bid.keyOverridesUsed + 1,
+      // Spend one of the bid's overrides with a conditional increment, so concurrent overrides
+      // of different amendments cannot exceed the limit.
+      const [bid] = await db.update(schema.bids).set({
+        keyOverridesUsed: sql`${schema.bids.keyOverridesUsed} + 1`,
         updatedAt: new Date(),
-      }).where(and(eq(schema.bids.id, bid.id), eq(schema.bids.orgId, orgId)));
+      }).where(and(
+        eq(schema.bids.id, document.bidId),
+        eq(schema.bids.orgId, orgId),
+        lt(schema.bids.keyOverridesUsed, KEY_OVERRIDES_PER_BID),
+      )).returning({ keyOverridesUsed: schema.bids.keyOverridesUsed });
+      if (!bid) {
+        return respond(409, apiError('override_limit'));
+      }
+      await db.update(schema.amendments).set({
+        keyOverride: true,
+        overrideReason: reason,
+        updatedAt: new Date(),
+      }).where(and(eq(schema.amendments.id, amendment.id), eq(schema.amendments.orgId, orgId)));
       await db.insert(schema.auditLog).values({
-        orgId: auth.orgId!,
+        orgId,
         userId: auth.userId,
         action: 'key_override',
         targetType: 'document',
         targetId: documentId,
-        detail: { reason },
+        detail: { reason, amendmentId: amendment.id },
       });
-      return { ok: true, remaining: 2 - (bid.keyOverridesUsed + 1) };
+      return { ok: true, amendmentId: amendment.id, remaining: KEY_OVERRIDES_PER_BID - bid.keyOverridesUsed };
     });
   });
 
@@ -174,13 +196,17 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
     const documentId = (request.params as { id: string }).id;
     const found = await inOrg(reply, orgId, async (db, respond) => {
       const document = await findDocument(db, orgId, documentId);
-      if (!document?.storagePath) {
+      if (!document) {
         return respond(404, { error: 'Document not found' });
       }
-      if (document.kind === 'resume' && document.liveStatus === 'deleted') {
-        return respond(410, { error: 'Resume deleted after 90 days' });
+      if (document.liveStatus === 'deleted') {
+        // A deleted file has no server copy; its page text and the rows it produced stay.
+        return respond(410, { error: document.kind === 'resume' ? 'Resume deleted after 90 days' : 'This file was deleted' });
       }
-      if (document.liveStatus === 'archived' || document.liveStatus === 'deleted') {
+      if (!document.storagePath) {
+        return respond(404, { error: 'Document not found' });
+      }
+      if (document.liveStatus === 'archived') {
         return respond(409, { error: 'This file is archived. Restore it to open the full page.' });
       }
       // A stored path must stay inside this organization's folder.
@@ -221,16 +247,53 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
     });
   });
 
+  /**
+   * Deletes a file (05 s3.10): the server copies go and its MB is freed, but the document row,
+   * its page text, and the tab rows and quotes it produced stay, so every source link still
+   * opens the page text (07 s2 keeps page text until the bid is deleted). The row is marked
+   * `live_status = 'deleted'`. A second delete is a no-op. Credits are not touched: a
+   * reservation is settled by processing, which reads the page text, not the file.
+   */
   app.delete('/api/documents/:id', { preHandler: requireAuth }, async (request, reply) => {
-    const orgId = request.auth!.orgId!;
+    const auth = request.auth!;
+    const orgId = auth.orgId!;
     const documentId = (request.params as { id: string }).id;
-    return inOrg(reply, orgId, async (db, respond) => {
+    const files: string[] = [];
+    const result = await inOrg(reply, orgId, async (db, respond) => {
       const document = await findDocument(db, orgId, documentId);
       if (!document) {
         return respond(404, { error: 'Document not found' });
       }
-      await db.delete(schema.documents).where(and(eq(schema.documents.id, documentId), eq(schema.documents.orgId, orgId)));
+      const [deleted] = await db.update(schema.documents).set({
+        liveStatus: 'deleted',
+        storagePath: null,
+        viewerPath: null,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(schema.documents.id, documentId),
+        eq(schema.documents.orgId, orgId),
+        sql`${schema.documents.liveStatus} is distinct from 'deleted'`,
+      )).returning({ id: schema.documents.id });
+      if (!deleted) {
+        return { ok: true };
+      }
+      for (const path of [document.storagePath, document.viewerPath]) {
+        const absolute = path ? resolveOrgPath(dataDir, orgId, path) : null;
+        if (absolute) {
+          files.push(absolute);
+        }
+      }
+      await db.insert(schema.auditLog).values({
+        orgId,
+        userId: auth.userId,
+        action: 'delete_document',
+        targetType: 'document',
+        targetId: documentId,
+        detail: { kind: document.kind },
+      });
       return { ok: true };
     });
+    await Promise.all(files.map((file) => rm(file, { force: true }).catch(() => undefined)));
+    return result;
   });
 }
