@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { isUuid, PLAN_LIMITS, type Plan, schema, userMemberships, withOrg } from '@pd/core';
 import { requireAuth, requireUser } from './context.js';
+import { inOrg } from './scope.js';
 import { hashToken, isWorkEmail, logOutOfBand, newToken } from './security.js';
 
 function seatLimit(plan: Plan): number {
@@ -89,12 +90,12 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     if (!isWorkEmail(email)) {
       return reply.code(400).send({ error: 'Use a work email address' });
     }
-    return withOrg(auth.orgId!, async (db) => {
+    return inOrg(reply, auth.orgId!, async (db, respond) => {
       const [org] = await db.select().from(schema.organizations).where(eq(schema.organizations.id, auth.orgId!));
       const members = await db.select().from(schema.memberships).where(eq(schema.memberships.orgId, auth.orgId!));
       const plan = (org?.plan ?? 'free') as Plan;
       if (members.length >= seatLimit(plan)) {
-        return reply.code(402).send({ error: 'This plan has no seats left' });
+        return respond(402, { error: 'This plan has no seats left' });
       }
       const token = newToken();
       await db.insert(schema.invites).values({
@@ -105,7 +106,7 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       });
       logOutOfBand('email', email, token);
-      return reply.code(201).send({ ok: true });
+      return respond(201, { ok: true });
     });
   });
 
@@ -121,13 +122,13 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     if (!isUuid(userId)) {
       return reply.code(404).send({ error: 'Member not found' });
     }
-    return withOrg(auth.orgId!, async (db) => {
+    return inOrg(reply, auth.orgId!, async (db, respond) => {
       const removed = await db.delete(schema.memberships).where(and(
         eq(schema.memberships.userId, userId),
         eq(schema.memberships.orgId, auth.orgId!),
       )).returning({ id: schema.memberships.id });
       if (removed.length === 0) {
-        return reply.code(404).send({ error: 'Member not found' });
+        return respond(404, { error: 'Member not found' });
       }
       return { ok: true };
     });

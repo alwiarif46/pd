@@ -1,8 +1,8 @@
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { isUuid, schema, withOrg } from '@pd/core';
+import { isUuid, schema } from '@pd/core';
 import { requireAuth } from './context.js';
-import { type Db, findBid } from './scope.js';
+import { type Db, findBid, inOrg } from './scope.js';
 
 const TABS = [
   'overview',
@@ -164,10 +164,10 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
     if (!isTab(tab)) {
       return reply.code(404).send({ error: 'Unknown tab' });
     }
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const bid = await findBid(db, orgId, id);
       if (!bid) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       if (tab === 'resumes') {
         const requirements = await db.select().from(schema.personnelRequirements).where(eq(schema.personnelRequirements.bidId, id));
@@ -202,13 +202,13 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
     if (!isUuid(rowId)) {
       return reply.code(404).send({ error: 'Row not found' });
     }
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       if (!await findBid(db, orgId, id)) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       const row = await readRow(db, orgId, id, table, rowId);
       if (!row) {
-        return reply.code(404).send({ error: 'Row not found' });
+        return respond(404, { error: 'Row not found' });
       }
       const changes = await db.select().from(schema.rowHistory).where(and(
         eq(schema.rowHistory.rowTable, table),
@@ -230,13 +230,13 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
     if (!isUuid(rowId)) {
       return reply.code(404).send({ error: 'Row not found' });
     }
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       if (!await findBid(db, orgId, id)) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       const updated = await patchRow(db, orgId, userId, id, table, rowId, fields);
       if (!updated) {
-        return reply.code(404).send({ error: 'Row not found' });
+        return respond(404, { error: 'Row not found' });
       }
       return { ok: true };
     });
@@ -251,13 +251,13 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
     if (!isUuid(rowId)) {
       return reply.code(404).send({ error: 'Row not found' });
     }
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       if (!await findBid(db, orgId, id)) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       const removed = await deleteRow(db, orgId, id, table, rowId);
       if (!removed) {
-        return reply.code(404).send({ error: 'Row not found' });
+        return respond(404, { error: 'Row not found' });
       }
       return { ok: true };
     });
@@ -270,16 +270,16 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
     if (!isTab(tab)) {
       return reply.code(404).send({ error: 'Unknown tab' });
     }
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const bid = await findBid(db, orgId, id);
       if (!bid) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       const created = await insertRow(db, orgId, id, tab, body);
       if (!created) {
-        return reply.code(400).send({ error: 'That row is missing a required field' });
+        return respond(400, { error: 'That row is missing a required field' });
       }
-      return reply.code(201).send(created);
+      return respond(201, created);
     });
   });
 
@@ -289,10 +289,10 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
     if (!isTab(tab)) {
       return reply.code(404).send({ error: 'Unknown tab' });
     }
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const bid = await findBid(db, orgId, id);
       if (!bid) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       if (tab === 'overview') {
         const existing = await db.select().from(schema.kickoffItems).where(eq(schema.kickoffItems.bidId, id));
@@ -357,10 +357,10 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
     if (body.mode !== 'shift' && body.mode !== 'scale' && body.mode !== 'keep') {
       return reply.code(400).send({ error: 'Choose shift, scale, or keep' });
     }
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const bid = await findBid(db, orgId, id);
       if (!bid) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       if (body.mode === 'keep' || !body.previousDue || !body.nextDue) {
         return { ok: true, moved: 0 };
@@ -405,9 +405,9 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
     if (ids.length < 2) {
       return reply.code(400).send({ error: 'Choose at least two rows' });
     }
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       if (!await findBid(db, orgId, id)) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       const rows = [];
       for (const rowId of ids) {
@@ -421,7 +421,7 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
         }
       }
       if (rows.length < 2) {
-        return reply.code(404).send({ error: 'Row not found' });
+        return respond(404, { error: 'Row not found' });
       }
       const [keep, ...rest] = rows;
       await db.update(schema.complianceRows).set({
@@ -440,9 +440,9 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
     const id = (request.params as { id: string }).id;
     const body = request.body as { rowId?: string; at?: number };
     const at = body.at ?? 0;
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       if (!await findBid(db, orgId, id)) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       const [row] = isUuid(body.rowId)
         ? await db.select().from(schema.complianceRows).where(and(
@@ -452,10 +452,10 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
         ))
         : [];
       if (!row) {
-        return reply.code(404).send({ error: 'Row not found' });
+        return respond(404, { error: 'Row not found' });
       }
       if (at <= 0 || at >= row.requirementText.length) {
-        return reply.code(400).send({ error: 'Choose a split point inside the requirement' });
+        return respond(400, { error: 'Choose a split point inside the requirement' });
       }
       await db.update(schema.complianceRows).set({
         requirementText: row.requirementText.slice(0, at).trim(),
@@ -471,7 +471,7 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
         origin: 'user',
         status: 'open',
       }).returning();
-      return reply.code(201).send(created);
+      return respond(201, created);
     });
   });
 }

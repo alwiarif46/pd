@@ -2,17 +2,17 @@ import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { isUuid, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
-import { findBid, findDocument, type Outcome, queueAfterCommit } from './scope.js';
+import { findBid, inOrg, findDocument, type Outcome, queueAfterCommit } from './scope.js';
 import { enqueueClassify, enqueueScan } from './queue.js';
 
 export async function registerJobs(app: FastifyInstance): Promise<void> {
   app.get('/api/bids/:id/jobs', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const bidId = (request.params as { id: string }).id;
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const bid = await findBid(db, orgId, bidId);
       if (!bid) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
       const rows = await db.select().from(schema.jobs).where(and(eq(schema.jobs.bidId, bidId), eq(schema.jobs.orgId, orgId)));
       const pending = rows.filter((job) => job.status === 'pending').length;
