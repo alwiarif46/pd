@@ -9,6 +9,20 @@ import { currentCreditPeriod, expireAbandonedUploads, removeChunkDirs } from './
 import { inOrg } from './scope.js';
 import { hashToken, isWorkEmail, newToken, sendOutOfBand } from './security.js';
 
+/** The organization fields GET /api/org returns (no Stripe customer or subscription id). */
+const PUBLIC_ORG_COLUMNS = {
+  id: schema.organizations.id,
+  createdAt: schema.organizations.createdAt,
+  updatedAt: schema.organizations.updatedAt,
+  name: schema.organizations.name,
+  emailDomain: schema.organizations.emailDomain,
+  plan: schema.organizations.plan,
+  planStatus: schema.organizations.planStatus,
+  cycleStart: schema.organizations.cycleStart,
+  cycleEnd: schema.organizations.cycleEnd,
+  freeFirstMonthEnds: schema.organizations.freeFirstMonthEnds,
+};
+
 function seatLimit(plan: Plan): number {
   return PLAN_LIMITS[plan].maxUsers;
 }
@@ -63,7 +77,8 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
       const now = new Date();
       // Abandoned uploads give their reserved credits back before the counts are shown.
       abandoned.push(...await expireAbandonedUploads(db, orgId, now));
-      const [org] = await db.select().from(schema.organizations).where(eq(schema.organizations.id, orgId));
+      // Stripe ids stay on the server: members see this payload too, and the web never needs them.
+      const [org] = await db.select(PUBLIC_ORG_COLUMNS).from(schema.organizations).where(eq(schema.organizations.id, orgId));
       // The period that holds now, or null before the first credit of this period is reserved.
       const credits = await currentCreditPeriod(db, orgId, now);
       const plan = (org?.plan ?? 'free') as Plan;

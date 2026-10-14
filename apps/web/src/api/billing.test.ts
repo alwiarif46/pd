@@ -72,8 +72,6 @@ describe('org payloads', () => {
         name: 'Acme',
         emailDomain: null,
         plan: 'starter',
-        stripeCustomerId: 'cus_1',
-        stripeSubscriptionId: 'sub_1',
         planStatus: 'past_due',
         cycleStart: '2026-10-01T00:00:00.000Z',
         cycleEnd: '2026-11-01T00:00:00.000Z',

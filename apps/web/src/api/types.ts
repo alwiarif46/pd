@@ -104,8 +104,6 @@ export interface OrganizationDto extends BaseDto {
   name: string;
   emailDomain: string | null;
   plan: Plan;
-  stripeCustomerId: string | null;
-  stripeSubscriptionId: string | null;
   planStatus: PlanStatus;
   cycleStart: string | null;
   cycleEnd: string | null;
