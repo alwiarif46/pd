@@ -2,6 +2,8 @@ import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { isUuid, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
+import { lockBid, lockOrg, reserveForBid } from './credits.js';
+import { apiError } from './errors.js';
 import { findBid, inOrg, findDocument, type Outcome, queueAfterCommit } from './scope.js';
 import { enqueueClassify, enqueueScan } from './queue.js';
 
@@ -41,6 +43,22 @@ export async function registerJobs(app: FastifyInstance): Promise<void> {
       const document = await findDocument(db, orgId, job.documentId);
       if (!document?.storagePath) {
         return { code: 404, body: { error: 'The file is no longer available' } };
+      }
+      // A failed run released the solicitation's credit (06 s4). Rerunning it builds the matrix
+      // again, so it needs a credit again: reserve one before queueing, or refuse with 402.
+      // Lock order: organization, bid, credit (as everywhere else).
+      if (document.kind === 'solicitation') {
+        const org = await lockOrg(db, orgId);
+        const [bid] = await lockBid(db, orgId, job.bidId);
+        if (!org || !bid) {
+          return { code: 404, body: { error: 'Job not found' } };
+        }
+        if (bid.creditStatus !== 'reserved' && bid.creditStatus !== 'consumed') {
+          const creditId = await reserveForBid(db, org, bid.id, new Date());
+          if (!creditId) {
+            return { code: 402, body: apiError('out_of_credits') };
+          }
+        }
       }
       const [created] = await db.insert(schema.jobs).values({
         orgId,

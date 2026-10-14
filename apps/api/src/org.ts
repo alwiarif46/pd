@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { isUuid, PLAN_LIMITS, type Plan, schema, userMemberships, withOrg } from '@pd/core';
 import { requireAuth, requireUser } from './context.js';
 import { BODY_REQUIRED, readBody, text } from './body.js';
+import { currentCreditPeriod, expireAbandonedUploads, removeChunkDirs } from './credits.js';
 import { inOrg } from './scope.js';
 import { hashToken, isWorkEmail, newToken, sendOutOfBand } from './security.js';
 
@@ -55,11 +56,19 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
 
   app.get('/api/org', { preHandler: requireAuth }, async (request) => {
     const auth = request.auth!;
-    return withOrg(auth.orgId!, async (db) => {
-      const [org] = await db.select().from(schema.organizations).where(eq(schema.organizations.id, auth.orgId!));
-      const credits = await db.select().from(schema.rfpCredits).where(eq(schema.rfpCredits.orgId, auth.orgId!));
-      return { org: org ?? null, credits: credits[0] ?? null, role: auth.role };
+    const orgId = auth.orgId!;
+    const abandoned: string[] = [];
+    const result = await withOrg(orgId, async (db) => {
+      const now = new Date();
+      // Abandoned uploads give their reserved credits back before the counts are shown.
+      abandoned.push(...await expireAbandonedUploads(db, orgId, now));
+      const [org] = await db.select().from(schema.organizations).where(eq(schema.organizations.id, orgId));
+      // The period that holds now, or null before the first credit of this period is reserved.
+      const credits = await currentCreditPeriod(db, orgId, now);
+      return { org: org ?? null, credits, role: auth.role };
     });
+    await removeChunkDirs(process.env.DATA_DIR || '/data/files', orgId, abandoned);
+    return result;
   });
 
   app.get('/api/about/processing', { preHandler: requireAuth }, async () => {

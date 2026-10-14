@@ -111,6 +111,14 @@ describe('request responses', () => {
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).message).toBe('This bid already exists');
     expect((error as ApiError).status).toBe(409);
+    expect((error as ApiError).code).toBeUndefined();
+  });
+
+  it('keeps the machine code next to the readable message', async () => {
+    mockFetch(jsonResponse(402, { error: 'No RFP credits left.', code: 'out_of_credits' }));
+    const error = (await rejection(request('/api/x'))) as ApiError;
+    expect(error.message).toBe('No RFP credits left.');
+    expect(error.code).toBe('out_of_credits');
   });
 
   it('maps a non-JSON error body to the network message', async () => {

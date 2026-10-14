@@ -22,6 +22,20 @@
       "when": 1792006410709,
       "tag": "0002_phone_codes_user",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792007379181,
+      "tag": "0003_credits_and_cascades",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792008270621,
+      "tag": "0004_archive_and_keys",
+      "breakpoints": true
     }
   ]
 }

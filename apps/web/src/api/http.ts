@@ -90,7 +90,8 @@ async function errorFrom(response: Response): Promise<ApiError> {
     return new ApiError(NETWORK_ERROR_MESSAGE, response.status || 502);
   }
   if (typeof data === 'object' && data !== null && typeof (data as { error?: unknown }).error === 'string') {
-    return new ApiError((data as { error: string }).error, response.status);
+    const code = (data as { code?: unknown }).code;
+    return new ApiError((data as { error: string }).error, response.status, typeof code === 'string' ? code : undefined);
   }
   return new ApiError('The request failed', response.status);
 }
