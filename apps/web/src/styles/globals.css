@@ -1,12 +1,17 @@
 /* Tailwind v4 entry.
-   Preflight is off on purpose: the legacy screens (src/screens, src/components/*.tsx) are styled by
-   src/index.css and would change under Tailwind's reset. When they are retired, add:
-   @import "tailwindcss/preflight.css" layer(base);  */
-@layer theme, base, components, utilities;
+   The global preflight is off: the legacy screens (src/screens, src/components/*.tsx) are styled by
+   src/index.css and would change under Tailwind's reset. ui-preflight.css applies the reset to
+   everything outside the legacy .app-shell instead. When the legacy screens are retired, delete
+   ui-preflight.css and the legacy layer, and add: @import "tailwindcss/preflight.css" layer(base);
+   Layer order: legacy CSS sits below the reset and the utilities, so its element rules
+   (h1 margins, :focus-visible, table cells) cannot override new screens. */
+@layer theme, legacy, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities) source(none);
 @import "tw-animate-css";
 @import "./tokens.css";
+@import "../index.css" layer(legacy);
+@import "./ui-preflight.css" layer(base);
 
 /* Scan only new code. Legacy class names (for example .grow) must not generate utilities. */
 @source "../ui";
