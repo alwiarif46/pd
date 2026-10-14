@@ -1,7 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { jsonBody, jsonResponse, lastCall, mockFetch } from '../test/fetch';
+import { confirmAmendmentLink, listAmendmentLinks, rejectAmendmentLink } from './amendments';
 import { createBid, deleteBid, getBid, listBids, updateBid } from './bids';
+import {
+  confirmMarking,
+  deleteDocument,
+  getDocumentFile,
+  getDocumentPages,
+  getViewToken,
+  listDocuments,
+  overrideSolicitationKey,
+  resolveViewToken,
+  restoreDocument,
+} from './documents';
 import type { HttpMethod } from './http';
+import { listJobs, retryJob } from './jobs';
 import {
   createOrg,
   getOrg,
@@ -36,6 +49,30 @@ const cases: RouteCase[] = [
   ['getBid', () => getBid('b1'), 'GET', '/api/bids/b1', undefined],
   ['updateBid', () => updateBid('b1', { dueDate: null, oralsEnabled: true }), 'PATCH', '/api/bids/b1', { dueDate: null, oralsEnabled: true }],
   ['deleteBid', () => deleteBid('b1'), 'DELETE', '/api/bids/b1', undefined],
+  // documents.ts
+  ['listDocuments', () => listDocuments('b1'), 'GET', '/api/bids/b1/documents', undefined],
+  ['getViewToken', () => getViewToken('d1'), 'GET', '/api/documents/d1/view-token', undefined],
+  ['resolveViewToken', () => resolveViewToken('t/1'), 'GET', '/api/documents/view/t%2F1', undefined],
+  ['getDocumentPages', () => getDocumentPages('d1', { from: 2, to: 5 }), 'GET', '/api/documents/d1/pages?from=2&to=5', undefined],
+  ['getDocumentPages (from only)', () => getDocumentPages('d1', { from: 3 }), 'GET', '/api/documents/d1/pages?from=3', undefined],
+  ['getDocumentFile', () => getDocumentFile('d1'), 'GET', '/api/documents/d1/file', undefined],
+  ['confirmMarking', () => confirmMarking('d1'), 'POST', '/api/documents/d1/confirm-marking', undefined],
+  [
+    'overrideSolicitationKey',
+    () => overrideSolicitationKey('d1', 'Typo in the number'),
+    'POST',
+    '/api/documents/d1/key-override',
+    { reason: 'Typo in the number' },
+  ],
+  ['restoreDocument', () => restoreDocument('d1'), 'POST', '/api/documents/d1/restore', undefined],
+  ['deleteDocument', () => deleteDocument('d1'), 'DELETE', '/api/documents/d1', undefined],
+  // jobs.ts
+  ['listJobs', () => listJobs('b1'), 'GET', '/api/bids/b1/jobs', undefined],
+  ['retryJob', () => retryJob('j1'), 'POST', '/api/jobs/j1/retry', undefined],
+  // amendments.ts
+  ['listAmendmentLinks', () => listAmendmentLinks('b1'), 'GET', '/api/bids/b1/amendment-links', undefined],
+  ['confirmAmendmentLink', () => confirmAmendmentLink('l1'), 'POST', '/api/amendment-links/l1/confirm', undefined],
+  ['rejectAmendmentLink', () => rejectAmendmentLink('l1'), 'POST', '/api/amendment-links/l1/reject', undefined],
 ];
 
 describe('resource routes', () => {
