@@ -1,6 +1,6 @@
 # 09 — UI Workflow: v0, Claude Code, Cursor
 
-**Status:** Draft v3 · 14 Oct 2026
+**Status:** Draft v4 · 14 Oct 2026
 
 v0 builds the screens into a drop folder. Claude Code integrates them into the app and builds everything behind them. Cursor edits the app. v0 is connected to the GitHub repo and reads the plans from it, so the drop folder is the fence: v0 writes nowhere else, and the app never builds from it.
 
@@ -22,19 +22,23 @@ repo/
 ├── docs/plans/    These plans. v0 and Claude Code read them.
 └── apps/web/src/
     ├── ui/        Integrated copies of v0 screens, made by Claude Code. Presentational. Props in, callbacks out. No fetch, no router, no store.
-    │   ├── shell/     AppShell, Sidebar, TopBar, LockedTab, UpgradeDialog
+    │   ├── auth/      AuthLayout, LogIn, SignUp, Verify, ResetRequest, ResetPassword
+    │   ├── shell/     AppShell (with Sidebar, TopBar), UpgradeDialog, ConfirmDialog
+    │   ├── common/    TabFrame, LockedTab, ProcessingBanner, EmptyState, SourceLink, MarkingPrompt, AmendmentConfirm
     │   ├── bids/      BidsList, NewBid
     │   ├── overview/  OverviewTab
-    │   ├── compliance/ComplianceMatrixTab, RowEditor, SourceViewer
+    │   ├── compliance/ComplianceMatrixTab, RowDetail, SourceViewer
     │   ├── outline/   OutlineTab
     │   ├── resumes/   ResumeMatrixTab
-    │   ├── reviews/   ReviewsTab, ReviewForm
+    │   ├── reviews/   ReviewsTab
     │   ├── production/ProductionTab
     │   ├── orals/     OralsTab
     │   ├── lessons/   LessonsTab
     │   ├── documents/ DocumentsPanel
-    │   ├── settings/  BidSettings
-    │   └── common/    ProcessingBanner, EmptyState, FilterBar, SourceLink
+    │   ├── settings/  BidSettings, DateChangePrompt
+    │   ├── organization/ OrganizationPage
+    │   ├── account/   AccountPage
+    │   └── privacy/   PrivacyPage
     ├── components/ui/ shadcn/ui primitives, added by the shadcn CLI. Not edited by hand.
     ├── styles/   globals.css (Tailwind entry), tokens.css
     ├── features/  Claude Code. One container per screen: loads data, holds state, calls the API, renders the ui component.
@@ -80,136 +84,377 @@ Write all files under design/v0/<screen>/ and touch nothing else. Shared types a
 
 Give v0 the contract for the screen. Claude Code implements the container that supplies it.
 
+Rules for every contract:
+- Props are exactly as written. A value that can be missing is `| null`, not an optional prop, unless the contract itself writes `?`.
+- Dates and times are ISO strings (`2026-11-03`, `2026-11-03T14:00:00-05:00`). The ui component formats them. Sizes are bytes unless the name says `Mb`.
+- The container filters, sorts, and derives lists (for example gaps, totals, `daysLeft`). The ui component renders what it is given and keeps only local ui state (open menus, form drafts, row selection).
+- Messages the API produces (errors, refusals) arrive as text in a `FormStatus` or an `UploadNotice`; the ui shows them as given.
+- Every row that carries a source renders a `SourceLink`. Rows the user added show "Added by user" instead.
+- The states in 05 s4 are drawn by `TabFrame` (5.12) around each tab, except "Empty result", which each tab draws inside its own table with `EmptyState` and its add-by-hand form.
+- Tabs that hold source-bearing rows take `selectedRowId`: the row is highlighted and scrolled into view, and focus returns to it when the row detail slider closes.
+
 ### 5.1 Shell
 ```ts
-type Tab = 'overview' | 'schedule' | 'compliance' | 'outline' | 'resumes' | 'reviews' | 'production' | 'orals' | 'lessons' | 'documents' | 'settings';
+type OutsidePage = 'bids' | 'organization' | 'account' | 'privacy';
+type TabSignal = 'processing' | 'waiting' | 'failed';
+interface ShellBid { id: string; name: string; agency: string | null; dueDate: string | null; dueTime: string | null; timeZone: string | null }
 interface AppShellProps {
-  bid: { id: string; name: string; agency?: string; dueDate?: string; dueTime?: string; timeZone?: string };
+  bid: ShellBid | null;                 // null outside a bid: no sidebar
   bids: { id: string; name: string }[];
-  activeTab: Tab;
-  plan: 'free' | 'starter' | 'growth';
+  activeTab: Tab | null;                // null outside a bid
+  activePage: OutsidePage | null;       // null inside a bid
+  plan: Plan;
   creditsLeft: number; creditsResetOn: string;
   oralsEnabled: boolean;
+  tabSignals: { tab: Tab; signal: TabSignal }[];
   user: { name: string; email: string };
-  onSelectTab: (t: Tab) => void; onSwitchBid: (id: string) => void; onUpgrade: () => void; onSignOut: () => void;
+  detail: React.ReactNode;              // the row detail slider (5.17), or null when closed
+  onSelectTab: (t: Tab) => void; onSwitchBid: (id: string) => void; onOpenPage: (p: OutsidePage) => void;
+  onUpgrade: () => void; onSignOut: () => void;
   children: React.ReactNode;
 }
+const PAID_TABS: Tab[] = ['outline', 'resumes', 'reviews', 'production', 'orals', 'lessons'];
 ```
-Paid tabs show a lock on the free plan. Clicking one renders `LockedTab` with the tab's description and an upgrade button.
+- Top bar (`bg-ink`): "Shaavir PD", then inside a bid the bid switcher and the due date and time, then "N RFP credits left · resets [date]", then a user menu (Account, Organization, Privacy, Sign out). Outside a bid the top bar has links to Bids and Organization instead of the switcher.
+- Sidebar, inside a bid only: Overview, Schedule, Compliance; a divider labelled "Paid"; Outline, Resumes, Reviews, Production, Orals (only when `oralsEnabled`), Lessons; a divider; Documents, Settings. On the free plan paid tabs show a lock icon and their accessible name ends in "(locked)". A `tabSignals` entry shows a small dot with a text label (Processing, Needs you, Failed).
+- Clicking a locked tab still calls `onSelectTab`; the container renders `LockedTab` as the children.
+- The Schedule tab is rendered by Claude Code's port as the children; the content area must give it the full width and height left of the sidebar and slider.
+- `detail` is a column on the right at 1,024 px and wider (the content shrinks; the table stays usable) and a full-width overlay below 1,024 px.
+- Below 1,024 px the sidebar shows icons only, with tooltips. Below 640 px it becomes a "Menu" button that opens the tab list in a sheet.
 
 ### 5.2 Bids list and new bid
 ```ts
-interface BidsListProps { bids: BidCard[]; onOpen: (id: string) => void; onCreate: () => void; creditsLeft: number }
-interface BidCard { id: string; name: string; agency?: string; dueDate?: string; daysLeft?: number; status: 'planning' | 'writing' | 'submitted' | 'closed'; creditUsed: boolean }
-interface NewBidProps { creditsLeft: number; onCreate: (name: string, files: File[]) => void; onCancel: () => void }
+type BidStatus = 'planning' | 'writing' | 'submitted' | 'closed';
+interface BidCard { id: string; name: string; agency?: string; dueDate?: string; daysLeft?: number; status: BidStatus; creditUsed: boolean }
+interface BidsListProps {
+  bids: BidCard[]; creditsLeft: number; creditsResetOn: string;
+  onOpen: (id: string) => void; onCreate: () => void; onUpgrade: () => void;
+}
+interface NewBidProps {
+  creditsLeft: number; creditsResetOn: string; plan: Plan; mbCap: number; status: FormStatus;
+  onCreate: (name: string, bidType: BidType, files: File[]) => void; onCancel: () => void; onUpgrade: () => void;
+}
 ```
+- New bid asks for the name and the bid type (Federal or SLED, with the help "Bid facts can correct this later"), shows the credit rule and the bid's MB cap before upload, and takes the solicitation set by drag and drop or a file picker (PDF, DOCX, XLSX). Files that would pass the cap are not added; the message names them and the MB left, with "Upgrade plan" on Free.
+- `status` `'submitting'` disables the form and shows "Creating bid…". `'error'` shows the container's message above the buttons (for example the out-of-credits, wrong-solicitation, or locked-PDF refusal from 05 s3.10).
+- With `creditsLeft` at 0, Bids list opens an out-of-credits dialog instead of calling `onCreate`, and New bid shows the out-of-credits message with "Upgrade plan" and "Back to bids".
 
 ### 5.3 Overview and kickoff
 ```ts
-interface BidFact { id: string; field: string; value: string; sourcePage?: number; sourceQuote?: string; confirmed: boolean }
-interface KickoffItem { id: string; label: string; owner?: string; done: boolean }
+interface BidFact {
+  id: string; field: string; value: string; confirmed: boolean; origin: 'ai' | 'user';
+  sourcePage: number | null; sourcePageEnd: number | null; sourceQuote: string | null; amendment: AmendmentMark;
+}
+interface KickoffItem { id: string; label: string; owner: string | null; note: string | null; done: boolean }
+interface Countdown { dueDate: string; dueTime: string | null; timeZone: string | null; daysLeft: number; workdaysLeft: number }
 interface OverviewTabProps {
-  facts: BidFact[]; kickoff: KickoffItem[];
-  countdown: { daysLeft: number; workdaysLeft: number; dueLabel: string } | null;
-  processing: ProcessingState;
+  facts: BidFact[]; kickoff: KickoffItem[]; countdown: Countdown | null; selectedRowId: string | null;
   onEditFact: (id: string, value: string) => void; onConfirmFact: (id: string, confirmed: boolean) => void;
-  onToggleKickoff: (id: string, done: boolean) => void; onSetOwner: (id: string, owner: string) => void;
-  onOpenSource: (page: number, quote: string) => void;
+  onAddFact: (field: string, value: string) => void;
+  onToggleKickoff: (id: string, done: boolean) => void; onSetKickoffOwner: (id: string, owner: string) => void;
+  onAddKickoff: (label: string) => void;
+  onOpenRow: (id: string) => void; onOpenSource: (id: string) => void; onJumpToRow: (id: string) => void;
 }
 ```
+- Bid facts table: Field, Value, Source, Confirmed. A superseded fact stays, value struck through, with the label "Superseded by Amd N" as a button that calls `onJumpToRow(replacedById)`. A fact added by an amendment shows "Added by Amd N".
+- Countdown: days and workdays left to the due date and time, in the numeric font; "Due today" at 0; "Past due" below 0 in due red.
+- Kickoff checklist: label, owner, done. The standard items are seeded by the container.
 
 ### 5.4 Compliance matrix
 ```ts
-type ReqType = 'shall' | 'must' | 'will' | 'should' | 'other';
 type RowStatus = 'open' | 'assigned' | 'drafted' | 'done';
 interface ComplianceRow {
-  id: string; reqId: string; sectionRef: string; requirement: string; type: ReqType;
-  instrRef?: string; evalRef?: string; responseSection?: string; owner?: string; status: RowStatus;
-  sourcePage?: number; quoteVerified: boolean; origin: 'ai' | 'user'; flags: ('unverified' | 'duplicate' | 'outside_scope')[];
+  id: string; reqId: string; sectionRef: string | null; requirement: string; type: ReqType | null;
+  instrRef: string | null; evalRef: string | null; responseSection: string | null; owner: string | null; status: RowStatus;
+  sourcePage: number | null; sourcePageEnd: number | null; sourceQuote: string | null; quoteVerified: boolean;
+  origin: 'ai' | 'user'; flags: RowFlag[]; amendment: AmendmentMark;
 }
 interface CheckThese { id: string; sentence: string; page: number }
-interface ComplianceFilters { section?: string; type?: ReqType; status?: RowStatus; owner?: string; unverifiedOnly: boolean; search: string }
+interface ComplianceFilters {
+  section: string | null; type: ReqType | null; status: RowStatus | null; owner: string | null;
+  amendment: number | 'original' | null; flaggedOnly: boolean; hideClosed: boolean; checkThese: boolean; search: string;
+}
+type ComplianceRowEdit = Partial<Pick<ComplianceRow, 'requirement' | 'owner' | 'status' | 'responseSection'>>;
+interface NewComplianceRow { requirement: string; sectionRef: string | null; type: ReqType | null; owner: string | null }
 interface ComplianceMatrixTabProps {
-  rows: ComplianceRow[]; checkThese: CheckThese[]; filters: ComplianceFilters; federal: boolean;
-  sections: string[]; owners: string[]; processing: ProcessingState;
+  rows: ComplianceRow[];              // already filtered by the container
+  totalRows: number;
+  checkThese: CheckThese[];
+  filters: ComplianceFilters; federal: boolean;
+  sections: string[]; owners: string[]; amendments: number[];
+  selectedRowId: string | null;
   onFiltersChange: (f: ComplianceFilters) => void;
-  onEditRow: (id: string, patch: Partial<ComplianceRow>) => void; onAddRow: (row: Omit<ComplianceRow, 'id'>) => void;
-  onMergeRows: (ids: string[]) => void; onSplitRow: (id: string, parts: string[]) => void; onDeleteRow: (id: string) => void;
+  onEditRow: (id: string, edit: ComplianceRowEdit) => void; onAddRow: (row: NewComplianceRow) => void;
+  onMergeRows: (ids: string[]) => void; onSplitRow: (id: string, at: number) => void; onDeleteRow: (id: string) => void;
   onPromoteCheckThese: (id: string) => void; onDismissCheckThese: (id: string) => void;
-  onOpenSource: (page: number, quote: string) => void; onExport: (format: 'xlsx' | 'csv') => void;
+  onOpenRow: (id: string) => void; onOpenSource: (id: string) => void; onJumpToRow: (id: string) => void;
+  onExport: (format: 'xlsx' | 'csv') => void;
 }
 ```
-When `federal` is true, label the reference columns "L ref" and "M factor"; otherwise "Instruction ref" and "Evaluation factor". Always show the banner "Draft. Review every row before you rely on it." once processing finishes.
+- Columns: ID, Section, Requirement, Type, Instruction ref, Evaluation factor, Response section, Owner, Status, Source, Amendment. When `federal` is true the two reference columns read "L ref" and "M factor".
+- Amendment column and row display: `superseded` rows stay, struck through, with the text label "Superseded" and the button "Superseded by Amd N", which calls `onJumpToRow(replacedById)`; `withdrawn` rows stay, struck through, with "Withdrawn by Amd N" and no jump; `added` rows show "Added by Amd N"; `original` shows "Original". User rows show "Added by user".
+- Flags show as small labelled badges: "May not be a requirement", "Page estimated", "OCR", "Quote not verified". The "Flagged" filter shows rows with any flag.
+- Filters: Section, Type, Status, Owner, Amendment (Original or Amd N), "Flagged", "Hide superseded and withdrawn", "Check these", and a search box. "Check these" swaps the table for the pre-scan list: each sentence with its page, "Add as requirement", and "Dismiss". "Showing N of M rows" sits above the table.
+- Row actions: select rows with checkboxes, then "Merge selected" (2 or more). "Split row" opens a dialog showing the requirement text; the user places the split point and confirms; the ui calls `onSplitRow(id, characterIndex)`. "Delete row" asks with `ConfirmDialog`. Owner and Status are editable in the table. "Add requirement" opens a small form.
+- Export menu: "Export XLSX", "Export CSV". The XLSX is laid out by the instruction sections; superseded and withdrawn rows export with their status (container).
+- `TabFrame` shows "Draft. Review every row before you rely on it." above the table once processing finishes (`draftNotice`), and the amendment-confirm panel in its `waiting` slot.
 
 ### 5.5 Outline and status tracker
 ```ts
-interface OutlineItem { id: string; parentId?: string; number: string; title: string; pageLimit?: number; pagesPlanned?: number; sourceRef?: string; writer?: string; status: 'not_started' | 'in_progress' | 'review' | 'done'; dueDate?: string }
-interface OutlineTabProps { items: OutlineItem[]; processing: ProcessingState; onEdit: (id: string, patch: Partial<OutlineItem>) => void; onAdd: (parentId?: string) => void; onDelete: (id: string) => void; onMove: (id: string, parentId: string | undefined, index: number) => void; onExport: (format: 'xlsx' | 'docx') => void }
+type OutlineStatus = 'not_started' | 'in_progress' | 'review' | 'done';
+interface OutlineItem {
+  id: string; parentId: string | null; number: string | null; title: string; pageLimit: number | null;
+  sourceRef: string | null; sourcePage: number | null; sourcePageEnd: number | null; sourceQuote: string | null;
+  writer: string | null; status: OutlineStatus; dueDate: string | null; origin: 'ai' | 'user'; amendment: AmendmentMark;
+}
+type OutlineEdit = Partial<Pick<OutlineItem, 'title' | 'writer' | 'status' | 'pageLimit' | 'dueDate'>>;
+interface OutlineTabProps {
+  items: OutlineItem[]; selectedRowId: string | null;
+  onEdit: (id: string, edit: OutlineEdit) => void; onAdd: (parentId: string | null, title: string, number: string | null) => void;
+  onDelete: (id: string) => void; onMove: (id: string, parentId: string | null, index: number) => void;
+  onOpenRow: (id: string) => void; onOpenSource: (id: string) => void; onExport: (format: 'xlsx' | 'docx') => void;
+}
 ```
-Show the page total per volume against its limit, red when over.
+- Tree of volumes (items with `parentId` null) and their sections: number, title, page limit, writer, status, due date, source ref. Sections expand and collapse.
+- Each volume shows "Pages planned N of L": the sum of its sections' page limits against the volume's own limit, in due red with the text "Over by X" when over.
+- The source ref is a button that calls `onOpenRow`. Move a section with "Move up", "Move down", and "Move to volume…" (no drag-only control).
 
 ### 5.6 Resume and key personnel matrix
 ```ts
-interface PersonnelRequirement { id: string; role: string; requirement: string; kind: 'degree' | 'years' | 'certification' | 'clearance' | 'skill' | 'other'; sourcePage?: number; sourceQuote?: string }
-interface Candidate { id: string; name: string; role: string; documentId: string; status: 'processing' | 'ready' | 'failed' }
-interface ResumeMatch { candidateId: string; requirementId: string; result: 'meets' | 'partial' | 'gap' | 'unknown'; evidence?: string; override?: 'meets' | 'partial' | 'gap' }
+type PersonnelKind = 'degree' | 'years' | 'certification' | 'clearance' | 'skill' | 'other';
+type MatchResult = 'meets' | 'partial' | 'gap' | 'unknown';
+interface PersonnelRequirement {
+  id: string; role: string; requirement: string; kind: PersonnelKind | null; origin: 'ai' | 'user';
+  sourcePage: number | null; sourcePageEnd: number | null; sourceQuote: string | null; amendment: AmendmentMark;
+}
+interface Candidate {
+  id: string; name: string; role: string; status: 'processing' | 'ready' | 'failed';
+  uploadedAt: string | null; resumeDeleted: boolean;
+}
+interface ResumeMatch { candidateId: string; requirementId: string; result: MatchResult; evidence: string | null; evidencePage: number | null; overridden: boolean }
 interface ResumeMatrixTabProps {
-  requirements: PersonnelRequirement[]; candidates: Candidate[]; matches: ResumeMatch[]; roles: string[]; processing: ProcessingState;
-  onEditRequirement: (id: string, patch: Partial<PersonnelRequirement>) => void; onAddRequirement: (role: string) => void; onDeleteRequirement: (id: string) => void;
-  onUploadResumes: (files: File[], role: string) => void; onAssignRole: (candidateId: string, role: string) => void; onRemoveCandidate: (id: string) => void;
-  onOverride: (candidateId: string, requirementId: string, result: 'meets' | 'partial' | 'gap' | null) => void;
-  onOpenSource: (page: number, quote: string) => void; onExport: () => void;
+  requirements: PersonnelRequirement[]; candidates: Candidate[]; matches: ResumeMatch[]; roles: string[];
+  gaps: { candidateId: string; requirementIds: string[] }[]; uncoveredRoles: string[];
+  uploadStatus: FormStatus; selectedRowId: string | null;
+  onEditRequirement: (id: string, edit: { role?: string; requirement?: string }) => void;
+  onAddRequirement: (role: string, requirement: string, kind: PersonnelKind | null) => void; onDeleteRequirement: (id: string) => void;
+  onUploadResumes: (files: File[], role: string) => void; onAssignRole: (candidateId: string, role: string) => void;
+  onRemoveCandidate: (id: string) => void;
+  onSetResult: (candidateId: string, requirementId: string, result: 'meets' | 'partial' | 'gap') => void;
+  onOpenRow: (id: string) => void; onOpenSource: (id: string) => void; onExport: () => void;
 }
 ```
-Grid: requirement rows by candidate columns, grouped by role. Below it, a gap list per candidate and a list of roles no candidate fully meets.
+- Left: roles and their requirements (editable). Right: "Upload resumes" for a chosen role, and the candidate list with role, status, and upload date.
+- Grid: requirement rows by candidate columns, grouped by role. Each cell shows Meets, Partial, Gap, or Unknown as text plus color, the evidence quote and page in a tooltip, and "Reviewer set" when `overridden`. A cell menu sets the result.
+- Below the grid: a gap list per candidate and "Roles with no candidate who meets every requirement".
+- A standing note: "Resumes, their text, and evidence quotes are deleted 90 days after upload. Candidate names and results stay." When `resumeDeleted`, evidence reads "Removed: resume deleted after 90 days".
 
 ### 5.7 Color team reviews
 ```ts
-interface Review { id: string; type: 'pink' | 'red' | 'green' | 'gold' | 'other'; scheduledAt?: string; status: 'planned' | 'in_progress' | 'done'; draftDocumentId?: string; reviewers: { name: string; sections: string[] }[] }
-interface Finding { id: string; reviewId: string; evalFactor?: string; kind: 'strength' | 'weakness' | 'deficiency' | 'risk' | 'comment'; text: string; draftQuote?: string; origin: 'ai' | 'user'; author?: string; disposition: 'open' | 'accepted' | 'rejected' | 'done' }
+type ReviewType = 'pink' | 'red' | 'green' | 'gold' | 'other';
+type FindingKind = 'strength' | 'weakness' | 'deficiency' | 'risk' | 'comment';
+type Disposition = 'open' | 'accepted' | 'rejected' | 'done';
+interface Reviewer { id: string; name: string; sections: string }
+interface Review {
+  id: string; type: ReviewType; scheduledAt: string | null; status: 'planned' | 'in_progress' | 'done';
+  draftFileName: string | null; reviewers: Reviewer[];
+}
+interface Finding {
+  id: string; reviewId: string; evalFactor: string | null; kind: FindingKind; text: string;
+  draftQuote: string | null; draftPage: number | null; origin: 'ai' | 'user'; author: string | null; disposition: Disposition;
+}
+interface NewReview { type: ReviewType; scheduledAt: string | null; reviewers: { name: string; sections: string }[] }
 interface ReviewsTabProps {
-  reviews: Review[]; findings: Finding[]; activeReviewId?: string; evalFactors: string[]; processing: ProcessingState;
-  onCreateReview: (r: Omit<Review, 'id' | 'status'>, draft?: File) => void; onSelectReview: (id: string) => void; onEditReview: (id: string, patch: Partial<Review>) => void;
-  onAddFinding: (f: Omit<Finding, 'id' | 'origin' | 'disposition'>) => void; onEditFinding: (id: string, patch: Partial<Finding>) => void; onSetDisposition: (id: string, d: Finding['disposition']) => void;
-  onExport: (format: 'docx' | 'xlsx') => void;
+  reviews: Review[]; findings: Finding[]; activeReviewId: string | null; evalFactors: string[]; federal: boolean;
+  uploadStatus: FormStatus; selectedRowId: string | null;
+  onCreateReview: (r: NewReview, draft: File | null) => void; onSelectReview: (id: string) => void;
+  onEditReview: (id: string, edit: { status?: Review['status']; scheduledAt?: string | null }) => void;
+  onUploadDraft: (reviewId: string, file: File) => void;
+  onAddReviewer: (reviewId: string, name: string, sections: string) => void; onRemoveReviewer: (id: string) => void;
+  onAddFinding: (f: { reviewId: string; evalFactor: string | null; kind: FindingKind; text: string }) => void;
+  onEditFinding: (id: string, text: string) => void; onSetDisposition: (id: string, d: Disposition) => void;
+  onOpenRow: (id: string) => void; onOpenSource: (id: string) => void; onExport: (format: 'docx' | 'xlsx') => void;
 }
 ```
-Findings grouped by evaluation factor, with the review type's color as the group marker.
+- Review list (type chip in its color team color, date, status, draft file), "Create review" (type, date, draft upload, reviewers and their sections).
+- Findings for the active review grouped by evaluation factor ("Section M factor" on federal bids), then by kind: strengths, weaknesses, deficiencies, risks, comments. Each finding: text, draft quote and page as a `SourceLink`, origin (AI or the author's name), and a disposition control (Open, Accept, Reject, Done).
 
 ### 5.8 Production checklist
 ```ts
-interface ProductionItem { id: string; category: 'format' | 'files' | 'submission' | 'copies' | 'other'; rule: string; sourcePage?: number; sourceQuote?: string; owner?: string; done: boolean; origin: 'ai' | 'user' | 'standard' }
-interface ProductionTabProps { items: ProductionItem[]; processing: ProcessingState; onToggle: (id: string, done: boolean) => void; onEdit: (id: string, patch: Partial<ProductionItem>) => void; onAdd: (category: ProductionItem['category']) => void; onDelete: (id: string) => void; onOpenSource: (page: number, quote: string) => void }
+type ProductionCategory = 'format' | 'files' | 'submission' | 'copies' | 'other';
+interface ProductionItem {
+  id: string; category: ProductionCategory; rule: string; owner: string | null; done: boolean; origin: 'ai' | 'user' | 'standard';
+  sourcePage: number | null; sourcePageEnd: number | null; sourceQuote: string | null; amendment: AmendmentMark;
+}
+interface ProductionTabProps {
+  items: ProductionItem[]; selectedRowId: string | null;
+  onToggle: (id: string, done: boolean) => void; onEdit: (id: string, edit: { rule?: string; owner?: string | null }) => void;
+  onAdd: (category: ProductionCategory, rule: string) => void; onDelete: (id: string) => void;
+  onOpenRow: (id: string) => void; onOpenSource: (id: string) => void;
+}
 ```
-Show a "ready to submit" bar: done items over total.
+- Grouped by category (Format, Files, Submission, Copies, Other). Standard items show "Standard"; extracted rules show their `SourceLink`.
+- "Ready to submit" bar at the top: done over total, with "Ready to submit" in green text when all are done.
 
 ### 5.9 Orals
 ```ts
-interface OralsItem { id: string; category: 'rules' | 'prep' | 'session'; item: string; sourcePage?: number; owner?: string; minutes?: number; done: boolean }
-interface OralsTabProps { items: OralsItem[]; processing: ProcessingState; onToggle: (id: string, done: boolean) => void; onEdit: (id: string, patch: Partial<OralsItem>) => void; onAdd: (category: OralsItem['category']) => void; onDelete: (id: string) => void; onOpenSource: (page: number, quote: string) => void }
+type OralsCategory = 'rules' | 'prep' | 'session';
+interface OralsItem {
+  id: string; category: OralsCategory; item: string; owner: string | null; minutes: number | null; done: boolean; origin: 'ai' | 'user' | 'standard';
+  sourcePage: number | null; sourcePageEnd: number | null; sourceQuote: string | null; amendment: AmendmentMark;
+}
+interface OralsTabProps {
+  items: OralsItem[]; selectedRowId: string | null;
+  onToggle: (id: string, done: boolean) => void;
+  onEdit: (id: string, edit: { item?: string; owner?: string | null; minutes?: number | null }) => void;
+  onAdd: (category: OralsCategory, item: string) => void; onDelete: (id: string) => void;
+  onOpenRow: (id: string) => void; onOpenSource: (id: string) => void;
+}
 ```
+- Three sections: "Orals rules" (from the solicitation, each with source), "Preparation checklist" (done, owner), "Session plan" (topic, presenter = `owner`, minutes, with a total).
 
 ### 5.10 Lessons learned
 ```ts
-interface Lesson { id: string; question: string; answer: string; author?: string; updatedAt: string }
-interface LessonsTabProps { lessons: Lesson[]; onAnswer: (id: string, answer: string) => void; onAddQuestion: (q: string) => void; onExport: () => void }
+interface Lesson { id: string; question: string; answer: string; author: string | null; updatedAt: string }
+interface LessonsTabProps {
+  lessons: Lesson[]; saveStatus: FormStatus;
+  onAnswer: (id: string, answer: string) => void; onAddQuestion: (question: string) => void; onDelete: (id: string) => void;
+  onExport: () => void;
+}
 ```
+- The seeded survey questions (what worked, what to change, evaluator feedback) and notes, each with a text area, "Save answer", and the author and last update.
 
-### 5.11 Documents and settings
+### 5.11 Documents and bid settings
 ```ts
-interface Doc { id: string; name: string; kind: 'solicitation' | 'amendment' | 'attachment' | 'resume' | 'draft'; pages?: number; uploadedAt: string; deleteOn: string; status: 'scanning' | 'extracting' | 'ready' | 'failed' | 'deleted' }
-interface DocumentsPanelProps { docs: Doc[]; onUpload: (files: File[], kind: Doc['kind']) => void; onDelete: (id: string) => void; onOpen: (id: string) => void }
-interface BidSettingsProps { bid: BidSettingsValues; onSave: (v: BidSettingsValues) => void; onDeleteBid: () => void }
-interface BidSettingsValues { name: string; agency: string; solicitationNumber: string; startDate?: string; dueDate?: string; dueTime?: string; timeZone: string; oralsEnabled: boolean }
+type DocStatus =
+  | { state: 'processing'; queuePosition: number | null }
+  | { state: 'live' }
+  | { state: 'failed'; reason: string }
+  | { state: 'archived' }
+  | { state: 'restore_requested' }
+  | { state: 'restoring' }
+  | { state: 'restored'; until: string }
+  | { state: 'deleted' };
+type MarkingState =
+  | { state: 'none' }
+  | { state: 'blocked'; markings: string[]; page: number | null }
+  | { state: 'confirmed'; markings: string[] };
+type KeyCheck = 'not_applicable' | 'ok' | 'mismatch' | 'overridden';
+interface Doc {
+  id: string; name: string; kind: FileKind; amendmentNo: number | null; pages: number | null; pagesEstimated: boolean;
+  sizeBytes: number; uploadedAt: string; liveUntil: string | null; status: DocStatus; marking: MarkingState; keyCheck: KeyCheck;
+}
+interface UploadNotice { id: string; fileName: string; tone: 'error' | 'info'; message: string }
+interface UploadProgress { fileName: string; percent: number }
+interface DocumentsPanelProps {
+  docs: Doc[]; usedBytes: number; capMb: number; plan: Plan; isOwner: boolean; overridesLeft: number;
+  notices: UploadNotice[]; uploads: UploadProgress[];
+  onUpload: (files: File[], kind: FileKind) => void; onDismissNotice: (id: string) => void;
+  onOpen: (id: string) => void; onDelete: (id: string) => void; onRestore: (id: string) => void;
+  onConfirmMarking: (id: string) => void; onOverrideKey: (id: string, reason: string) => void; onUpgrade: () => void;
+}
+interface BidSettingsValues {
+  name: string; agency: string; bidType: BidType; solicitationNumber: string;
+  startDate: string | null; dueDate: string | null; dueTime: string | null; timeZone: string;
+  oralsEnabled: boolean; keepFilesLiveUntil: string | null;
+}
+interface BidSettingsProps {
+  bid: BidSettingsValues; plan: Plan; isOwner: boolean; filesLiveUntil: string | null;
+  creditStatus: 'reserved' | 'consumed' | 'none';
+  saveStatus: FormStatus; deleteStatus: FormStatus;
+  onSave: (v: BidSettingsValues) => void; onDeleteBid: () => void;
+}
+interface DateChangePromptProps {
+  open: boolean; previousDue: string; nextDue: string;
+  onChoose: (mode: 'shift' | 'scale' | 'keep') => void; onCancel: () => void;
+}
 ```
+Documents:
+- Header: "N MB of C MB used" with a meter (`usedBytes`, `capMb`; 50 MB on Free, 300 MB on paid), "Upgrade plan" beside it on Free when 90 % or more is used.
+- Upload area: kind (Solicitation, Amendment, Attachment, Resume, Draft), drag and drop or "Choose files", and a separate "Add amendment" button. Progress per file from `uploads`. Each `notices` entry shows as an alert with its file name and message and a "Dismiss" button. The container sends the 05 s3.10 messages: over the cap with the MB left, "This file belongs to a different solicitation. Start a new bid.", "Already uploaded.", "Upload an unlocked copy."
+- Table: Name, Kind, Amendment, Pages ("~N" with "Page estimated" when `pagesEstimated`), Size, Uploaded, Live until, Status, Marking, Actions. Status text: "Processing" with "Queue position N", "Live", "Failed" with the reason, "Archived", "Restore requested", "Restoring (a short wait)", "Restored until [date]", "Deleted".
+- Marking prompt for a `blocked` file (uses `MarkingPrompt`, 5.12): "This file carries the marking [CUI] on page 2. AI processing is paused. Confirm the file is public or approved for third-party processing." Buttons "Confirm file is public" and "Remove file".
+- `keyCheck` `mismatch` on an amendment: "The solicitation number on this amendment does not match the bid." The owner sees "Override" (dialog with a required reason and "N overrides left"); a member sees "Ask the bid owner to override." `overridden` shows "Accepted by override".
+- Actions per row: "Open" (live or restored), "Restore" (archived), "Delete" (`ConfirmDialog`: "Delete [file name]? The rows and quotes it produced stay. Its MB is freed.").
+
+Bid settings:
+- Fields: Name, Agency, Bid type (Federal or SLED), Solicitation number, Start date, Due date, Due time, Time zone (US zones), Orals (switch). "Save changes".
+- "Keep files live until": a date the owner can set on paid plans, with the help "Files stay live until [filesLiveUntil] unless you extend it." Members see it read-only; Free shows it disabled with "Paid plans can keep files live longer."
+- The container compares dates after `onSave`; when the due date changed it opens `DateChangePrompt`: "The due date moved from [previous] to [next]. Move the schedule with it?" Buttons "Shift dates", "Scale dates", "Keep dates", "Cancel". The Schedule port reuses this prompt.
+- Danger zone: "Delete bid" opens a dialog that names the bid, requires typing the bid name, and says what happens to the credit (`consumed`: "The RFP credit used for this bid is not returned."; `reserved`: "The reserved RFP credit is released."). It also says archive copies are deleted. Cancel has default focus.
 
 ### 5.12 Shared
 ```ts
-interface ProcessingState { stage: 'idle' | 'scanning' | 'extracting' | 'classifying' | 'extract' | 'verify' | 'map' | 'done' | 'failed'; percent: number; message?: string; etaSeconds?: number }
-interface SourceLinkProps { page?: number; quote?: string; fileGone?: boolean; onOpen: (page: number, quote: string) => void }
-interface LockedTabProps { tab: Tab; title: string; description: string; onUpgrade: () => void }
+type Plan = 'free' | 'starter' | 'growth';
+type BidType = 'federal' | 'sled';
+type Role = 'owner' | 'member';
+type FileKind = 'solicitation' | 'amendment' | 'attachment' | 'resume' | 'draft';
+type ReqType = 'shall' | 'must' | 'will' | 'should' | 'other';
+type RowFlag = 'maybe_not_requirement' | 'page_estimated' | 'ocr' | 'quote_unverified';
+type FormStatus = AuthStatus;   // { state: 'idle' } | { state: 'submitting' } | { state: 'error'; message } | { state: 'done'; message }
+type AmendmentMark =
+  | { kind: 'original' }
+  | { kind: 'added'; amendmentNo: number }
+  | { kind: 'superseded'; amendmentNo: number; replacedById: string | null }
+  | { kind: 'withdrawn'; amendmentNo: number };
+
+interface ProcessingStep { id: string; label: string; status: 'waiting' | 'running' | 'done' | 'failed'; percent: number }
+interface ProcessingState { steps: ProcessingStep[]; queuePosition: number | null; etaSeconds: number | null }
+interface ProcessingBannerProps { processing: ProcessingState }
+
+interface SourceLinkProps { page: number | null; pageEnd: number | null; rowLabel: string; onOpen: () => void }
 interface EmptyStateProps { title: string; text: string; action?: { label: string; onClick: () => void } }
+interface LockedTabProps { tab: Tab; title: string; description: string; onUpgrade: () => void }
+
+type TabBlock =
+  | { kind: 'no_solicitation' }
+  | { kind: 'failed'; reason: string }
+  | { kind: 'locked'; description: string }
+  | { kind: 'out_of_credits'; creditsLeft: number; creditsResetOn: string };
+interface TabFrameProps {
+  tab: Tab; title: string; plan: Plan;
+  block: TabBlock | null;                 // replaces the content
+  processing: ProcessingState | null;     // banner above the content
+  waiting: React.ReactNode;               // MarkingPrompt and AmendmentConfirm, or null
+  overCap: { usedBytes: number; capMb: number } | null;
+  draftNotice: boolean;
+  onUploadSolicitation: () => void; onRetry: () => void; onUpgrade: () => void;
+  children: React.ReactNode;
+}
+
+interface MarkingPromptProps {
+  fileName: string; markings: string[]; page: number | null; busy: boolean;
+  onConfirm: () => void; onRemoveFile: () => void;
+}
+interface AmendmentSide { rowId: string; label: string; text: string; sourcePage: number | null }
+interface AmendmentProposal {
+  id: string; amendmentNo: number; action: 'supersede' | 'withdraw' | 'add'; confidence: number | null;
+  oldRow: AmendmentSide | null; newRow: AmendmentSide | null;
+}
+interface AmendmentConfirmProps {
+  proposals: AmendmentProposal[]; busyIds: string[];
+  onConfirm: (id: string) => void; onReject: (id: string) => void; onOpenSource: (rowId: string) => void;
+}
+
+type UpgradeReason = 'locked_tab' | 'out_of_credits' | 'over_cap' | 'seats' | 'plan';
+interface UpgradeDialogProps {
+  open: boolean; reason: UpgradeReason; plan: Plan; creditsLeft: number; creditsResetOn: string;
+  onChoosePlan: (p: 'starter' | 'growth') => void; onClose: () => void;
+}
+interface ConfirmDialogProps {
+  open: boolean; title: string; body: string; confirmLabel: string;
+  typeToConfirm: string | null;           // when set, the confirm button stays disabled until this text is typed
+  busy: boolean; onConfirm: () => void; onCancel: () => void;
+}
 ```
+- `TabFrame` draws the 05 s4 states: `no_solicitation` ("No solicitation yet" and "Upload solicitation"), `failed` (the plain reason and "Try again"; never raw error text), `locked` (`LockedTab`), `out_of_credits` (credits left, reset date, "Upgrade plan"). `processing` shows `ProcessingBanner` above the content (the content still renders). `waiting` renders under a "Needs you" heading above the content. `overCap` shows "N MB of C MB used. New files cannot be added." with "Upgrade plan" on Free. `draftNotice` shows "Draft. Review every row before you rely on it."
+- `ProcessingBanner`: one line per step with its label, status, and a progress bar; "Queue position N" when queued; "Usually about N minutes" from `etaSeconds`, or nothing when null. Live region, polite.
+- `SourceLink`: "p. 12" or "pp. 12–13"; accessible name "Open source for [rowLabel], page 12". With `page` null it renders the muted text "No source".
+- `LockedTab`: tab title, "[Tab] is on a paid plan", the description, a static sample (a small mock table or list for that tab, marked "Sample" and hidden from screen readers), and "Upgrade plan".
+- `MarkingPrompt`: "This file carries the marking [marking] on page [page]. AI processing is paused. Confirm the file is public or approved for third-party processing." Buttons "Confirm file is public" and "Remove file". With `page` null, "on page N" is left out.
+- `AmendmentConfirm`: heading "Confirm amendment changes", the line "Until you confirm, the old row stays active.", and one card per proposal: "Amd N" and the action ("Replaces", "Withdraws", "Adds"), the old row beside the new row (stacked below 640 px), confidence as a percent, and "Confirm" and "Reject".
+- `UpgradeDialog`: the reason as the first line ("Outline is on a paid plan.", "You have 0 RFP credits left. They reset on [date].", "This bid is at its file cap.", "Your plan's seats are full."), then Starter and Growth side by side with 06 s3's allowances (RFPs per period, MB per bid, users, tabs, file retention), the current plan marked, and "Choose Starter" or "Choose Growth". No prices; the line "The price is shown at checkout."
+- `ConfirmDialog`: built on alert-dialog; the title names the item; Cancel has default focus.
 
 ### 5.13 Auth: log in, sign up, verify, reset
 ```ts
@@ -231,16 +476,128 @@ interface ResetPasswordProps { status: AuthStatus; onSetPassword: (password: str
 ```
 The email link lands on the app with a token; the container verifies it and moves `VerifyProps.step` to `'phone'`. Error text comes from the API and is shown as given. Rules the forms check before calling back: work email, password at least 12 characters, phone `+1` and 10 digits, SMS code 6 digits.
 
+### 5.14 Organization
+```ts
+interface OrgMember { userId: string; name: string; email: string; role: Role; isYou: boolean }
+interface OrgCredits { allowed: number; used: number; reserved: number; periodStart: string; periodEnd: string }
+interface ProcessingInfo { provider: string; model: string; subprocessors: string[] }
+interface OrganizationPageProps {
+  org: { name: string; plan: Plan; planStatus: 'active' | 'past_due' | 'free' } | null;   // null: no organization yet
+  role: Role; members: OrgMember[]; seatLimit: number; credits: OrgCredits | null; mbCap: number;
+  processing: ProcessingInfo | null; billingAvailable: boolean;
+  createStatus: FormStatus; inviteStatus: FormStatus;
+  onCreateOrg: (name: string) => void; onInvite: (email: string) => void; onRemoveMember: (userId: string) => void;
+  onOpenBilling: () => void; onUpgrade: () => void; onOpenPrivacy: () => void;
+}
+```
+- `org` null: "Create your organization" with Organization name and "Create organization".
+- Plan: plan name, `past_due` warning "Your last payment failed. Stripe is retrying; paid features stay on.", "Credits used this period: U of A" (and "R reserved" when above 0), "Resets on [periodEnd]", files per bid (`mbCap`), "Manage billing" (owner only; disabled with "Billing opens when Stripe is connected." when `billingAvailable` is false), "Upgrade plan" on Free.
+- Members: table of name, email, role ("You" marker); "Invite member" (work email) with "N of S seats used" (blocked with an upgrade message when full); owners see "Remove" on other members (`ConfirmDialog`, naming the member).
+- Data and AI: "AI model: [model]", "Provider: [provider]", the subprocessor list, and "Read the privacy summary".
+
+### 5.15 Account
+```ts
+interface AccountPageProps {
+  name: string; email: string; phone: string;
+  profileStatus: FormStatus; passwordStatus: FormStatus;
+  onSaveName: (name: string) => void; onChangePassword: (currentPassword: string, newPassword: string) => void;
+}
+```
+- Profile: Name (editable, "Save name"), Work email and Phone shown read-only with "To change your email or phone, contact support."
+- Password: Current password, New password (12 characters or more, show/hide), "Change password". Validation as in 5.13.
+
+### 5.16 Privacy summary
+```ts
+interface PrivacyPageProps { processing: ProcessingInfo | null; policyUrl: string | null; onBack: () => void }
+```
+- A readable page (max about 70 characters per line) that works inside the shell and on its own (Sign up links to it). Sections and content from 07: what you may upload (no CUI, classified, or export-controlled data; the marking check); AI processing (the model and provider from `processing`, and the plain statement that a China-origin model may process documents if it is the one in use); who can access the server (support staff and administrators in India can technically access it; support access to your documents needs your written approval); how long data is kept (07 s2 table in plain words, with "To be confirmed" where 07 is open); deletion and backups; subprocessors. "Read the full Privacy Policy" when `policyUrl` is set, otherwise "The full Privacy Policy will be published before launch."
+
+### 5.17 Row detail slider
+```ts
+type RowKind = 'bid_fact' | 'schedule' | 'compliance' | 'outline' | 'requirement' | 'finding' | 'production' | 'orals';
+interface RowDetailData {
+  id: string; kind: RowKind; title: string;
+  sourceQuote: string | null; sectionRef: string | null; documentName: string | null;
+  sourcePage: number | null; sourcePageEnd: number | null; amendment: AmendmentMark;
+  reqType: ReqType | null; instrRef: string | null; evalRef: string | null;
+  confidence: number | null;               // 0 to 1
+  flags: RowFlag[]; quoteVerified: boolean | null; confirmed: boolean | null;
+  owner: string | null; status: string | null; origin: 'ai' | 'user' | null;
+}
+interface RowEditField {
+  key: string; label: string; kind: 'text' | 'longtext' | 'select' | 'number' | 'date';
+  value: string; options: { value: string; label: string }[] | null;
+}
+interface RowHistoryEntry { id: string; who: string; field: string; from: string | null; to: string | null; at: string }
+interface RowDetailProps {
+  open: boolean; row: RowDetailData | null;   // null while loading
+  history: RowHistoryEntry[]; federal: boolean; editFields: RowEditField[]; saveStatus: FormStatus;
+  onOpenSource: () => void; onSave: (values: Record<string, string>) => void;
+  onJumpToRow: (id: string) => void; onClose: () => void;
+}
+```
+- Fields in the 05 s3.12 order; a field whose value is null is hidden. Verbatim source text in a quote block exactly as given (whitespace kept). Page "12" or "12–13". Amendment "Original" or "Amd N", with "Superseded by Amd N" as a jump button. Refs labelled "L ref" and "M factor" when `federal`. Confidence as a percent. Verified "Yes" or "No". Origin "AI" or "User". Edit history: who changed which field, from, to, and when.
+- Buttons: "Open source", "Edit" (turns `editFields` into a form with "Save changes" and "Cancel"), "Close". Esc closes. Focus moves into the slider on open; the container returns it to the row.
+- Skeleton while `row` is null. Rendered inside `AppShellProps.detail`: a column of about 420 px at 1,024 px and wider, full width below.
+
+### 5.18 Source viewer
+```ts
+interface PageText { pageNo: number; text: string }
+type SourceView =
+  | { mode: 'loading' }
+  | { mode: 'page'; pageView: React.ReactNode }                // the container renders the PDF page(s) with the quote highlighted
+  | { mode: 'text'; pages: PageText[] }                        // Word file that could not be converted: "Page estimated"
+  | { mode: 'archived'; pages: PageText[]; restore: 'none' | 'requested' | 'restoring' }
+  | { mode: 'resume_deleted' }
+  | { mode: 'error'; message: string };
+interface SourceViewerProps {
+  open: boolean; fileName: string; page: number; pageEnd: number | null; quote: string | null;
+  view: SourceView; canRestore: boolean;
+  onRestore: () => void; onRetry: () => void; onClose: () => void;
+}
+```
+- A large dialog (full screen below 640 px): header with file name and "Page 12" or "Pages 12–13", "Close".
+- `page`: the stored quote above `pageView`. `text`: the page text with the quote marked (`<mark>`, matched ignoring case and runs of whitespace) and the label "Page estimated". `archived`: "This file is archived. The stored quote and page text are shown." with the marked page text and "Restore file" (or "Restore requested" / "Restoring (a short wait)"). `resume_deleted`: "Resume deleted after 90 days". `error`: the message and "Try again".
+- The viewing token and its quiet renewal are the container's job; the ui never sees a URL.
+
+### 5.19 API gaps (container supplies until the API adds them)
+- Members: `MembershipDto` has `userId` and `role` only; name and email are missing (5.14).
+- Billing: no Stripe Checkout or Customer Portal call in the client; `billingAvailable` false until it exists. Seat limit is a container constant from 06 s2 (5.14, `UpgradeDialog`).
+- Processing: `JobDto` has `queuePosition` and `queueDepth` but no expected wait; `etaSeconds` is null or a container estimate. Step labels come from the job type (5.12).
+- Documents: no `restore_requested` live status and no restored-until date on `DocumentDto` (07 s2 `archive_objects.restored_until`); no amendment key-check result (`keyCheck`); no page number for a marking; the overrides-per-bid limit is a container constant (06 s4, open). `restoreDocument` returns a status the container holds (5.11).
+- Upload refusals arrive as API errors; the container maps them to the 05 s3.10 messages (5.2, 5.11).
+- Compliance: no endpoint for "check these" pre-scan hits without a row; `status` and `reqType` are untyped strings to map; `page_estimated` and `ocr` flags come from the document's `extractMethod`; `quote_unverified` from `quoteVerified` (5.4).
+- Outline: `RowPatchMap.outline_items` has no `parentId` or position, so `onMove` has no API yet (5.5).
+- Resumes: `CandidateDto` has no processing status or upload date (derive from its document and job); the AI's original match result is not kept, so a reviewer cannot reset an override (5.6).
+- Reviews: `ReviewFindingDto` has no author; `disposition` is an untyped string; `ReviewDto` has the draft document id, not its name (5.7).
+- Production and Orals: `owner` (both) and `minutes` (Orals) are not in the DTOs or row patches (5.8, 5.9).
+- Row history: `RowHistoryDto` has `userId`, not a name (5.17).
+- Amendment links: `AmendmentLinkDto` has `amendmentId`, not the number, and no row text; the container joins them from the tab rows (5.12).
+- Account: `MePatch` takes a new password without the current one (5.15).
+- Bids: `BidDto.status` is an untyped string; the default files-live-until date is not on `BidDto` (5.2, 5.11).
+
 ## 6. Order of v0 chats
 
-1. Shell (sidebar, top bar, locked tab, upgrade dialog) and the common pieces (ProcessingBanner, EmptyState, SourceLink).
-2. Bids list and New bid.
-3. Compliance matrix. This is the free tier's hook; spend the most time here.
-4. Overview and kickoff.
-5. Documents and Bid settings.
-6. Paid tabs in Phase 4 order: Outline, Resume matrix, Reviews, Production, Orals, Lessons.
+The copy-paste prompt for each chat is in `docs/v0-prompts.md`.
 
-Auth (5.13) is its own chat and does not depend on the shell; it can run at any point.
+| # | Chat | Folder(s) | Contracts |
+|---|---|---|---|
+| 1 | Shell: AppShell (sidebar, top bar), UpgradeDialog, ConfirmDialog | `design/v0/shell/` | 5.1, 5.12 |
+| 2 | Tab states and shared pieces: TabFrame, LockedTab, ProcessingBanner, EmptyState, SourceLink, MarkingPrompt, AmendmentConfirm | `design/v0/common/` | 5.12 |
+| 3 | Bids list and New bid (update of the existing v0 build) | `design/v0/bids/` | 5.2 |
+| 4 | Compliance matrix, Row detail slider, Source viewer. The free tier's hook; spend the most time here | `design/v0/compliance/` | 5.4, 5.17, 5.18 |
+| 5 | Overview and kickoff | `design/v0/overview/` | 5.3 |
+| 6 | Documents, Bid settings, DateChangePrompt | `design/v0/documents/`, `design/v0/settings/` | 5.11 |
+| 7 | Organization, Account, Privacy summary | `design/v0/organization/`, `design/v0/account/`, `design/v0/privacy/` | 5.14, 5.15, 5.16 |
+| 8 | Outline | `design/v0/outline/` | 5.5 |
+| 9 | Resume matrix | `design/v0/resumes/` | 5.6 |
+| 10 | Color team reviews | `design/v0/reviews/` | 5.7 |
+| 11 | Production and Orals | `design/v0/production/`, `design/v0/orals/` | 5.8, 5.9 |
+| 12 | Lessons learned | `design/v0/lessons/` | 5.10 |
+
+Chats 1 and 2 come first because every later screen uses their types and pieces; after they are integrated, the 5.12 types live in `@/types`. Chats 8 to 12 are the paid tabs in Phase 4 order.
+
+Auth (5.13) is done (`design/v0/auth/`, integrated).
 
 The Schedule tab is not a v0 chat. Claude Code ports it from the offline builder into `src/schedule/`.
 
@@ -269,3 +626,13 @@ Each chat ends the same way: v0 pushes to the `v0-ui` branch, you merge it to `m
 | 14 Oct 2026 | v0 connected to the repo: writes only to `design/v0/` on branch `v0-ui`; Claude Code integrates into `src/ui/` |
 | 14 Oct 2026 | Auth screens (log in, sign up, verify, reset) rebuilt by v0 under contract 5.13 |
 | 14 Oct 2026 | Tailwind v4 CSS-first (no `tailwind.config.ts`), React 19, sonner replaces toast, label added, preflight off until legacy screens retire; plans live only in `docs/plans`; `AGENTS.md` for v0 |
+| 14 Oct 2026 | 5.2 bids contract: `creditsResetOn`, `plan`, `mbCap`, `onUpgrade`, and `bidType` in `onCreate` are adopted, plus `status: FormStatus` on New bid. The earlier "no" is overridden because 05 s2 requires bid type and showing the credit rule and MB cap before upload, and 05 s4 requires reset date and upgrade for out of credits; v0's existing build already matches this shape |
+| 14 Oct 2026 | Contracts added for Organization (5.14), Account (5.15), Privacy summary (5.16), Row detail slider (5.17), Source viewer (5.18), and in 5.12: TabFrame for the 05 s4 states, UpgradeDialog, ConfirmDialog, MarkingPrompt, AmendmentConfirm |
+| 14 Oct 2026 | 5.1 shell: works outside a bid (`bid` null, `activePage`), carries the row detail slider as a `detail` column, tab signals, and the responsive rules |
+| 14 Oct 2026 | Shared `AmendmentMark` drives amendment display in every source-bearing tab; 5.4 gains the amendment, flagged, and hide-closed filters, jump to the replacing row, and `onSplitRow(id, at)` to match the API's split at a character index |
+| 14 Oct 2026 | Tabs no longer take `processing`; `TabFrame` draws processing, waiting, failed, locked, out of credits, no solicitation, and over cap. Empty results stay inside each tab |
+| 14 Oct 2026 | `ProcessingState` reshaped to steps, queue position, and expected wait; `SourceLinkProps` reshaped to open by row (`onOpen()`), because page and quote alone cannot name the document. Neither was used by an integrated screen |
+| 14 Oct 2026 | Containers filter and derive lists; ui components render what they get. Missing values are typed as null, not as optional props |
+| 14 Oct 2026 | Account: email and phone are read-only in v1 (support changes them); password change asks for the current password |
+| 14 Oct 2026 | Source viewer: the container renders the PDF page with the highlight (`pageView`); v0 builds the frame and the text, archived, and deleted modes |
+| 14 Oct 2026 | Order of v0 chats set to 12 chats (s6); prompts in `docs/v0-prompts.md`; API gaps listed in 5.19 |
