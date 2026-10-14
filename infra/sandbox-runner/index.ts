@@ -14,11 +14,14 @@
 
 import { spawn } from 'child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { extname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { createServer } from 'http';
 
 const DATA_DIR = process.env.DATA_DIR || '/data/files';
 const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || 'pd-sandbox:latest';
+// ESM has no __dirname.
+const HERE = fileURLToPath(new URL('.', import.meta.url));
 const SANDBOX_TIMEOUT = Number(process.env.SANDBOX_TIMEOUT) || 300000; // 5 minutes default
 
 interface ProcessRequest {
@@ -35,32 +38,42 @@ interface ProcessResponse {
 }
 
 /**
+ * The sandbox picks its extractor from the file extension, so the file is mounted with the
+ * original extension. Only a short alphanumeric extension is passed through, so a crafted
+ * name cannot add path separators or mount options to the -v argument.
+ */
+function safeExtension(inputPath: string): string {
+  const ext = extname(inputPath).toLowerCase();
+  return /^\.[a-z0-9]{1,10}$/.test(ext) ? ext : '';
+}
+
+/**
  * Run a file in the sandbox container
  */
 async function runInSandbox(
   inputPath: string,
   outputDir: string
 ): Promise<ProcessResponse> {
+  const mountedInput = `/input/file${safeExtension(inputPath)}`;
   return new Promise((resolve) => {
     const args = [
       'compose',
       'run',
       '--rm',
       '-v',
-      `${inputPath}:/input/file:ro`,
+      `${inputPath}:${mountedInput}:ro`,
       '-v',
       `${outputDir}:/output`,
       'sandbox',
-      'node',
-      'dist/index.js',
-      '/input/file',
+      // The image ENTRYPOINT is `node dist/index.js`; these are its arguments.
+      mountedInput,
       '/output',
     ];
 
     console.log(`Starting sandbox: docker ${args.join(' ')}`);
 
     const docker = spawn('docker', args, {
-      cwd: join(__dirname, '../../'),
+      cwd: join(HERE, '../../'),
       env: { ...process.env },
     });
 

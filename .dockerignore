@@ -1,0 +1,20 @@
+# Build context is the repo root. Keep secrets, VCS data, and non-build content out of it.
+.git
+.github
+.env
+.env.*
+!.env.example
+**/node_modules
+**/dist
+**/build
+**/coverage
+**/.turbo
+**/*.tsbuildinfo
+design
+docs
+plans
+skills
+data
+apps/*/test
+**/*.test.ts
+**/*.test.tsx

@@ -122,6 +122,15 @@ Restore test, once a month: restore the latest base backup and WAL (or the lates
 - Code in a private GitHub repository under the Shaavir organization.
 - GitHub Actions: run tests, build Docker images, push to GitHub Container Registry.
 - Deploy: SSH into the server, pull images, `docker compose up -d`. Database migrations run as the owner role `pd_owner` in a separate step before the api restarts. The running app uses `pd_app` (02 s4).
+- `infra/scripts/deploy.sh` does this in order: pull, build images (build context is the repo root), start `postgres` and `redis`, run `db:migrate` as `pd_owner` in the one-off `migrate` compose service, then `docker compose up -d`. A failed migration stops the deploy before the api and worker restart. The script never prints secrets; they come from `/opt/pd/.env` (root-only, mode 600).
+- **Setting the `pd_app` password (out of band, never in a script or a migration).** The migration creates `pd_app` with `LOGIN` and no password. After the first successful migration on a server, set it once from the server shell, reading the value from the root-only env file so it never lands in shell history or a process list:
+
+  ```
+  docker compose --env-file /opt/pd/.env -f /opt/pd/infra/docker-compose.yml exec -T postgres \
+    sh -c 'psql -U pd_owner -d pd -v ON_ERROR_STOP=1' <<< "ALTER ROLE pd_app PASSWORD '$(grep ^PD_APP_PASSWORD= /opt/pd/.env | cut -d= -f2-)';"
+  ```
+
+  Then run `deploy.sh` again (or restart `api` and `worker`). To rotate: change `PD_APP_PASSWORD` in `.env`, run the same `ALTER ROLE`, restart `api` and `worker`. `PD_APP_PASSWORD` must differ from `POSTGRES_PASSWORD`, and the value must not contain a single quote. Until it is set, the api and worker fail to log in and exit.
 - Two environments: `staging` and `production`. The 8 GB server already has about 5.6 GB allocated to production containers (section 2.2), so a staging copy does not fit on it. If there is a staging server, it is a separate small VPS. 🟨 **OPEN:** whether to run a separate staging VPS.
 
 ## 7. Monthly running cost (estimate, provisional)
