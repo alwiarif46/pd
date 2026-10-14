@@ -45,4 +45,4 @@ export function closeDb(): Promise<void> {
 }
 
 export { schema };
-export { assertTenantRole, isUuid, userMemberships, withOrg, type UserMembership } from './tenant';
+export { assertTenantRole, enforceTenantRole, isUuid, userMemberships, withOrg, type UserMembership } from './tenant';

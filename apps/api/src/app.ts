@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import { enforceTenantRole } from '@pd/core';
 import { registerAmendments } from './amendments.js';
 import { registerAuth } from './auth.js';
 import { registerBids } from './bids.js';
@@ -12,6 +13,10 @@ export async function buildApp(options: { logger?: boolean } = {}): Promise<Fast
   const fastify = Fastify({
     logger: options.logger ?? true,
   });
+
+  // Tenant isolation depends on row-level security, which a superuser or BYPASSRLS role
+  // skips. Refuse to build the app as such a role unless PD_ALLOW_BYPASS_RLS=1.
+  await enforceTenantRole((message) => fastify.log.warn(message));
 
   await fastify.register(import('@fastify/cors'), {
     origin: process.env.CORS_ORIGIN || 'http://localhost:3000',

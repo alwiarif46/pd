@@ -80,3 +80,18 @@ export async function assertTenantRole(): Promise<void> {
     );
   }
 }
+
+/**
+ * Startup check for the api and worker: refuses a role that skips row-level security.
+ * Only `PD_ALLOW_BYPASS_RLS=1` turns the refusal into a warning (the tests' superuser mode).
+ */
+export async function enforceTenantRole(warn: (message: string) => void = console.warn): Promise<void> {
+  try {
+    await assertTenantRole();
+  } catch (error) {
+    if (process.env.PD_ALLOW_BYPASS_RLS !== '1') {
+      throw error;
+    }
+    warn(`${error instanceof Error ? error.message : String(error)} Allowed by PD_ALLOW_BYPASS_RLS=1.`);
+  }
+}

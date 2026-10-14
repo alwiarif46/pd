@@ -24,9 +24,26 @@ const unavailable = inject('dbUnavailable');
  * there has to come from the routes' own organization checks (defense in depth).
  */
 const MODES = [
-  { name: 'as pd_app', url: () => inject('appUrl') },
-  { name: 'as a superuser, route checks only', url: () => inject('adminUrl') },
+  { name: 'as pd_app', url: () => inject('appUrl'), bypass: false },
+  { name: 'as a superuser, route checks only', url: () => inject('adminUrl'), bypass: true },
 ];
+
+describe.skipIf(Boolean(unavailable))('startup role check', () => {
+  afterAll(async () => {
+    delete process.env.PD_ALLOW_BYPASS_RLS;
+    await closeDb();
+  });
+
+  it('refuses to build the app as a role that skips row-level security', async () => {
+    delete process.env.PD_ALLOW_BYPASS_RLS;
+    getPool({ connectionString: inject('adminUrl'), max: 1 });
+    const { buildApp } = await import('../src/app.js');
+    await expect(buildApp({ logger: false })).rejects.toThrow(/skips row-level security/);
+    process.env.PD_ALLOW_BYPASS_RLS = '1';
+    const app = await buildApp({ logger: false });
+    await app.close();
+  });
+});
 
 describe.skipIf(Boolean(unavailable)).each(MODES)('cross-tenant access through the api $name', (mode) => {
   let app: FastifyInstance;
@@ -37,7 +54,18 @@ describe.skipIf(Boolean(unavailable)).each(MODES)('cross-tenant access through t
 
   beforeAll(async () => {
     process.env.DATA_DIR = await mkdtemp(join(tmpdir(), 'pd-api-files-'));
+    if (mode.bypass) {
+      process.env.PD_ALLOW_BYPASS_RLS = '1';
+    } else {
+      delete process.env.PD_ALLOW_BYPASS_RLS;
+    }
     getPool({ connectionString: mode.url(), max: 4 });
+    const { rows } = await getPool().query<{ user: string }>('select current_user as user');
+    if (mode.bypass) {
+      expect(rows[0].user).not.toBe('pd_app');
+    } else {
+      expect(rows[0].user).toBe('pd_app');
+    }
     const { buildApp } = await import('../src/app.js');
     app = await buildApp({ logger: false });
     a = await createTenant(app, 'a');
@@ -47,6 +75,7 @@ describe.skipIf(Boolean(unavailable)).each(MODES)('cross-tenant access through t
   });
 
   afterAll(async () => {
+    delete process.env.PD_ALLOW_BYPASS_RLS;
     await app?.close();
     await closeDb();
   });
