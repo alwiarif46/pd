@@ -1,10 +1,10 @@
 import { unlink } from 'node:fs/promises';
 import { connect } from 'node:net';
-import { eq } from 'drizzle-orm';
-import { schema, withOrg } from '@pd/core';
+import { and, eq } from 'drizzle-orm';
+import { resolveOrgPath, schema, withOrg } from '@pd/core';
 import { enqueue } from './enqueue.js';
+import { expectOneRow } from './rows.js';
 import { dataDir, type JobPayload } from './redis.js';
-import { join } from 'node:path';
 
 /**
  * Asks clamd to scan a path. The worker does not read the file bytes.
@@ -30,20 +30,32 @@ export function scanPath(filePath: string): Promise<string> {
 }
 
 export async function processScan(payload: JobPayload): Promise<void> {
-  const filePath = join(dataDir, payload.orgId, payload.storagePath);
+  // The stored path must stay inside this organization's folder; otherwise fail the job.
+  const filePath = resolveOrgPath(dataDir, payload.orgId, payload.storagePath);
+  if (!filePath) {
+    await withOrg(payload.orgId, async (db) => {
+      await db.update(schema.jobs).set({
+        status: 'failed',
+        error: 'The stored file path is not valid',
+        finishedAt: new Date(),
+        updatedAt: new Date(),
+      }).where(and(eq(schema.jobs.id, payload.jobId), eq(schema.jobs.orgId, payload.orgId)));
+    });
+    throw new Error(`Stored path outside the organization folder for job ${payload.jobId}`);
+  }
   const response = await scanPath(filePath);
   const infected = response.includes('FOUND');
   await withOrg(payload.orgId, async (db) => {
-    await db.update(schema.documents).set({
+    expectOneRow('document', await db.update(schema.documents).set({
       scanStatus: infected ? 'infected' : 'clean',
       updatedAt: new Date(),
-    }).where(eq(schema.documents.id, payload.documentId));
-    await db.update(schema.jobs).set({
+    }).where(and(eq(schema.documents.id, payload.documentId), eq(schema.documents.orgId, payload.orgId))).returning({ id: schema.documents.id }));
+    expectOneRow('job', await db.update(schema.jobs).set({
       status: infected ? 'failed' : 'completed',
       error: infected ? 'File failed the virus scan' : null,
       finishedAt: new Date(),
       updatedAt: new Date(),
-    }).where(eq(schema.jobs.id, payload.jobId));
+    }).where(and(eq(schema.jobs.id, payload.jobId), eq(schema.jobs.orgId, payload.orgId))).returning({ id: schema.jobs.id }));
   });
   if (infected) {
     await unlink(filePath).catch(() => undefined);

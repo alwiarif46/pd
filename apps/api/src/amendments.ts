@@ -1,24 +1,29 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { schema, withOrg } from '@pd/core';
+import { isUuid, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
+import { findBid } from './scope.js';
 
 export async function registerAmendments(app: FastifyInstance): Promise<void> {
   app.get('/api/bids/:id/amendment-links', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const bidId = (request.params as { id: string }).id;
     return withOrg(orgId, async (db) => {
-      const [bid] = await db.select().from(schema.bids).where(eq(schema.bids.id, bidId));
+      const bid = await findBid(db, orgId, bidId);
       if (!bid) {
         return reply.code(404).send({ error: 'Bid not found' });
       }
-      const amendments = await db.select().from(schema.amendments).where(eq(schema.amendments.bidId, bidId));
-      const links = [];
-      for (const amendment of amendments) {
-        const rows = await db.select().from(schema.amendmentLinks).where(eq(schema.amendmentLinks.amendmentId, amendment.id));
-        links.push(...rows);
+      const amendments = await db.select({ id: schema.amendments.id }).from(schema.amendments).where(and(
+        eq(schema.amendments.bidId, bidId),
+        eq(schema.amendments.orgId, orgId),
+      ));
+      if (amendments.length === 0) {
+        return [];
       }
-      return links;
+      return db.select().from(schema.amendmentLinks).where(and(
+        inArray(schema.amendmentLinks.amendmentId, amendments.map((amendment) => amendment.id)),
+        eq(schema.amendmentLinks.orgId, orgId),
+      ));
     });
   });
 
@@ -38,22 +43,40 @@ async function decide(
 ) {
   const orgId = request.auth!.orgId!;
   const linkId = (request.params as { id: string }).id;
+  if (!isUuid(linkId)) {
+    return reply.code(404).send({ error: 'Amendment link not found' });
+  }
   return withOrg(orgId, async (db) => {
-    const [link] = await db.select().from(schema.amendmentLinks).where(eq(schema.amendmentLinks.id, linkId));
+    const [link] = await db.select().from(schema.amendmentLinks).where(and(
+      eq(schema.amendmentLinks.id, linkId),
+      eq(schema.amendmentLinks.orgId, orgId),
+    ));
     if (!link) {
+      return reply.code(404).send({ error: 'Amendment link not found' });
+    }
+    // The link's bid, through its amendment. The row it supersedes must be on that same bid.
+    const [amendment] = await db.select().from(schema.amendments).where(and(
+      eq(schema.amendments.id, link.amendmentId),
+      eq(schema.amendments.orgId, orgId),
+    ));
+    if (!amendment) {
       return reply.code(404).send({ error: 'Amendment link not found' });
     }
     await db.update(schema.amendmentLinks).set({
       status,
       decidedBy: request.auth!.userId,
       updatedAt: new Date(),
-    }).where(eq(schema.amendmentLinks.id, linkId));
+    }).where(and(eq(schema.amendmentLinks.id, linkId), eq(schema.amendmentLinks.orgId, orgId)));
     if (status === 'confirmed' && link.oldRowId && (link.action === 'supersede' || link.action === 'withdraw')) {
       await db.update(schema.complianceRows).set({
         supersedeStatus: link.action === 'supersede' ? 'superseded' : 'withdrawn',
         supersededByRowId: link.action === 'supersede' ? link.newRowId : null,
         updatedAt: new Date(),
-      }).where(eq(schema.complianceRows.id, link.oldRowId));
+      }).where(and(
+        eq(schema.complianceRows.id, link.oldRowId),
+        eq(schema.complianceRows.bidId, amendment.bidId),
+        eq(schema.complianceRows.orgId, orgId),
+      ));
     }
     return { ok: true };
   });

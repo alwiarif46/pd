@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { eq } from 'drizzle-orm';
+import { and, eq, gt } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import {
   addMonthsClamped,
   fitsBidCap,
+  isUuid,
   freeAllowance,
   reserveCredit,
   schema,
@@ -16,10 +17,19 @@ import {
   type Plan,
 } from '@pd/core';
 import { requireAuth } from './context.js';
+import { findBid, type Outcome, queueAfterCommit } from './scope.js';
 import { enqueueScan } from './queue.js';
 
 const CHUNK_BYTES = 20 * 1024 * 1024;
 const dataDir = process.env.DATA_DIR || '/data/files';
+
+const STORED_EXTENSIONS = new Set(['.pdf', '.docx', '.xlsx']);
+
+/** The extension the sandbox needs to pick an extractor, from a fixed list; otherwise none. */
+export function storedExtension(fileName: string): string {
+  const extension = extname(fileName).toLowerCase();
+  return STORED_EXTENSIONS.has(extension) ? extension : '';
+}
 
 function isKind(value: string): value is FileKind {
   return value === 'solicitation' || value === 'amendment' || value === 'attachment' || value === 'resume' || value === 'draft';
@@ -45,7 +55,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'fileName, kind, declaredSize, sha256, and chunkCount are required' });
     }
     return withOrg(orgId, async (db) => {
-      const [bid] = await db.select().from(schema.bids).where(eq(schema.bids.id, bidId));
+      const bid = await findBid(db, orgId, bidId);
       if (!bid) {
         return reply.code(404).send({ error: 'Bid not found' });
       }
@@ -125,8 +135,14 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
     if (!Buffer.isBuffer(body) || body.length === 0 || body.length > CHUNK_BYTES) {
       return reply.code(400).send({ error: 'Send one chunk up to 20 MB' });
     }
+    if (!isUuid(sessionId)) {
+      return reply.code(404).send({ error: 'Upload session not found' });
+    }
     return withOrg(orgId, async (db) => {
-      const [session] = await db.select().from(schema.uploadSessions).where(eq(schema.uploadSessions.id, sessionId));
+      const [session] = await db.select().from(schema.uploadSessions).where(and(
+        eq(schema.uploadSessions.id, sessionId),
+        eq(schema.uploadSessions.orgId, orgId),
+      ));
       if (!session || session.expiresAt < new Date() || session.status !== 'open') {
         return reply.code(404).send({ error: 'Upload session not found' });
       }
@@ -149,7 +165,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
           chunksReceived: session.chunksReceived + 1,
           bytesReceived: session.bytesReceived + body.length,
           updatedAt: new Date(),
-        }).where(eq(schema.uploadSessions.id, sessionId));
+        }).where(and(eq(schema.uploadSessions.id, sessionId), eq(schema.uploadSessions.orgId, orgId)));
       }
       return { ok: true };
     });
@@ -158,19 +174,47 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
   app.post('/api/uploads/:id/complete', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const sessionId = (request.params as { id: string }).id;
-    return withOrg(orgId, async (db) => {
-      const [session] = await db.select().from(schema.uploadSessions).where(eq(schema.uploadSessions.id, sessionId));
-      if (!session || session.expiresAt < new Date()) {
-        return reply.code(404).send({ error: 'Upload session not found' });
+    if (!isUuid(sessionId)) {
+      return reply.code(404).send({ error: 'Upload session not found' });
+    }
+    const outcome = await withOrg(orgId, async (db): Promise<Outcome> => {
+      // Claim the session with a conditional update. The row stays locked until this
+      // transaction ends, so a second complete for the same session waits, then finds it
+      // no longer open. A failed check below puts it back to open.
+      const [session] = await db.update(schema.uploadSessions).set({
+        status: 'complete',
+        updatedAt: new Date(),
+      }).where(and(
+        eq(schema.uploadSessions.id, sessionId),
+        eq(schema.uploadSessions.orgId, orgId),
+        eq(schema.uploadSessions.status, 'open'),
+        gt(schema.uploadSessions.expiresAt, new Date()),
+      )).returning();
+      if (!session) {
+        const [existing] = await db.select({ status: schema.uploadSessions.status }).from(schema.uploadSessions).where(and(
+          eq(schema.uploadSessions.id, sessionId),
+          eq(schema.uploadSessions.orgId, orgId),
+        ));
+        if (existing?.status === 'complete') {
+          return { code: 409, body: { error: 'This upload is already complete' } };
+        }
+        return { code: 404, body: { error: 'Upload session not found' } };
       }
+      const reopen = () => db.update(schema.uploadSessions).set({ status: 'open', updatedAt: new Date() }).where(and(
+        eq(schema.uploadSessions.id, sessionId),
+        eq(schema.uploadSessions.orgId, orgId),
+      ));
       const dir = join(dataDir, orgId, 'chunks', sessionId);
-      const names = await readdir(dir);
+      const names = await readdir(dir).catch(() => [] as string[]);
       if (names.length !== session.chunkCount) {
-        return reply.code(400).send({ error: 'Not every chunk has arrived' });
+        await reopen();
+        return { code: 400, body: { error: 'Not every chunk has arrived' } };
       }
       const targetDir = join(dataDir, orgId, 'docs');
       await mkdir(targetDir, { recursive: true });
-      const storagePath = join('docs', `${sessionId}-${session.fileName}`);
+      // The stored name is server-generated. The client's file name is kept only as a label
+      // in `documents.file_name`, never as part of a path.
+      const storagePath = `docs/${sessionId}${storedExtension(session.fileName)}`;
       const absolute = join(dataDir, orgId, storagePath);
       const hash = createHash('sha256');
       const output = createWriteStream(absolute);
@@ -185,7 +229,8 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       hash.update(file);
       const digest = hash.digest('hex');
       if (digest !== session.sha256 || file.length !== session.declaredSize) {
-        return reply.code(400).send({ error: 'The uploaded bytes do not match the declared file' });
+        await reopen();
+        return { code: 400, body: { error: 'The uploaded bytes do not match the declared file' } };
       }
       const [document] = await db.insert(schema.documents).values({
         orgId,
@@ -207,16 +252,23 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
         type: 'scan',
         status: 'pending',
       }).returning();
-      await db.update(schema.uploadSessions).set({ status: 'complete', updatedAt: new Date() }).where(eq(schema.uploadSessions.id, sessionId));
-      await enqueueScan({
-        orgId,
-        bidId: session.bidId,
-        documentId: document.id,
-        jobId: job.id,
-        storagePath,
-        kind: session.kind,
-      });
-      return reply.code(201).send({ documentId: document.id, jobId: job.id });
+      return {
+        code: 201,
+        body: { documentId: document.id, jobId: job.id },
+        queue: {
+          jobId: job.id,
+          enqueue: () => enqueueScan({
+            orgId,
+            bidId: session.bidId,
+            documentId: document.id,
+            jobId: job.id,
+            storagePath,
+            kind: session.kind,
+          }),
+        },
+      };
     });
+    await queueAfterCommit(orgId, outcome);
+    return reply.code(outcome.code).send(outcome.body);
   });
 }

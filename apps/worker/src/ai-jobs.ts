@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   buildSystemPrompt,
   extractComplianceMatrix,
@@ -255,6 +255,12 @@ export async function processAmendmentJob(payload: JobPayload): Promise<void> {
     amendmentNo,
   });
   await withOrg(payload.orgId, async (db) => {
+    // Row ids from the model are trusted only when they name a compliance row of this bid.
+    const bidRows = new Set((await db.select({ id: schema.complianceRows.id }).from(schema.complianceRows).where(and(
+      eq(schema.complianceRows.bidId, payload.bidId),
+      eq(schema.complianceRows.orgId, payload.orgId),
+    ))).map((row) => row.id));
+    const onBid = (id: string | null | undefined): id is string => typeof id === 'string' && isUuid(id) && bidRows.has(id);
     const [amendment] = await db.insert(schema.amendments).values({
       orgId: payload.orgId,
       bidId: payload.bidId,
@@ -263,29 +269,33 @@ export async function processAmendmentJob(payload: JobPayload): Promise<void> {
       solicitationKeyFound: true,
       status: diff.links.some((link) => link.status === 'proposed') ? 'needs_confirmation' : 'applied',
     }).returning();
-    const uuidLinks = diff.links.filter((link) => link.oldRowId === null || isUuid(link.oldRowId));
+    const uuidLinks = diff.links.filter((link) => link.oldRowId === null || onBid(link.oldRowId));
     if (uuidLinks.length > 0) {
       await db.insert(schema.amendmentLinks).values(uuidLinks.map((link) => ({
         orgId: payload.orgId,
         amendmentId: amendment.id,
         rowTable: 'compliance_rows',
-        oldRowId: link.oldRowId && isUuid(link.oldRowId) ? link.oldRowId : null,
-        newRowId: link.newRowId && isUuid(link.newRowId) ? link.newRowId : null,
+        oldRowId: onBid(link.oldRowId) ? link.oldRowId : null,
+        newRowId: onBid(link.newRowId) ? link.newRowId : null,
         action: link.action,
         confidence: link.confidence.toFixed(2),
         status: link.status,
       })));
     }
     for (const row of diff.requirements) {
-      if (!isUuid(row.id)) {
+      if (!onBid(row.id)) {
         continue;
       }
       if (row.supersedeStatus === 'superseded' || row.supersedeStatus === 'withdrawn') {
         await db.update(schema.complianceRows).set({
           supersedeStatus: row.supersedeStatus,
-          supersededByRowId: row.supersededByRowId && isUuid(row.supersededByRowId) ? row.supersededByRowId : null,
+          supersededByRowId: onBid(row.supersededByRowId) ? row.supersededByRowId : null,
           updatedAt: new Date(),
-        }).where(eq(schema.complianceRows.id, row.id));
+        }).where(and(
+          eq(schema.complianceRows.id, row.id),
+          eq(schema.complianceRows.bidId, payload.bidId),
+          eq(schema.complianceRows.orgId, payload.orgId),
+        ));
       }
     }
   });

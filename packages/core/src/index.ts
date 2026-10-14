@@ -49,6 +49,7 @@ export interface Job {
 }
 
 export { PLAN_LIMITS, type Plan } from './limits';
+export { resolveOrgPath } from './paths';
 export * from './credits';
 
 // Database

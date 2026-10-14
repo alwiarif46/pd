@@ -1,7 +1,7 @@
 # PD web app
 
 ## Who edits what
-- `design/v0/**` is v0's drop folder. Read it, never edit it. It is outside every package and excluded from the build, type-check, lint, and tests. ESLint ignores it in `eslint.config.mjs`; when Vitest is added, ignore `design/**` there too.
+- `design/v0/**` is v0's drop folder. Read it, never edit it. It is outside every package and excluded from the build, type-check, lint, and tests. ESLint ignores it in `eslint.config.mjs` and Vitest in `apps/web/vitest.config.ts` and `apps/api/vitest.config.ts`; ignore `design/**` in any new test config too.
 - `apps/web/src/ui/**` holds screens you integrate from `design/v0/`. During integration: strip Next.js imports and `"use client"`,
   remove any fetch or router code, map types to `@/types`, and keep markup, class names, and styles exactly as v0 made them,
   so a later re-integration is a clean diff. Do not restyle.
