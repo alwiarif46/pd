@@ -7,6 +7,7 @@ import { mkdtemp, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { and, eq } from 'drizzle-orm';
+import pg from 'pg';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it, vi } from 'vitest';
 import { closeDb, getPool, schema, withOrg } from '@pd/core';
@@ -150,15 +151,44 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
     expect(rows).toHaveLength(0);
   });
 
-  it('a concurrent delete and matrix run settle the credit exactly once, without deadlock', async () => {
-    for (let round = 0; round < 5; round += 1) {
+  /**
+   * Holds `sql` (FOR UPDATE) from a separate connection, starts `contenders`, waits until
+   * `waiters` backends are blocked on a lock, then lets go. Returns how many waited, and the
+   * contenders' settled results.
+   */
+  async function race<T>(orgId: string, sql: string, params: unknown[], waiters: number, contenders: () => Promise<T>[]) {
+    const holder = new pg.Client({ connectionString: inject('appUrl') });
+    await holder.connect();
+    await holder.query('begin');
+    await holder.query("select set_config('app.org_id', $1, true)", [orgId]);
+    await holder.query(sql, params);
+    const pending = Promise.allSettled(contenders());
+    const deadline = Date.now() + 10_000;
+    let waiting = 0;
+    while (waiting < waiters && Date.now() < deadline) {
+      await holder.query('select pg_stat_clear_snapshot()');
+      const result = await holder.query<{ n: number }>(
+        "select count(*)::int as n from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid() and wait_event_type = 'Lock'",
+      );
+      waiting = result.rows[0].n;
+    }
+    await holder.query('commit');
+    await holder.end();
+    return { waiting, results: await pending };
+  }
+
+  it('a document delete and a matrix run that collide settle the credit exactly once, without deadlock', async () => {
+    for (let round = 0; round < 3; round += 1) {
       const { tenant, creditId, solicitationId } = await setup(`sol-conc-${round}`, 'reserved');
       await withOrg(tenant.orgId, (db) => db.update(schema.documents).set({ liveStatus: 'deleted' }).where(eq(schema.documents.id, tenant.documentId)));
-      const [deleted, ran] = await Promise.allSettled([
+      const { waiting, results } = await race(tenant.orgId, 'select id from documents where id = $1 for update', [solicitationId], 2, () => [
         as(app, tenant.token)('DELETE', `/api/documents/${solicitationId}`),
         worker.processCompliance(payload(tenant, solicitationId, 'solicitation')),
       ]);
+      expect(waiting).toBe(2);
+      const [deleted, ran] = results;
       expect(deleted.status).toBe('fulfilled');
+      expect((deleted as PromiseFulfilledResult<{ statusCode: number }>).value.statusCode).toBe(200);
       expect(ran.status).toBe('fulfilled');
       const after = await state(tenant, creditId);
       expect(after.reserved).toBe(0);
@@ -168,6 +198,129 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
       } else {
         expect(after).toEqual({ reserved: 0, used: 0, status: 'released' });
       }
+    }
+  });
+
+  async function solicitationSession(tenant: Tenant) {
+    const call = as(app, tenant.token);
+    const bidId = (await call('POST', '/api/bids', { name: `B ${randomUUID()}`, bidType: 'sled' })).json<{ id: string }>().id;
+    const bytes = randomBytes(20);
+    const started = await call('POST', `/api/bids/${bidId}/uploads`, {
+      fileName: 's.pdf', kind: 'solicitation', declaredSize: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), chunkCount: 1,
+    });
+    expect(started.statusCode).toBe(201);
+    const sessionId = started.json<{ id: string }>().id;
+    const chunk = await app.inject({
+      method: 'PUT',
+      url: `/api/uploads/${sessionId}/chunks/0`,
+      headers: { authorization: `Bearer ${tenant.token}`, 'content-type': 'application/octet-stream' },
+      payload: bytes,
+    });
+    expect(chunk.statusCode).toBe(200);
+    return { bidId, sessionId };
+  }
+
+  it('a bid delete and an upload complete that collide do not deadlock', async () => {
+    for (let round = 0; round < 3; round += 1) {
+      const tenant = await createTenant(app, `bid-vs-complete-${round}`);
+      const { bidId, sessionId } = await solicitationSession(tenant);
+      const call = as(app, tenant.token);
+      const { waiting, results } = await race(tenant.orgId, 'select id from upload_sessions where id = $1 for update', [sessionId], 2, () => [
+        call('POST', `/api/uploads/${sessionId}/complete`),
+        call('DELETE', `/api/bids/${bidId}`),
+      ]);
+      expect(waiting).toBe(2);
+      const [completed, deleted] = results.map((result) => (result as PromiseFulfilledResult<{ statusCode: number; body: string }>).value);
+      expect(deleted.statusCode, deleted.body).toBe(200);
+      expect([201, 404], completed.body).toContain(completed.statusCode);
+      const credits = await withOrg(tenant.orgId, (db) => db.select().from(schema.rfpCredits).where(eq(schema.rfpCredits.orgId, tenant.orgId)));
+      expect(credits.reduce((sum, row) => sum + row.reserved, 0)).toBe(0);
+    }
+  });
+
+  it('a key override and a bid delete that collide do not deadlock', async () => {
+    const tenant = await createTenant(app, 'override-vs-delete');
+    const documentId = await withOrg(tenant.orgId, async (db) => {
+      const [document] = await db.insert(schema.documents).values({
+        orgId: tenant.orgId, bidId: tenant.bidId, fileName: 'a.pdf', mime: 'application/pdf', sizeBytes: 5,
+        sha256: randomUUID(), kind: 'amendment', liveStatus: 'live',
+      }).returning();
+      await db.insert(schema.amendments).values({ orgId: tenant.orgId, bidId: tenant.bidId, documentId: document.id, amendmentNo: 4, solicitationKeyFound: false, status: 'processing' });
+      return document.id;
+    });
+    const call = as(app, tenant.token);
+    const { waiting, results } = await race(tenant.orgId, 'select id from bids where id = $1 for update', [tenant.bidId], 2, () => [
+      call('POST', `/api/documents/${documentId}/key-override`, { reason: 'race' }),
+      call('DELETE', `/api/bids/${tenant.bidId}`),
+    ]);
+    expect(waiting).toBe(2);
+    const [override, deleted] = results.map((result) => (result as PromiseFulfilledResult<{ statusCode: number; body: string }>).value);
+    expect(deleted.statusCode, deleted.body).toBe(200);
+    expect([200, 404], override.body).toContain(override.statusCode);
+  });
+
+  it('attachments and amendments wait for the solicitation: refused at upload, skipped by the worker', async () => {
+    const tenant = await createTenant(app, 'attach-first');
+    const call = as(app, tenant.token);
+    const bidId = (await call('POST', '/api/bids', { name: 'Empty', bidType: 'sled' })).json<{ id: string }>().id;
+    for (const kind of ['attachment', 'amendment']) {
+      const response = await call('POST', `/api/bids/${bidId}/uploads`, {
+        fileName: 'rfp.pdf', kind, declaredSize: 10, sha256: randomBytes(32).toString('hex'), chunkCount: 1,
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json<{ code: string }>().code).toBe('solicitation_first');
+    }
+    expect((await call('POST', `/api/bids/${bidId}/uploads`, {
+      fileName: 'cv.pdf', kind: 'resume', declaredSize: 10, sha256: randomBytes(32).toString('hex'), chunkCount: 1,
+    })).statusCode).toBe(201);
+
+    // An attachment already on a bid whose credit was released: no AI steps, no rows.
+    const { tenant: other, attachmentId } = await setup('attach-released', 'released');
+    await classify.processClassify(payload(other, attachmentId, 'attachment'));
+    expect(enqueued).toEqual([]);
+    await worker.processCompliance(payload(other, attachmentId, 'attachment'));
+    const rows = await withOrg(other.orgId, (db) => db.select().from(schema.complianceRows).where(eq(schema.complianceRows.documentId, attachmentId)));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('a later numberless solicitation is refused on a bid whose key is still PENDING', async () => {
+    const tenant = await createTenant(app, 'pending-key');
+    const call = as(app, tenant.token);
+    const bidId = (await call('POST', '/api/bids', { name: 'Pending', bidType: 'sled' })).json<{ id: string }>().id;
+    const start = () => call('POST', `/api/bids/${bidId}/uploads`, {
+      fileName: 's.pdf', kind: 'solicitation', declaredSize: 10, sha256: randomBytes(32).toString('hex'), chunkCount: 1,
+    });
+    expect((await start()).statusCode).toBe(201);
+    const second = await start();
+    expect(second.statusCode).toBe(409);
+    expect(second.json<{ code: string }>().code).toBe('key_required');
+  });
+
+  it('a complete whose transaction fails removes the assembled file', async () => {
+    const admin = new pg.Client({ connectionString: inject('adminUrl') });
+    await admin.connect();
+    await admin.query(`create or replace function pd_test_boom() returns trigger language plpgsql as $$
+      begin if new.file_name = 'boom.pdf' then raise exception 'boom'; end if; return new; end $$`);
+    await admin.query('create trigger pd_test_boom before insert on documents for each row execute function pd_test_boom()');
+    try {
+      const { tenant } = await setup('boom', 'reserved');
+      const bytes = randomBytes(16);
+      const call = as(app, tenant.token);
+      const sessionId = (await call('POST', `/api/bids/${tenant.bidId}/uploads`, {
+        fileName: 'boom.pdf', kind: 'attachment', declaredSize: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), chunkCount: 1,
+      })).json<{ id: string }>().id;
+      await app.inject({
+        method: 'PUT',
+        url: `/api/uploads/${sessionId}/chunks/0`,
+        headers: { authorization: `Bearer ${tenant.token}`, 'content-type': 'application/octet-stream' },
+        payload: bytes,
+      });
+      expect((await call('POST', `/api/uploads/${sessionId}/complete`)).statusCode).toBe(500);
+      expect(await readdir(join(dataDir, tenant.orgId, 'docs')).catch(() => [])).not.toContain(`${sessionId}.pdf`);
+    } finally {
+      await admin.query('drop trigger if exists pd_test_boom on documents');
+      await admin.query('drop function if exists pd_test_boom()');
+      await admin.end();
     }
   });
 

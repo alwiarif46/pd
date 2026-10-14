@@ -137,9 +137,17 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       // taken to be the bid's own number; any later one must state its number, so a different
       // RFP cannot ride in on an existing bid by leaving the number out. A file with no number
       // can still be added as an attachment.
-      if (kind === 'solicitation' && !fileKey && settledKey(current.solicitationKey)
-        && (holdsCredit || await hasLiveSolicitation(db, orgId, bidId))) {
+      // This holds on a bid whose key is still PENDING too: the first solicitation is the one
+      // that may come without a number.
+      const liveSolicitation = await hasLiveSolicitation(db, orgId, bidId);
+      if (kind === 'solicitation' && !fileKey && (holdsCredit || liveSolicitation)) {
         return respond(409, apiError('key_required'));
+      }
+      // Attachments and amendments are free because they belong to a solicitation set that has
+      // a credit behind it (06 s4). Before the bid has its solicitation they are refused, so an
+      // RFP cannot be processed for free by labelling it an attachment.
+      if ((kind === 'attachment' || kind === 'amendment') && !holdsCredit && !liveSolicitation) {
+        return respond(409, apiError('solicitation_first'));
       }
       const needsCredit = kind === 'solicitation' && !holdsCredit;
       const period = needsCredit ? await currentCreditPeriod(db, orgId, now) : null;
@@ -276,6 +284,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
     if (!isUuid(sessionId)) {
       return reply.code(404).send({ error: 'Upload session not found' });
     }
+    let assembled: string | null = null;
     const outcome = await withOrg(orgId, async (db): Promise<Outcome> => {
       // Claim the session with a conditional update. The row stays locked until this
       // transaction ends, so a second complete for the same session waits, then finds it
@@ -316,6 +325,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       const storagePath = `docs/${sessionId}${storedExtension(session.fileName)}`;
       const absolute = join(dataDir, orgId, storagePath);
       const hash = createHash('sha256');
+      assembled = absolute;
       const output = createWriteStream(absolute);
       for (let index = 0; index < session.chunkCount; index += 1) {
         await pipeline(createReadStream(join(dir, String(index))), output, { end: false });
@@ -396,11 +406,22 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
           }),
         },
       };
+    }).catch(async (error: unknown) => {
+      // The transaction rolled back (a thrown error, a lost connection): no document row points
+      // at the assembled copy, so remove it.
+      if (assembled) {
+        await rm(assembled, { force: true });
+      }
+      throw error;
     });
-    await queueAfterCommit(orgId, outcome);
-    if (outcome.code === 201) {
-      // The file is assembled and committed; its chunks are no longer needed.
-      await removeChunkDirs(dataDir, orgId, [sessionId]);
+    try {
+      await queueAfterCommit(orgId, outcome);
+    } finally {
+      if (outcome.code === 201) {
+        // The file is assembled and committed; its chunks are no longer needed, whether or not
+        // queueing worked (a failed queue marks the job failed for a retry from the file).
+        await removeChunkDirs(dataDir, orgId, [sessionId]);
+      }
     }
     return reply.code(outcome.code).send(outcome.body);
   });

@@ -1,8 +1,16 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { classifyPages } from '@pd/ai';
 import { schema, withOrg } from '@pd/core';
 import { enqueue } from './enqueue.js';
 import type { JobPayload } from './redis.js';
+
+/** True when the bid's solicitation holds a reserved or consumed credit. */
+export async function bidHoldsCredit(payload: Pick<JobPayload, 'orgId' | 'bidId'>): Promise<boolean> {
+  const [bid] = await withOrg(payload.orgId, (db) => db.select({ creditStatus: schema.bids.creditStatus })
+    .from(schema.bids)
+    .where(and(eq(schema.bids.id, payload.bidId), eq(schema.bids.orgId, payload.orgId))));
+  return bid?.creditStatus === 'reserved' || bid?.creditStatus === 'consumed';
+}
 
 export async function processClassify(payload: JobPayload): Promise<void> {
   await withOrg(payload.orgId, async (db) => {
@@ -24,6 +32,11 @@ export async function processClassify(payload: JobPayload): Promise<void> {
     }
   });
 
+  // Attachments and amendments are processed free only as part of a solicitation set that has
+  // a credit behind it (06 s4); otherwise an RFP labelled "attachment" would get a free matrix.
+  if ((payload.kind === 'attachment' || payload.kind === 'amendment') && !await bidHoldsCredit(payload)) {
+    return;
+  }
   if (payload.kind === 'amendment') {
     await enqueue('ai:amendment', payload);
     return;

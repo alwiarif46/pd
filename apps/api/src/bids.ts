@@ -179,11 +179,16 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
       if (!bid) {
         return respond(404, { error: 'Bid not found' });
       }
-      // Lock order: documents before the bid, as the worker does (document, then bid, then
-      // credit), so a delete and a matrix run settling the credit cannot deadlock.
+      // Lock order (credits.ts): documents, then upload sessions, then the bid. The worker takes
+      // a document before the bid, and upload complete holds its session before the bid; the
+      // bid's DELETE cascades into both tables, so their rows are locked here first.
       await db.select({ id: schema.documents.id }).from(schema.documents).where(and(
         eq(schema.documents.bidId, id),
         eq(schema.documents.orgId, orgId),
+      )).for('update');
+      await db.select({ id: schema.uploadSessions.id }).from(schema.uploadSessions).where(and(
+        eq(schema.uploadSessions.bidId, id),
+        eq(schema.uploadSessions.orgId, orgId),
       )).for('update');
       await releaseBidCredit(db, orgId, id);
       const documents = await db.select({

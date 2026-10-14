@@ -196,7 +196,9 @@ describe.skipIf(Boolean(unavailable))('RFP credits and uploads', () => {
   it('concurrent solicitation starts on one bid reserve one credit', async () => {
     const org = await newOrg('same-bid', { plan: 'starter', createdDaysAgo: 1 });
     const bidId = await org.bid();
-    const results = await Promise.all([start(org, bidId), start(org, bidId), start(org, bidId)]);
+    // A later solicitation must state its number (06 s4), so each start names the same one.
+    const numbered = { solicitationNumber: 'SAME-1' };
+    const results = await Promise.all([start(org, bidId, numbered), start(org, bidId, numbered), start(org, bidId, numbered)]);
     expect(results.every((result) => result.statusCode === 201)).toBe(true);
     const rows = await credits(org.orgId);
     expect(rows).toHaveLength(1);
@@ -235,7 +237,7 @@ describe.skipIf(Boolean(unavailable))('RFP credits and uploads', () => {
     const bidId = await org.bid();
     const first = (await start(org, bidId)).json<{ id: string }>().id;
     const bytes = randomBytes(32);
-    const second = await start(org, bidId, { declaredSize: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+    const second = await start(org, bidId, { declaredSize: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), solicitationNumber: 'RFP-1' });
     expect(second.json<{ creditReserved: boolean }>().creditReserved).toBe(false);
     const secondId = second.json<{ id: string }>().id;
     expect((await org.call('DELETE', `/api/uploads/${first}`)).statusCode).toBe(200);
@@ -260,7 +262,7 @@ describe.skipIf(Boolean(unavailable))('RFP credits and uploads', () => {
     const bidId = await org.bid();
     const first = (await start(org, bidId)).json<{ id: string }>().id;
     const bytes = randomBytes(32);
-    const secondId = (await start(org, bidId, { declaredSize: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })).json<{ id: string }>().id;
+    const secondId = (await start(org, bidId, { declaredSize: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), solicitationNumber: 'RFP-1' })).json<{ id: string }>().id;
     expect((await org.call('DELETE', `/api/uploads/${first}`)).statusCode).toBe(200);
     const put = (payload: Buffer) => app.inject({
       method: 'PUT',
@@ -293,7 +295,7 @@ describe.skipIf(Boolean(unavailable))('RFP credits and uploads', () => {
       });
       await db.update(schema.bids).set({ creditStatus: 'released' }).where(eq(schema.bids.id, bidId));
     });
-    const retry = await start(org, bidId);
+    const retry = await start(org, bidId, { solicitationNumber: 'RFP-1' });
     expect(retry.json<{ creditReserved: boolean }>().creditReserved).toBe(true);
     const cancelled = await org.call('DELETE', `/api/uploads/${retry.json<{ id: string }>().id}`);
     expect(cancelled.json<{ creditReleased: boolean }>().creditReleased).toBe(true);

@@ -13,6 +13,16 @@ import type { Db } from './scope.js';
  * - Counters change only through single conditional UPDATEs (`reserved = reserved + 1 WHERE
  *   used + reserved < allowed`, `reserved = reserved - 1 WHERE reserved > 0`), never by writing
  *   back values read earlier, so concurrent requests and the worker cannot lose an update.
+ * - Row locks are always taken in this order, by the api and the worker alike, so no two
+ *   transactions wait on each other in a cycle:
+ *     organizations -> documents -> upload_sessions -> bids -> amendments -> rfp_credits.
+ *   One exception: upload complete claims its own unexpired session before the org lock (so
+ *   the org is not locked while the file is assembled). The only org-locked writer of sessions
+ *   is the expiry sweep, which touches expired sessions only, so it never waits on that row.
+ *   Bid delete locks the bid's
+ *   documents, then its upload sessions, then the bid (its cascades reach rows already locked
+ *   or locked after the bid). Key override locks the bid before the amendment. Document
+ *   delete and the worker's matrix write lock the document before the bid.
  * - A bid's reservation changes state only through a conditional UPDATE on
  *   `bids.credit_status = 'reserved'`. Whoever wins that row settles the counter; everyone else
  *   sees no row and does nothing, so a reservation is released or consumed at most once.
@@ -114,8 +124,7 @@ export async function ensureCreditPeriod(db: Db, org: OrgRow, now: Date): Promis
  * Returns the credit id, or null when the period has no credit left.
  */
 export async function reserveForBid(db: Db, org: OrgRow, bidId: string, now: Date): Promise<string | null> {
-  // Lock order everywhere: organizations, then documents, then bids, then rfp_credits. The bid
-  // row is taken before the credit row, as the worker's settle and releaseBidCredit do, so a
+  // Lock order (see the top of this file): the bid row is taken before the credit row, as the worker's settle and releaseBidCredit do, so a
   // reserve and a settle on one bid cannot deadlock.
   const [locked] = await lockBid(db, org.id, bidId);
   if (!locked) {

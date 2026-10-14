@@ -145,6 +145,14 @@ export async function processCompliance(payload: JobPayload): Promise<void> {
       if (!current || current.liveStatus === 'deleted') {
         return;
       }
+      if (!settlesCredit) {
+        // An attachment's rows join the matrix only while the bid's solicitation holds a credit.
+        const [bid] = await db.select({ creditStatus: schema.bids.creditStatus }).from(schema.bids)
+          .where(and(eq(schema.bids.id, payload.bidId), eq(schema.bids.orgId, payload.orgId)));
+        if (bid?.creditStatus !== 'reserved' && bid?.creditStatus !== 'consumed') {
+          return;
+        }
+      }
       if (result.requirements.length > 0) {
         await db.insert(schema.complianceRows).values(result.requirements.map((row) => ({
           orgId: payload.orgId,

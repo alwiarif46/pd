@@ -767,7 +767,6 @@ function Documents({ bid, plan, docs, onReload, onError, onNotice }: Panel) {
           onReload();
         }).catch((err: Error) => {
           if (err instanceof ApiError && err.status === 413) onError(`This file is larger than the ${mb(Math.max(0, cap * 1024 * 1024 - used))} left.`);
-          else if (err instanceof ApiError && (err.message === 'key_mismatch' || err.status === 409)) onError('This file belongs to a different solicitation. Start a new bid.');
           else if (err.message.toLowerCase().includes('password')) onError('Upload an unlocked copy.');
           else onError(err.message);
         });

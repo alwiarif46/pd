@@ -118,6 +118,11 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       if (document.kind !== 'amendment') {
         return respond(409, apiError('not_an_amendment'));
       }
+      // Lock order (credits.ts): the bid before its amendments, as a bid delete (which locks the
+      // bid, then cascades into amendments) does.
+      if ((await lockBid(db, orgId, document.bidId)).length === 0) {
+        return respond(404, { error: 'Bid not found' });
+      }
       // The amendment whose solicitation number did not match, not yet accepted. Locked until
       // COMMIT, so two overrides of one amendment cannot both pass and spend two overrides.
       const [amendment] = await db.select().from(schema.amendments).where(and(
