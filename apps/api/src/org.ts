@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { isUuid, PLAN_LIMITS, type Plan, schema, userMemberships, withOrg } from '@pd/core';
 import { requireAuth, requireUser } from './context.js';
@@ -25,7 +25,14 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     // The new organization's id is chosen here so its first membership is written under
     // row-level security with app.org_id already set to it.
     const orgId = randomUUID();
-    const org = await withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
+      // Two concurrent creates for one user: serialize them on a per-user advisory lock held
+      // until this transaction ends, then check memberships again with a fresh snapshot.
+      await db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`org-create:${auth.userId}`}, 0))`);
+      const existing = await db.execute(sql`select 1 from pd_system.user_memberships(${auth.userId})`);
+      if (existing.rows.length > 0) {
+        return respond(409, { error: 'You already belong to an organization' });
+      }
       const [created] = await db.insert(schema.organizations).values({
         id: orgId,
         name,
@@ -37,9 +44,8 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
         userId: auth.userId,
         role: 'owner',
       });
-      return created;
+      return respond(201, { id: created.id, name: created.name, plan: created.plan });
     });
-    return reply.code(201).send({ id: org.id, name: org.name, plan: org.plan });
   });
 
   app.get('/api/org', { preHandler: requireAuth }, async (request) => {
