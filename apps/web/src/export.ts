@@ -99,22 +99,3 @@ export function downloadDocx(name: string, paragraphs: string[]): void {
   ]);
   download(name, blob);
 }
-
-export function downloadIcs(name: string, events: { title: string; start: string; end: string }[]): void {
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
-  const body = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//PD//Schedule//EN',
-    ...events.flatMap((event) => [
-      'BEGIN:VEVENT',
-      `DTSTAMP:${stamp}`,
-      `DTSTART:${event.start.replace(/-/g, '')}`,
-      `DTEND:${event.end.replace(/-/g, '')}`,
-      `SUMMARY:${event.title}`,
-      'END:VEVENT',
-    ]),
-    'END:VCALENDAR',
-  ].join('\r\n');
-  download(name, new Blob([body], { type: 'text/calendar' }));
-}

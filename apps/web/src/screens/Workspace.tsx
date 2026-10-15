@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, api, uploadFile } from '../legacy-api';
 import { Dialog } from '../components/Dialog';
 import { RowDetail } from '../components/RowDetail';
 import { SourceViewer } from '../components/SourceViewer';
-import { downloadCsv, downloadDocx, downloadIcs, downloadXlsx } from '../export';
+import { downloadCsv, downloadDocx, downloadXlsx } from '../export';
 import {
   type Bid,
   type DocumentRow,
@@ -312,7 +312,7 @@ function TabPanel(props: {
   if (!bid) return <div className="skeleton" />;
   switch (tab) {
     case 'overview': return <Overview {...props} bid={bid} />;
-    case 'schedule': return <Schedule {...props} bid={bid} />;
+    case 'schedule': return null; // features/schedule/route.tsx renders it; the shell never embeds it here.
     case 'compliance': return <Compliance {...props} bid={bid} />;
     case 'outline': return <Outline {...props} bid={bid} />;
     case 'resumes': return <Resumes {...props} bid={bid} />;
@@ -381,90 +381,6 @@ function Overview({ bid, data, onOpen, onReload, onError }: Panel) {
 
 function activeJobsNote(facts: unknown[]): string | null {
   return facts.length > 0 ? null : null;
-}
-
-function Schedule({ bid, data, onOpen, onReload, onError }: Panel) {
-  const activities = rowsOf<{ id: string; label: string; startDate: string | null; endDate: string | null; locked: boolean; owner: string | null; status: string | null; sourcePage: number | null }>(data, 'activities');
-  const [mode, setMode] = useState<'calendar' | 'list'>('calendar');
-  const [cursor, setCursor] = useState(() => new Date());
-  const days = useMemo(() => monthDays(cursor), [cursor]);
-  function move(id: string, date: string, locked: boolean) {
-    if (locked) return;
-    api(`/api/bids/${bid.id}/rows/schedule_activities/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ fields: { startDate: date, endDate: date } }),
-    }).then(onReload).catch((err: Error) => onError(err.message));
-  }
-  const sheet = [['Activity', 'Start', 'End', 'Owner', 'Status', 'Locked'], ...activities.map((item) => [item.label, dayKey(item.startDate), dayKey(item.endDate), item.owner ?? '', item.status ?? '', item.locked ? 'yes' : 'no'])];
-  return (
-    <div className="stack">
-      <div className="row no-print">
-        <button className="btn secondary" type="button" onClick={() => setMode(mode === 'calendar' ? 'list' : 'calendar')}>{mode === 'calendar' ? 'Milestone list' : 'Calendar'}</button>
-        <button className="btn secondary" type="button" onClick={() => api(`/api/bids/${bid.id}/tabs/schedule/seed`, { method: 'POST', body: JSON.stringify({ template: 'standard' }) }).then(onReload).catch((err: Error) => onError(err.message))}>Standard template</button>
-        <button className="btn secondary" type="button" onClick={() => api(`/api/bids/${bid.id}/tabs/schedule/seed`, { method: 'POST', body: JSON.stringify({ template: 'color-reviews' }) }).then(onReload).catch((err: Error) => onError(err.message))}>Color-team template</button>
-        <button className="btn secondary" type="button" onClick={() => downloadXlsx('schedule.xlsx', sheet)}>XLSX</button>
-        <button className="btn secondary" type="button" onClick={() => downloadCsv('schedule.csv', sheet)}>CSV</button>
-        <button className="btn secondary" type="button" onClick={() => downloadIcs('schedule.ics', activities.filter((item) => item.startDate).map((item) => ({ title: item.label, start: dayKey(item.startDate), end: dayKey(item.endDate || item.startDate) })))}>ICS</button>
-        <button className="btn secondary" type="button" onClick={() => window.print()}>Print</button>
-      </div>
-      <AddForm label="Custom activity" onSubmit={(body) => postRow(bid.id, 'schedule', { label: body.name, startDate: body.extra || null }, onReload, onError)} />
-      {activities.length === 0 ? <p>No items found. Add an activity or apply a template.</p> : null}
-      {mode === 'list' ? (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Activity</th><th>Start</th><th>End</th><th>Lock</th></tr></thead>
-            <tbody>
-              {activities.map((item) => (
-                <tr key={item.id}>
-                  <td><button type="button" onClick={() => onOpen('schedule_activities', item.id)}>{item.label}</button>{item.locked && item.sourcePage ? ' · from the solicitation' : ''}</td>
-                  <td className="num">{dayKey(item.startDate)}</td>
-                  <td className="num">{dayKey(item.endDate)}</td>
-                  <td><input aria-label={`Lock ${item.label}`} type="checkbox" checked={item.locked} onChange={(event) => {
-                    api(`/api/bids/${bid.id}/rows/schedule_activities/${item.id}`, { method: 'PATCH', body: JSON.stringify({ fields: { locked: event.target.checked } }) }).then(onReload);
-                  }} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div>
-          <div className="row">
-            <button className="btn secondary" type="button" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>Previous</button>
-            <strong>{cursor.toLocaleString(undefined, { month: 'long', year: 'numeric' })}</strong>
-            <button className="btn secondary" type="button" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>Next</button>
-          </div>
-          <div className="calendar">
-            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((name) => <div key={name} className="small muted">{name}</div>)}
-            {days.map((day) => (
-              <div
-                key={day.key || day.label}
-                className="day"
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => {
-                  const id = event.dataTransfer.getData('text/plain');
-                  const activity = activities.find((item) => item.id === id);
-                  if (activity && day.key) move(activity.id, day.key, activity.locked);
-                }}
-              >
-                <span className="num">{day.label}{day.holiday ? ` ${day.holiday}` : ''}</span>
-                {activities.filter((item) => dayKey(item.startDate) === day.key).map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={item.locked ? 'chip locked' : 'chip'}
-                    draggable={!item.locked}
-                    onDragStart={(event) => event.dataTransfer.setData('text/plain', item.id)}
-                    onClick={() => onOpen('schedule_activities', item.id)}
-                  >{item.label}</button>
-                ))}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
 }
 
 function Compliance({ bid, data, onOpen, onReload, onError }: Panel) {
@@ -969,38 +885,4 @@ function AddForm({ label, onSubmit }: { label: string; onSubmit: (body: { name: 
       <button className="btn secondary" type="submit">Add</button>
     </form>
   );
-}
-
-function monthDays(cursor: Date): { key: string; label: string; holiday: string }[] {
-  const year = cursor.getFullYear();
-  const month = cursor.getMonth();
-  const first = new Date(year, month, 1);
-  const cells: { key: string; label: string; holiday: string }[] = [];
-  for (let i = 0; i < first.getDay(); i += 1) cells.push({ key: '', label: '', holiday: '' });
-  const count = new Date(year, month + 1, 0).getDate();
-  for (let day = 1; day <= count; day += 1) {
-    const date = new Date(year, month, day);
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-    cells.push({ key, label: String(day), holiday: holidayName(date) });
-  }
-  return cells;
-}
-
-function holidayName(date: Date): string {
-  const month = date.getMonth();
-  const day = date.getDate();
-  const weekday = date.getDay();
-  const nth = Math.ceil(day / 7);
-  if (month === 0 && day === 1) return 'New Year';
-  if (month === 0 && weekday === 1 && nth === 3) return 'MLK';
-  if (month === 1 && weekday === 1 && nth === 3) return 'Presidents';
-  if (month === 4 && weekday === 1 && day > 24) return 'Memorial';
-  if (month === 5 && day === 19) return 'Juneteenth';
-  if (month === 6 && day === 4) return 'Independence';
-  if (month === 8 && weekday === 1 && nth === 1) return 'Labor';
-  if (month === 9 && weekday === 1 && nth === 2) return 'Columbus';
-  if (month === 10 && day === 11) return 'Veterans';
-  if (month === 10 && weekday === 4 && nth === 4) return 'Thanksgiving';
-  if (month === 11 && day === 25) return 'Christmas';
-  return '';
 }
