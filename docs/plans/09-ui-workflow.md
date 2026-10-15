@@ -578,12 +578,12 @@ type InviteStep =
 interface AcceptInviteProps {
   step: InviteStep; submitting: boolean;
   onSubmitCode(code: string): void; onAccept(): void; onSignUp(): void; onLogIn(): void;
-  onSignOut(): void; onRetry(): void; onContinue(): void;
+  onSignOut(): void; onRetry(): void; onContinue(): void; onDismiss(): void;
 }
 interface SeatLockedProps { email: string; message: string; checking: boolean; onCheckAgain(): void; onSignOut(): void }
 ```
-- `AcceptInvite` ("Join your team"), route `#/invite[?token=<code>]`, open to signed-in and signed-out people. `enter_code`: "Invite code" field, checked for shape before `onSubmitCode`. `signed_out`: "Create account" and "Log in". `ready`: "You are signed in as [email]." and "Join organization" (the person always clicks; landing never joins). `joined`: "You joined [org]." and "Open Shaavir PD". `failed`: the API's message in an alert, with "Try again" (`seats_full`), "Sign out and use another account" (`email_mismatch`), or "Open Shaavir PD".
-- The invite code is `<orgId>.<token>`. The container keeps it in `localStorage` (`pd-pending-invite`, 7 days) across sign-up and log in, strips it from the address bar, clears it on success and on final refusals, and keeps it for `email_mismatch`, `seats_full` and other errors. After log in the app returns to `#/invite` while a code is waiting.
+- `AcceptInvite` ("Join your team"), route `#/invite[?token=<code>]`, open to signed-in and signed-out people. `enter_code`: "Invite code" field, checked for shape before `onSubmitCode` (an uppercase org id is lowercased; the error is an alert). `signed_out`: "Create account" and "Log in". `ready`: "You are signed in as [email].", "Join organization" (the person always clicks; landing never joins) and "Not now". `joined`: "You joined [org]." and "Open Shaavir PD". `failed`: the API's message in an alert, with "Try again" (`seats_full`, `other`: an account load that failed loads again) or "Sign out and use another account" (`email_mismatch`), each with "Not now"; a final refusal (`invalid`, `expired`, `used`, `already_in_org`) shows "Open Shaavir PD". "Not now" (`onDismiss`) drops the kept code and opens `#/bids`.
+- The invite code is `<orgId>.<token>`. The container keeps it in `localStorage` (`pd-pending-invite`, 7 days) across sign-up and log in, strips it from the address bar, clears it on success and on final refusals, and keeps it for `email_mismatch`, `seats_full` and other errors until "Not now". After log in the app returns to `#/invite` while a code is waiting; a signed-in person with no organization is sent there at most once per browser session (`sessionStorage` `pd-invite-redirected`).
 - `SeatLocked` ("You have no seat right now"): shown full page, without the shell navigation, for a member whose plan has no seat (403 `seat_locked`). Shows the API's message, "Signed in as [email].", a line on what to do, "Check again" ("Checking...") and "Sign out". No organization switch: an account belongs to one organization.
 
 ## 6. Order of v0 chats
@@ -653,3 +653,4 @@ Each chat ends the same way: v0 pushes to the `v0-ui` branch, you merge it to `m
 | 15 Oct 2026 | 5.12: amendment links carry `sourcePage` and `sourceQuote`; adds are never proposed; decisions final with 409 codes; `AmendmentMark` container mapping written (no "Amd 0" fallback) |
 | 16 Oct 2026 | Seats after a move to free enforced by the API (06 s5): removed from 5.19. A member past the plan's seats gets 403 `seat_locked` on every org route; `GET /api/org/members` returns `seatLocked` per member (API and web types only, UI not built yet: 5.14, `UpgradeDialog`) |
 | 16 Oct 2026 | 5.20 added: the invite-accept and seat-locked screens are built in `features/membership/ui` (shadcn + Tailwind, not by v0). The "UI not built yet" note on seats (16 Oct) is done for the seat-locked member's own screen |
+| 16 Oct 2026 | 5.20 review fixes: `onDismiss` ("Not now") on `ready` and on kept-code failures; `other` offers "Try again"; the no-organization redirect to `#/invite` happens at most once per browser session |

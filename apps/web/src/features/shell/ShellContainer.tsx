@@ -11,7 +11,7 @@ import { Account, BidsHome, NewBid, Organization, Privacy } from '@/screens/Outs
 import { Workspace } from '@/screens/Workspace';
 import { summarizeOrg, type OrgSummary } from '@/features/shared/credits';
 import { SeatLocked } from '@/features/membership/ui/SeatLocked';
-import { hasPendingInvite } from '@/features/membership/pending-invite';
+import { takeInviteRedirect } from '@/features/membership/pending-invite';
 import { messageOf } from '@/features/shared/messages';
 import { TabFrameContainer } from '@/features/tab-frame/TabFrameContainer';
 import { tabSignals } from '@/features/tab-frame/derive';
@@ -132,10 +132,14 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
     [],
   );
 
+  // A seat-locked member's bid requests would only answer 403: none are made (nor polled) until a seat
+  // is free again. The first load starts with the shell's, before the 403 is known.
+  const seatLocked = shell.kind === 'seat_locked';
+
   // The open bid. Requests for a bid the user has left are aborted. A failed reload keeps the data shown
   // and counts the failure, which re-arms polling with a longer wait.
   useEffect(() => {
-    if (!bidId) return;
+    if (!bidId || seatLocked) return;
     const abort = new AbortController();
     loadBid(api, bidId, abort.signal).then(
       (data) => {
@@ -151,7 +155,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
       },
     );
     return () => abort.abort();
-  }, [api, bidId, bidVersion]);
+  }, [api, bidId, bidVersion, seatLocked]);
 
   const bidData = bidState && bidState.bidId === bidId ? bidState.data : null;
   const bidError = bidState && bidState.bidId === bidId ? bidState.error : null;
@@ -164,7 +168,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
 
   // Poll while something is queued or running: one request set at a time, 3 s after the last answer
   // (longer after failed polls, up to 10 s). A success or a failure each re-arms the timer.
-  const polling = needsPolling(bidData);
+  const polling = !seatLocked && needsPolling(bidData);
   useEffect(() => {
     if (!polling) return;
     const timer = window.setTimeout(() => setBidVersion((n) => n + 1), pollDelay(pollFailures));
@@ -184,9 +188,11 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
   }, [refresh]);
 
   // Signed in without an organization while an invite is waiting (signed in from another tab): join it.
+  // At most once per browser session, so a code kept after a refusal never bounces every visit; the
+  // invite screen's "Not now" drops it.
   const noOrg = shell.kind === 'no_org';
   useEffect(() => {
-    if (noOrg && hasPendingInvite()) go('#/invite');
+    if (noOrg && takeInviteRedirect()) go('#/invite');
   }, [noOrg]);
 
   const openUpgrade = useCallback((reason: UpgradeReason) => setUpgrade({ open: true, reason }), []);

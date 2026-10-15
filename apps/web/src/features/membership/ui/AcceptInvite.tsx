@@ -3,10 +3,9 @@ import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { normalizeInviteCode } from '../pending-invite';
 import { MembershipLayout, StatusLine } from './MembershipLayout';
 import type { AcceptInviteProps } from './types';
-
-const CODE_SHAPE = /^[0-9a-f-]{36}\.[0-9a-f]{64}$/;
 
 function Busy({ busy, label, busyLabel }: { busy: boolean; label: string; busyLabel: string }) {
   return (
@@ -17,6 +16,14 @@ function Busy({ busy, label, busyLabel }: { busy: boolean; label: string; busyLa
   );
 }
 
+function NotNow({ onDismiss }: Pick<AcceptInviteProps, 'onDismiss'>) {
+  return (
+    <Button type="button" variant="outline" className="h-10 w-full" onClick={onDismiss}>
+      Not now
+    </Button>
+  );
+}
+
 function EnterCode({ onSubmitCode }: Pick<AcceptInviteProps, 'onSubmitCode'>) {
   const id = useId();
   const [value, setValue] = useState('');
@@ -24,8 +31,8 @@ function EnterCode({ onSubmitCode }: Pick<AcceptInviteProps, 'onSubmitCode'>) {
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    const code = value.trim();
-    if (!CODE_SHAPE.test(code)) {
+    const code = normalizeInviteCode(value);
+    if (!code) {
       setError('This does not look like an invite code. Copy the whole code from the invite email.');
       return;
     }
@@ -59,7 +66,7 @@ function EnterCode({ onSubmitCode }: Pick<AcceptInviteProps, 'onSubmitCode'>) {
           aria-describedby={error ? `${id}-error` : undefined}
         />
         {error && (
-          <p id={`${id}-error`} className="text-sm leading-snug text-due">
+          <p id={`${id}-error`} role="alert" className="text-sm leading-snug text-due">
             {error}
           </p>
         )}
@@ -103,6 +110,7 @@ export function AcceptInvite(props: AcceptInviteProps) {
           >
             <Busy busy={submitting} label="Join organization" busyLabel="Joining..." />
           </Button>
+          <NotNow onDismiss={props.onDismiss} />
         </>
       )}
       {step.kind === 'joined' && (
@@ -118,7 +126,7 @@ export function AcceptInvite(props: AcceptInviteProps) {
       {step.kind === 'failed' && (
         <>
           <StatusLine message={step.message} />
-          {step.reason === 'seats_full' && (
+          {(step.reason === 'seats_full' || step.reason === 'other') && (
             <Button type="button" className="h-10 w-full" onClick={props.onRetry} disabled={submitting}>
               <Busy busy={submitting} label="Try again" busyLabel="Trying..." />
             </Button>
@@ -128,10 +136,18 @@ export function AcceptInvite(props: AcceptInviteProps) {
               Sign out and use another account
             </Button>
           )}
-          {step.reason !== 'seats_full' && step.reason !== 'email_mismatch' && (
+          {/* Final refusals: the code is already dropped, so this only opens the app. */}
+          {(step.reason === 'invalid' ||
+            step.reason === 'expired' ||
+            step.reason === 'used' ||
+            step.reason === 'already_in_org') && (
             <Button type="button" className="h-10 w-full" onClick={props.onContinue}>
               Open Shaavir PD
             </Button>
+          )}
+          {/* The code is kept for these; Not now drops it. */}
+          {(step.reason === 'seats_full' || step.reason === 'email_mismatch' || step.reason === 'other') && (
+            <NotNow onDismiss={props.onDismiss} />
           )}
         </>
       )}

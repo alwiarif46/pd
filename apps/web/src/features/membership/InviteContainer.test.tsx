@@ -107,4 +107,60 @@ describe('InviteContainer', () => {
     await waitFor(() => expect(window.location.hash).toBe('#/login'));
     expect(loadPendingInvite()).toBe(CODE);
   });
+
+  it('Not now drops the code and opens the app, so no-org visits stop returning here', async () => {
+    savePendingInvite(CODE);
+    render(<InviteContainer signedIn api={mockApi()} />);
+    await screen.findByText('You are signed in as m@acme.com.');
+    await userEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(loadPendingInvite()).toBeNull();
+    expect(window.location.hash).toBe('#/bids');
+  });
+
+  it('Not now after seats_full also drops the kept code', async () => {
+    savePendingInvite(CODE);
+    const acceptInvite = vi.fn().mockRejectedValue(new ApiError('No free seat.', 409, 'seats_full'));
+    render(<InviteContainer signedIn api={mockApi({ acceptInvite })} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Join organization' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Not now' }));
+    expect(loadPendingInvite()).toBeNull();
+    expect(window.location.hash).toBe('#/bids');
+  });
+
+  it('when loading the account fails, Try again loads it again and keeps the code', async () => {
+    savePendingInvite(CODE);
+    const getMe = vi.fn().mockRejectedValueOnce(new ApiError('Network down.', 503)).mockResolvedValue(meDto({ email: 'm@acme.com' }));
+    const api = mockApi({ getMe });
+    render(<InviteContainer signedIn api={api} />);
+    expect((await screen.findByRole('alert')).textContent).toContain('Network down.');
+    expect(screen.queryByRole('button', { name: 'Open Shaavir PD' })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('You are signed in as m@acme.com.')).toBeTruthy();
+    expect(getMe).toHaveBeenCalledTimes(2);
+    expect(api.acceptInvite).not.toHaveBeenCalled();
+    expect(loadPendingInvite()).toBe(CODE);
+  });
+
+  it('an unexpected accept failure keeps the code, and Try again accepts again', async () => {
+    savePendingInvite(CODE);
+    const acceptInvite = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError('Network down.', 503))
+      .mockResolvedValueOnce({ orgId: 'o', name: 'Acme', role: 'member', alreadyMember: false });
+    render(<InviteContainer signedIn api={mockApi({ acceptInvite })} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Join organization' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Network down.');
+    expect(loadPendingInvite()).toBe(CODE);
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('You joined Acme.')).toBeTruthy();
+    expect(acceptInvite).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a link code with an uppercase org id, lowercased', async () => {
+    window.location.hash = '#/invite?token=' + CODE.toUpperCase();
+    render(<InviteContainer signedIn={false} api={mockApi()} />);
+    expect(screen.getByRole('button', { name: 'Create account' })).toBeTruthy();
+    await waitFor(() => expect(window.location.hash).toBe('#/invite'));
+    expect(loadPendingInvite()).toBe(CODE);
+  });
 });

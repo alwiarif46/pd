@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, getToken, notifySeatLocked, setToken } from '@/api';
@@ -12,6 +12,7 @@ import { ShellContext, type ShellContextValue } from './bid-context';
 import type { ShellApi } from './controller';
 import { LegacyFrame } from './LegacyFrame';
 import { ShellContainer } from './ShellContainer';
+import { savePendingInvite } from '@/features/membership/pending-invite';
 
 function mockApi(over: Partial<ShellApi> = {}): ShellApi {
   return {
@@ -439,5 +440,77 @@ describe('TabFrameContainer', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: 'Upgrade plan' }));
     expect(value.openUpgrade).toHaveBeenCalledWith('over_cap');
+  });
+});
+
+describe('invite hand-off', () => {
+  const CODE = `${'a'.repeat(8)}-aaaa-aaaa-aaaa-${'a'.repeat(12)}.${'b'.repeat(64)}`;
+  const bids = { kind: 'page', page: 'bids' } as const;
+  const noOrg = () => new ApiError('No organization', 403);
+
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+    sessionStorage.clear();
+    setToken(null);
+    vi.unstubAllGlobals();
+  });
+
+  it('a signed-in user with no organization and a waiting code goes to #/invite once per session', async () => {
+    savePendingInvite(CODE);
+    const api = mockApi({ getOrg: vi.fn(async () => Promise.reject(noOrg())) });
+    render(<ShellContainer route={bids} api={api} />);
+    await waitFor(() => expect(window.location.hash).toBe('#/invite'));
+    cleanup();
+    window.location.hash = '#/bids';
+    render(<ShellContainer route={bids} api={api} />);
+    expect(await screen.findByRole('button', { name: 'Account menu for Dana Reyes' })).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(window.location.hash).toBe('#/bids');
+  });
+
+  it('without a waiting code, no organization stays on the organization page', async () => {
+    const api = mockApi({ getOrg: vi.fn(async () => Promise.reject(noOrg())) });
+    render(<ShellContainer route={bids} api={api} />);
+    expect(await screen.findByRole('button', { name: 'Account menu for Dana Reyes' })).toBeTruthy();
+    expect(window.location.hash).toBe('');
+  });
+
+  it('AppRoot sends a user who logs in with a waiting code to #/invite', async () => {
+    savePendingInvite(CODE);
+    window.location.hash = '#/login';
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (String(url).endsWith('/api/auth/login')
+      ? jsonResponse(200, { token: 'tok' })
+      : jsonResponse(200, meDto()))));
+    render(<AppRoot />);
+    await userEvent.type(await screen.findByLabelText('Work email'), 'dana@northbridge.example');
+    await userEvent.type(screen.getByLabelText('Password'), 'a long enough password');
+    await userEvent.click(screen.getByRole('button', { name: 'Log in' }));
+    await waitFor(() => expect(window.location.hash).toBe('#/invite'));
+  });
+});
+
+describe('ShellContainer seat-locked on a bid', () => {
+  it('loads no bid and does not poll while the member has no seat', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const getBid = vi.fn(async () => bidDto());
+    const listJobs = vi.fn(async () => [jobDto({ status: 'running' })]);
+    const api = mockApi({
+      getOrg: vi.fn(async () => Promise.reject(new ApiError('Your plan has no seat for you.', 403, 'seat_locked'))),
+      getBid,
+      listJobs,
+    });
+    render(<ShellContainer route={outline} api={api} />);
+    expect(await screen.findByRole('heading', { name: 'You have no seat right now' })).toBeTruthy();
+    // The first bid load starts with the shell's, before the 403 is known; after it, nothing more.
+    const bidCalls = getBid.mock.calls.length;
+    const jobCalls = listJobs.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+      window.dispatchEvent(new Event('focus'));
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(getBid.mock.calls.length).toBe(bidCalls);
+    expect(listJobs.mock.calls.length).toBe(jobCalls);
   });
 });

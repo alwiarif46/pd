@@ -1,5 +1,5 @@
 import * as api from '@/api';
-import { ApiError } from '@/api';
+import { ApiError, SEAT_LOCKED } from '@/api';
 import type { BidDto } from '@/api';
 import type { BidCard, BidType, FileKind, UploadNotice } from '@/types';
 import { summarizeOrg, type OrgSummary } from '@/features/shared/credits';
@@ -87,9 +87,13 @@ export function sortBidCards(cards: BidCard[]): BidCard[] {
 export type BidsScreenData = { kind: 'ready'; cards: BidCard[]; org: OrgSummary } | { kind: 'no_org' };
 export type NewBidScreenData = { kind: 'ready'; org: OrgSummary } | { kind: 'no_org' };
 
-/** GET /api/org answers 403 "No organization" for a user who has not created one yet. */
+/**
+ * GET /api/org answers 403 "No organization" for a user who has not created one yet. A 403
+ * seat_locked is a member without a seat, not "no organization" (the shell shows its screen). The
+ * legacy screens/Outside.tsx makes the same plain-403 check; it is left as is until v0 replaces it.
+ */
 function isNoOrg(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 403;
+  return error instanceof ApiError && error.status === 403 && error.code !== SEAT_LOCKED;
 }
 
 export async function loadBidsScreen(deps: BidsApi, now: Date, signal?: AbortSignal): Promise<BidsScreenData> {

@@ -3,7 +3,7 @@ import { isAbortError } from '@/api';
 import { parseAuthHash } from '@/features/auth/routes';
 import { messageOf } from '@/features/shared/messages';
 import { acceptAction, membershipApi, type AcceptOutcome, type MembershipApi } from './controller';
-import { clearPendingInvite, isInviteCode, loadPendingInvite, savePendingInvite } from './pending-invite';
+import { clearPendingInvite, loadPendingInvite, normalizeInviteCode, savePendingInvite } from './pending-invite';
 import { AcceptInvite } from './ui/AcceptInvite';
 import type { InviteStep } from './ui/types';
 
@@ -21,9 +21,7 @@ function go(hash: string) {
 
 /** The code from `#/invite?token=<code>`, else the one kept from earlier in this sign-up. */
 function initialCode(): string | null {
-  const token = parseAuthHash(window.location.hash).token?.trim();
-  if (isInviteCode(token)) return token;
-  return loadPendingInvite();
+  return normalizeInviteCode(parseAuthHash(window.location.hash).token) ?? loadPendingInvite();
 }
 
 /**
@@ -35,6 +33,8 @@ export function InviteContainer({ signedIn, api = membershipApi }: Props) {
   const [code, setCode] = useState<string | null>(initialCode);
   const [email, setEmail] = useState<string | null>(null);
   const [meError, setMeError] = useState<string | null>(null);
+  // Bumped by Try again after loading the account failed.
+  const [meVersion, setMeVersion] = useState(0);
   const [result, setResult] = useState<AcceptOutcome | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const alive = useRef(true);
@@ -44,8 +44,8 @@ export function InviteContainer({ signedIn, api = membershipApi }: Props) {
     alive.current = true;
     const token = parseAuthHash(window.location.hash).token;
     if (token !== null) {
-      const trimmed = token.trim();
-      if (isInviteCode(trimmed)) savePendingInvite(trimmed);
+      const normalized = normalizeInviteCode(token);
+      if (normalized) savePendingInvite(normalized);
       window.history.replaceState(null, '', INVITE_HASH);
     }
     return () => {
@@ -67,7 +67,7 @@ export function InviteContainer({ signedIn, api = membershipApi }: Props) {
       },
     );
     return () => abort.abort();
-  }, [api, signedIn, code]);
+  }, [api, signedIn, code, meVersion]);
 
   const accept = useCallback(() => {
     if (!code) return;
@@ -92,10 +92,26 @@ export function InviteContainer({ signedIn, api = membershipApi }: Props) {
     setCode(value);
   }, []);
 
-  const goToApp = useCallback(() => {
+  // After joining, or a final refusal (whose code accept already dropped).
+  const goToApp = useCallback(() => go('#/bids'), []);
+
+  // "Not now": the only way a kept code is dropped by hand, so a person without an organization
+  // is not sent back here (ShellContainer) for a code they chose not to use.
+  const dismiss = useCallback(() => {
     clearPendingInvite();
     go('#/bids');
   }, []);
+
+  // Loading the account failed: load it again. Otherwise accept again (seats_full, other).
+  const retry = useCallback(() => {
+    if (meError && !result) {
+      setMeError(null);
+      setEmail(null);
+      setMeVersion((n) => n + 1);
+      return;
+    }
+    accept();
+  }, [meError, result, accept]);
 
   let step: InviteStep | null;
   if (result) {
@@ -132,8 +148,9 @@ export function InviteContainer({ signedIn, api = membershipApi }: Props) {
       onSignUp={() => go('#/signup')}
       onLogIn={() => go('#/login')}
       onSignOut={signOut}
-      onRetry={accept}
+      onRetry={retry}
       onContinue={goToApp}
+      onDismiss={dismiss}
     />
   );
 }

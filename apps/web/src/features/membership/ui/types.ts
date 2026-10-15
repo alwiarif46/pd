@@ -24,6 +24,8 @@ export interface AcceptInviteProps {
   onSignOut(): void;
   onRetry(): void;
   onContinue(): void;
+  /** "Not now": drop the waiting code and use the app with the account signed in. */
+  onDismiss(): void;
 }
 
 export interface SeatLockedProps {

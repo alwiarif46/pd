@@ -54,11 +54,24 @@ export async function registerInvites(app: FastifyInstance): Promise<void> {
     }
     const email = user.email.trim().toLowerCase();
 
+    const tokenHash = hashToken(token);
+
     return inOrg(reply, orgId, async (db, respond) => {
-      // Lock order: the per-user advisory lock, then the organization row. POST /api/org takes the
-      // same user lock (and only a new org row nobody else sees); invite creation and billing take
-      // only the organization row. So a create-org and an accept for one user, or two accepts by
-      // one user, run one after the other, and nothing waits in a cycle.
+      // First an unlocked read: a code that matches no invite of this organization (a guessed
+      // token, or a foreign or unknown org id, hidden by row-level security) answers 404 without
+      // taking any lock, so nobody can hold an organization's row with made-up codes.
+      const [match] = await db.select({ id: schema.invites.id }).from(schema.invites).where(and(
+        eq(schema.invites.orgId, orgId),
+        eq(schema.invites.tokenHash, tokenHash),
+      )).limit(1);
+      if (!match) {
+        return respond(404, apiError('invite_invalid'));
+      }
+      // Lock order: the per-user advisory lock, then the organization row, then the invite row
+      // (credits.ts lists it). POST /api/org takes the same user lock (and only a new org row
+      // nobody else sees); invite creation and billing take only the organization row. So a
+      // create-org and an accept for one user, or two accepts by one user, run one after the
+      // other, and nothing waits in a cycle.
       await db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`org-create:${userId}`}, 0))`);
       // A fresh statement after the lock: sees memberships committed while this one waited.
       const memberOf = await db.execute<{ org_id: string; role: 'owner' | 'member' }>(
@@ -74,9 +87,10 @@ export async function registerInvites(app: FastifyInstance): Promise<void> {
       }
       const [invite] = await db.select().from(schema.invites).where(and(
         eq(schema.invites.orgId, orgId),
-        eq(schema.invites.tokenHash, hashToken(token)),
+        eq(schema.invites.id, match.id),
       )).for('update').limit(1);
-      if (!invite) {
+      // Only member invites are issued. Refuse any other role rather than skip the seat check.
+      if (!invite || invite.role !== 'member') {
         return respond(404, apiError('invite_invalid'));
       }
       if (invite.email.trim().toLowerCase() !== email) {
@@ -106,10 +120,13 @@ export async function registerInvites(app: FastifyInstance): Promise<void> {
       // cannot both take the last seat. Only memberships count: other pending invites were
       // admitted under the limit when created, and after a downgrade the first to accept wins.
       // A refused invite stays pending and works once a seat is free, until it expires.
-      if (invite.role === 'member' && !newMemberHoldsSeat(await seatHolders(db, orgId), seatLimitFor(org.plan))) {
+      if (!newMemberHoldsSeat(await seatHolders(db, orgId), seatLimitFor(org.plan))) {
         return respond(409, apiError('seats_full'));
       }
-      await db.insert(schema.memberships).values({ orgId, userId, role: invite.role });
+      // Dated by the database clock after the locks. The column default (now()) is the
+      // transaction start, which could date this member before one who joined while this waited;
+      // seat order follows created_at.
+      await db.insert(schema.memberships).values({ orgId, userId, role: invite.role, createdAt: sql`clock_timestamp()` });
       await markAccepted(db, invite.id, now);
       return { orgId, name: org.name, role: invite.role, alreadyMember: false };
     });

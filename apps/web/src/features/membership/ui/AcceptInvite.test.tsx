@@ -20,6 +20,7 @@ function setup(step: InviteStep, over: Partial<AcceptInviteProps> = {}) {
     onSignOut: vi.fn(),
     onRetry: vi.fn(),
     onContinue: vi.fn(),
+    onDismiss: vi.fn(),
     ...over,
   };
   render(<AcceptInvite {...props} />);
@@ -40,7 +41,14 @@ describe('AcceptInvite', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
     expect(props.onSubmitCode).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Invite code').getAttribute('aria-invalid')).toBe('true');
-    expect(screen.getByText(/does not look like an invite code/)).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toMatch(/does not look like an invite code/);
+  });
+
+  it('accepts an uppercase org id and submits it lowercased', async () => {
+    const props = setup({ kind: 'enter_code' });
+    await userEvent.type(screen.getByLabelText('Invite code'), CODE.toUpperCase());
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(props.onSubmitCode).toHaveBeenCalledWith(CODE);
   });
 
   it('offers Create account and Log in when signed out', async () => {
@@ -84,7 +92,30 @@ describe('AcceptInvite', () => {
     expect(props.onSignOut).toHaveBeenCalledTimes(1);
   });
 
-  it('other failures lead back into the app', async () => {
+  it('ready, seats_full, email_mismatch and other each offer Not now', async () => {
+    const steps: InviteStep[] = [
+      { kind: 'ready', email: 'a@b.com' },
+      { kind: 'failed', reason: 'seats_full', message: 'x' },
+      { kind: 'failed', reason: 'email_mismatch', message: 'x' },
+      { kind: 'failed', reason: 'other', message: 'x' },
+    ];
+    for (const step of steps) {
+      const props = setup(step);
+      await userEvent.click(screen.getByRole('button', { name: 'Not now' }));
+      expect(props.onDismiss).toHaveBeenCalledTimes(1);
+      cleanup();
+    }
+  });
+
+  it('an unexpected failure offers Try again, not a button that drops the code', async () => {
+    const props = setup({ kind: 'failed', reason: 'other', message: 'Network down.' });
+    expect(screen.getByRole('alert').textContent).toContain('Network down.');
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(props.onRetry).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'Open Shaavir PD' })).toBeNull();
+  });
+
+  it('final refusals lead back into the app', async () => {
     const props = setup({ kind: 'failed', reason: 'expired', message: 'Expired.' });
     await userEvent.click(screen.getByRole('button', { name: 'Open Shaavir PD' }));
     expect(props.onContinue).toHaveBeenCalledTimes(1);

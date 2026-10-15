@@ -17,6 +17,9 @@ import type { Db } from './scope.js';
  *   transactions wait on each other in a cycle:
  *     organizations -> documents -> check_these -> upload_sessions -> bids -> amendments
  *       -> amendment_links -> compliance_rows -> rfp_credits.
+ *   Invite accept (invites.ts) first takes the per-user advisory lock `org-create:<userId>` (an
+ *   advisory lock, not a row lock, the same one POST /api/org takes, before any row lock), then
+ *   organizations, then the invite row; invite creation takes organizations only.
  *   compliance_rows are locked FOR UPDATE ordered by id, after the amendment (and its link).
  *   Amendment numbers (packages/core amendment-numbers.ts) are checked and written only under the
  *   bid lock: upload start (organization, bid), upload complete of an amendment (its session,

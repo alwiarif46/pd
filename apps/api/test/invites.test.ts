@@ -7,7 +7,9 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest';
+import pg from 'pg';
 import { closeDb, getPool, schema, withOrg } from '@pd/core';
+import { applySubscription } from '../src/billing.js';
 import { type OutOfBandMessage, setOutOfBandSink } from '../src/security.js';
 import { as, createUser } from './helpers.js';
 import { fulfilled, raceInOrder, type Reply } from './races.js';
@@ -283,6 +285,141 @@ describe.skipIf(Boolean(unavailable))('invite accept', () => {
         expect(codes).toEqual([200, 409]);
       }
       expect(await membershipsOf(user.userId)).toBe(1);
+    }
+  });
+
+  /**
+   * Holds the organization row from a separate pd_app connection. `mode` 'update' blocks every
+   * lockOrg; 'no key update' blocks lockOrg too but lets a membership insert (FOR KEY SHARE on
+   * its foreign key) through.
+   */
+  async function holdOrg(orgId: string, mode: 'update' | 'no key update') {
+    const holder = new pg.Client({ connectionString: inject('appUrl') });
+    await holder.connect();
+    await holder.query('begin');
+    await holder.query("select set_config('app.org_id', $1, true)", [orgId]);
+    await holder.query(`select id from organizations where id = $1 for ${mode}`, [orgId]);
+    const waiters = async () => {
+      await holder.query('select pg_stat_clear_snapshot()');
+      const result = await holder.query<{ n: number }>(
+        "select count(*)::int as n from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid() and wait_event_type = 'Lock'",
+      );
+      return result.rows[0].n;
+    };
+    const untilWaiting = async (n: number) => {
+      const deadline = Date.now() + 10_000;
+      while ((await waiters()) < n && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      return waiters();
+    };
+    const release = async () => {
+      await holder.query('commit');
+      await holder.end();
+    };
+    return { untilWaiting, release };
+  }
+
+  const withinMs = <T>(promise: Promise<T>, ms: number) => Promise.race([
+    promise,
+    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), ms)),
+  ]);
+
+  it('a token that matches no invite never locks the organization row', async () => {
+    const { orgId } = await newOrg('inv-nolock', 'starter');
+    const stranger = await createUser('inv-nolock-x');
+    const held = await holdOrg(orgId, 'update');
+    try {
+      const response = await withinMs(accept(stranger, `${orgId}.${'c'.repeat(64)}`), 3000);
+      expect(response).not.toBe('timeout');
+      expect((response as Reply).statusCode).toBe(404);
+      expect(codeOf(response as Reply)).toBe('invite_invalid');
+    } finally {
+      await held.release();
+    }
+  });
+
+  it('refuses an owner-role invite for now', async () => {
+    const { orgId, owner } = await newOrg('inv-owner-role', 'starter');
+    const invitee = await createUser('inv-owner-role-x');
+    const code = await invite(owner, invitee.email);
+    await withOrg(orgId, (db) => db.update(schema.invites).set({ role: 'owner' }).where(eq(schema.invites.orgId, orgId)));
+    const response = await accept(invitee, code);
+    expect(response.statusCode).toBe(404);
+    expect(codeOf(response)).toBe('invite_invalid');
+    expect(await membershipsOf(invitee.userId)).toBe(0);
+    expect((await inviteRow(orgId, invitee.email)).acceptedAt).toBeNull();
+  });
+
+  it('dates the new membership after the locks, not at transaction start', async () => {
+    const { orgId, owner } = await newOrg('inv-joined-at', 'starter');
+    const invitee = await createUser('inv-joined-at-x');
+    const code = await invite(owner, invitee.email);
+    const other = await createUser('inv-joined-at-other');
+    const held = await holdOrg(orgId, 'no key update');
+    let pending: Promise<Reply> | null = null;
+    try {
+      pending = accept(invitee, code);
+      expect(await held.untilWaiting(1)).toBe(1);
+      // Committed while the accept waits for the organization lock.
+      await addMember(orgId, other.userId);
+      await withOrg(orgId, (db) => db.update(schema.memberships).set({ createdAt: sql`clock_timestamp()` })
+        .where(eq(schema.memberships.userId, other.userId)));
+    } finally {
+      await held.release();
+    }
+    expect((await pending!).statusCode).toBe(200);
+    const rows = await withOrg(orgId, (db) => db.select({ userId: schema.memberships.userId, createdAt: schema.memberships.createdAt })
+      .from(schema.memberships).where(eq(schema.memberships.orgId, orgId)));
+    const at = (userId: string) => rows.find((row) => row.userId === userId)!.createdAt.getTime();
+    expect(at(invitee.userId)).toBeGreaterThan(at(other.userId));
+  });
+
+  it('a member who accepts their still-pending invite uses it up and stays one member', async () => {
+    const { orgId, owner, name } = await newOrg('inv-member-pending', 'starter');
+    const invitee = await createUser('inv-member-pending-x');
+    const code = await invite(owner, invitee.email);
+    await addMember(orgId, invitee.userId);
+    const response = await accept(invitee, code);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ orgId, name, role: 'member', alreadyMember: true });
+    expect((await inviteRow(orgId, invitee.email)).acceptedAt).not.toBeNull();
+    expect(await membershipsOf(invitee.userId)).toBe(1);
+  });
+
+  it('matches a mixed-case account email, a padded code and an uppercase org id', async () => {
+    const { orgId, owner } = await newOrg('inv-case', 'starter');
+    const invitee = await createUser('Inv-Case-X');
+    expect(invitee.email).not.toBe(invitee.email.toLowerCase());
+    const code = await invite(owner, invitee.email.toLowerCase());
+    const [org, token] = code.split('.');
+    const response = await accept(invitee, `  ${org.toUpperCase()}.${token}\n`);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({ orgId, alreadyMember: false });
+  });
+
+  it('a billing downgrade racing an accept: whichever takes the organization lock first decides', async () => {
+    for (const order of ['accept-first', 'downgrade-first'] as const) {
+      const { orgId, owner } = await newOrg(`inv-downgrade-${order}`, 'starter', 1);
+      await withOrg(orgId, (db) => db.update(schema.organizations).set({ stripeCustomerId: `cus_${order}` }).where(eq(schema.organizations.id, orgId)));
+      const invitee = await createUser(`inv-downgrade-${order}-x`);
+      const code = await invite(owner, invitee.email);
+      const join = () => accept(invitee, code);
+      const downgrade = () => withOrg(orgId, (db) => applySubscription(db, orgId, { id: `sub_${order}`, customerId: `cus_${order}` }, { kind: 'free' }, new Date()));
+      const { waiting, results } = await raceInOrder(orgId, 'select id from organizations where id = $1 for update', [orgId],
+        order === 'accept-first' ? [join, downgrade] : [downgrade, join]);
+      expect(waiting).toBe(2);
+      const reply = fulfilled(results[order === 'accept-first' ? 0 : 1]) as Reply;
+      expect(fulfilled(results[order === 'accept-first' ? 1 : 0])).toBe('applied');
+      if (order === 'accept-first') {
+        // Joined on Starter; the downgrade then leaves the newest member without a seat.
+        expect(reply.statusCode).toBe(200);
+        expect((await as(app, invitee.token)('GET', '/api/bids')).statusCode).toBe(403);
+      } else {
+        expect(reply.statusCode).toBe(409);
+        expect(codeOf(reply)).toBe('seats_full');
+        expect(await membershipsOf(invitee.userId)).toBe(0);
+      }
     }
   });
 });
