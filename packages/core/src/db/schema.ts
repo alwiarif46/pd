@@ -128,7 +128,8 @@ export const bids = pgTable('bids', {
   bidType: text('bid_type').notNull().$type<'federal' | 'sled'>(),
   solicitationNumber: text('solicitation_number').notNull(),
   solicitationKey: text('solicitation_key').notNull(),
-  status: text('status').notNull(),
+  // CHECK bids_status_check (migration 0005, hand-written) allows only these values.
+  status: text('status').notNull().default('planning').$type<'planning' | 'writing' | 'submitted' | 'closed'>(),
   startDate: timestamp('start_date'),
   dueDate: timestamp('due_date'),
   dueTime: text('due_time'),
@@ -161,8 +162,12 @@ export const documents = pgTable('documents', {
   extractStatus: text('extract_status'),
   markingFound: jsonb('marking_found').$type<string[]>(),
   markingStatus: text('marking_status').$type<'none' | 'blocked' | 'confirmed'>(),
+  // The lowest page a marking was found on (the marking step writes it), or null.
+  markingPage: integer('marking_page'),
+  // Not written yet: the api computes the live-until date it shows (packages/core retention.ts);
+  // the retention job will store it here.
   liveUntil: timestamp('live_until'),
-  liveStatus: text('live_status').$type<'live' | 'archived' | 'restoring' | 'restored' | 'deleted'>(),
+  liveStatus: text('live_status').$type<'live' | 'archived' | 'restore_requested' | 'restoring' | 'restored' | 'deleted'>(),
 });
 
 export const uploadSessions = pgTable('upload_sessions', {

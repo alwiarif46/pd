@@ -1,11 +1,24 @@
 import { rm } from 'node:fs/promises';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { isUuid, normalizeSolicitationKey, resolveOrgPath, schema, withOrg } from '@pd/core';
+import {
+  BID_STATUSES,
+  bidDefaultLiveUntil,
+  bidFilesLiveUntil,
+  isBidStatus,
+  isUuid,
+  keyOverridesLeft,
+  normalizeSolicitationKey,
+  type Plan,
+  resolveOrgPath,
+  schema,
+  withOrg,
+} from '@pd/core';
 import { requireAuth } from './context.js';
 import { hasLiveSolicitation, releaseBidCredit } from './credits.js';
+import { orgPlan, readKeyOverrideLimit } from './documents.js';
 import { apiError } from './errors.js';
-import { findBid, inOrg } from './scope.js';
+import { type Db, findBid, inOrg } from './scope.js';
 
 const dataDir = process.env.DATA_DIR || '/data/files';
 const PENDING = 'PENDING';
@@ -29,10 +42,56 @@ function parseDate(value: string | null): Date | null | 'invalid' {
   return Number.isNaN(date.getTime()) ? 'invalid' : date;
 }
 
+type BidRow = typeof schema.bids.$inferSelect;
+
+/**
+ * Bid rows as the api sends them (5.2, 5.11): the row plus `defaultLiveUntil` (03 s39 without
+ * an extension), `filesLiveUntil` (with the owner's extension, paid plans), and
+ * `keyOverridesLeft` (app_settings `key_overrides_per_bid`). Deleted files do not count as uploads.
+ */
+async function bidDtos(db: Db, orgId: string, bids: BidRow[]) {
+  if (bids.length === 0) {
+    return [];
+  }
+  const plan: Plan = await orgPlan(db, orgId);
+  const limit = await readKeyOverrideLimit(db);
+  const uploads = await db.select({
+    bidId: schema.documents.bidId,
+    // Mapped with the column, so the aggregate is read as a Date the way the column is.
+    latestUploadAt: sql<Date | null>`max(${schema.documents.createdAt})`.mapWith(schema.documents.createdAt),
+    latestNonResumeUploadAt: sql<Date | null>`max(${schema.documents.createdAt}) filter (where ${schema.documents.kind} <> 'resume')`
+      .mapWith(schema.documents.createdAt),
+  }).from(schema.documents).where(and(
+    eq(schema.documents.orgId, orgId),
+    inArray(schema.documents.bidId, bids.map((bid) => bid.id)),
+    sql`${schema.documents.liveStatus} is distinct from 'deleted'`,
+  )).groupBy(schema.documents.bidId);
+  return bids.map((bid) => {
+    const found = uploads.find((row) => row.bidId === bid.id);
+    const input = {
+      plan,
+      latestUploadAt: found?.latestUploadAt ?? null,
+      latestNonResumeUploadAt: found?.latestNonResumeUploadAt ?? null,
+      dueDate: bid.dueDate,
+    };
+    return {
+      ...bid,
+      defaultLiveUntil: bidDefaultLiveUntil(input),
+      filesLiveUntil: bidFilesLiveUntil({ ...input, retentionExtendedUntil: bid.retentionExtendedUntil }),
+      keyOverridesLeft: keyOverridesLeft(limit, bid.keyOverridesUsed),
+    };
+  });
+}
+
+async function bidDto(db: Db, orgId: string, bid: BidRow) {
+  const [dto] = await bidDtos(db, orgId, [bid]);
+  return dto;
+}
+
 export async function registerBids(app: FastifyInstance): Promise<void> {
   app.get('/api/bids', { preHandler: requireAuth }, async (request) => {
     const orgId = request.auth!.orgId!;
-    return withOrg(orgId, async (db) => db.select().from(schema.bids).where(eq(schema.bids.orgId, orgId)));
+    return withOrg(orgId, async (db) => bidDtos(db, orgId, await db.select().from(schema.bids).where(eq(schema.bids.orgId, orgId))));
   });
 
   app.post('/api/bids', { preHandler: requireAuth }, async (request, reply) => {
@@ -50,9 +109,9 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
         bidType: body.bidType!,
         solicitationNumber,
         solicitationKey: keyFor(solicitationNumber),
-        status: 'draft',
+        status: 'planning',
       }).returning();
-      return respond(201, bid);
+      return respond(201, await bidDto(db, orgId, bid));
     });
   });
 
@@ -64,7 +123,7 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
       if (!bid) {
         return respond(404, { error: 'Bid not found' });
       }
-      return bid;
+      return bidDto(db, orgId, bid);
     });
   });
 
@@ -83,7 +142,12 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
       timeZone?: string | null;
       oralsEnabled?: boolean;
       retentionExtendedUntil?: string | null;
+      status?: unknown;
     };
+    if (body.status !== undefined && !isBidStatus(body.status)) {
+      return reply.code(400).send({ error: `Status must be one of: ${BID_STATUSES.join(', ')}.` });
+    }
+    const status = body.status;
     const extendsRetention = body.retentionExtendedUntil !== undefined;
     let retention: Date | null | undefined;
     if (extendsRetention) {
@@ -147,6 +211,7 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
         timeZone: body.timeZone === undefined ? bid.timeZone : body.timeZone,
         oralsEnabled: body.oralsEnabled === undefined ? bid.oralsEnabled : body.oralsEnabled,
         retentionExtendedUntil: retention === undefined ? bid.retentionExtendedUntil : retention,
+        status: status === undefined ? bid.status : status,
         updatedAt: new Date(),
       }).where(and(eq(schema.bids.id, id), eq(schema.bids.orgId, orgId)));
       if (extendsRetention) {
@@ -160,7 +225,7 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
         });
       }
       const updated = await findBid(db, orgId, id);
-      return updated;
+      return updated ? bidDto(db, orgId, updated) : null;
     });
   });
 

@@ -1,6 +1,6 @@
 {
-  "id": "a2ef0cff-401b-42d7-9972-e9362e3fdb14",
-  "prevId": "c660d34a-fb70-42aa-9837-a82f2c7f85ab",
+  "id": "70a9b54e-b1cb-4006-b210-cb29e37804ab",
+  "prevId": "b7bf813e-120d-44e7-9899-24d346768e74",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1115,7 +1115,8 @@
           "name": "status",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": "'planning'"
         },
         "start_date": {
           "name": "start_date",
@@ -1850,6 +1851,12 @@
         "marking_status": {
           "name": "marking_status",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "marking_page": {
+          "name": "marking_page",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
