@@ -223,6 +223,32 @@ out="$(bash ops/backup/rclone-setup.sh --dry-run 2>&1)"; rc=$?
 out="$(PD_UNIT_DIR="$S/units" bash ops/install.sh --dry-run 2>&1)"; rc=$?
 [[ $rc == 0 ]] && grep -q "OnCalendar=hourly" <<<"$out" && grep -q "Persistent=true" <<<"$out" && grep -q "backup.sh" <<<"$out" && ok "install.sh --dry-run renders an hourly persistent pd-backup timer" || bad "install dry" "$out"
 
+# ------------------------------------------------------------------ restore-drill/drill.sh
+JOURNAL_N="$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))["entries"]))' "$(np "$REPO/packages/core/src/db/migrations/meta/_journal.json")")"
+drill_env() {
+  backup_env "$1"
+  printf 'RCLONE_CONFIG_B2_ACCOUNT=restoreacct\nRCLONE_CONFIG_B2_KEY=%s\nRCLONE_CONFIG_B2CRYPT_PASSWORD=obsc-AAAA\nRCLONE_CONFIG_B2CRYPT_PASSWORD2=obsc-BBBB\n' "$SECRET_KEY" >"$S/restore.env"
+}
+drill_env dr-plan
+out="$(bash ops/restore-drill/drill.sh plan 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q "network none" <<<"$out" && grep -q "4 h RTO" <<<"$out" && ! grep -qE '^(docker|borg|rclone)' "$FAKE_CALLS" && ok "drill plan prints the steps and makes no docker/borg/rclone call" || bad "drill plan" "rc=$rc $out"
+drill_env dr-run
+out="$(FAKE_MIGRATIONS=$JOURNAL_N bash ops/restore-drill/drill.sh run --repo "$S/pdbackup/borg" --borg-pass "$S/etc/borg.pass" 2>&1)"; rc=$?
+[[ $rc == 0 ]] && ok "drill run against the fakes exits 0 when migrations match the journal ($JOURNAL_N)" || bad "drill run" "rc=$rc $(tail -6 <<<"$out")"
+grep -qE '^docker run -d --rm --name pd-drill-[0-9]+ --network none -e POSTGRES_USER=pd_owner -e POSTGRES_PASSWORD postgres:16-alpine' "$FAKE_CALLS" && ok "drill container: --network none, throwaway, password passed through the environment (not in argv)" || bad "drill docker run" "$(grep '^docker run' "$FAKE_CALLS")"
+grep -q "pg_restore -U pd_owner -d pd --exit-on-error --single-transaction" "$FAKE_CALLS" && grep -q "^borg extract --stdout ::pd-2026-10-16T01:00:00 pd.dump" "$FAKE_CALLS" && ok "drill restores the newest archive through pg_restore --single-transaction" || bad "drill restore" "$(cat "$FAKE_CALLS")"
+grep -q "^docker rm -f pd-drill-" "$FAKE_CALLS" && ok "drill removes its container on exit" || bad "drill container not removed"
+grep -q "migrations applied: $JOURNAL_N, journal entries: $JOURNAL_N" <<<"$out" && grep -q "organizations     : 2" <<<"$out" && grep -q "STATE.md:" <<<"$out" && ok "drill compares the migration count with _journal.json, prints the organizations count and a STATE.md line" || bad "drill verify" "$out"
+drill_env dr-mismatch
+out="$(FAKE_MIGRATIONS=1 bash ops/restore-drill/drill.sh run --repo "$S/pdbackup/borg" --borg-pass "$S/etc/borg.pass" 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "FAILED" <<<"$out" && grep -q "^docker rm -f pd-drill-" "$FAKE_CALLS" && ok "drill fails when the migration count differs from the journal (container still removed)" || bad "drill mismatch" "rc=$rc $out"
+drill_env dr-fail
+out="$(FAKE_PGRESTORE_EXIT=1 FAKE_MIGRATIONS=$JOURNAL_N bash ops/restore-drill/drill.sh run --repo "$S/pdbackup/borg" --borg-pass "$S/etc/borg.pass" 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "^docker rm -f pd-drill-" "$FAKE_CALLS" && ok "a failing pg_restore still removes the container (EXIT trap)" || bad "drill trap" "rc=$rc $(cat "$FAKE_CALLS")"
+drill_env dr-offsite
+out="$(FAKE_MIGRATIONS=$JOURNAL_N FAKE_COPY_DEST_FILES=1 bash ops/restore-drill/drill.sh run --from-offsite --rclone-env "$S/restore.env" --borg-pass "$S/etc/borg.pass" 2>&1)"; rc=$?
+grep -q "^rclone --config .* copy b2crypt:borg " "$FAKE_CALLS" && ! grep -qF -- "$SECRET_KEY" "$FAKE_CALLS" && ! grep -qF -- "$SECRET_KEY" <<<"$out" && ok "drill --from-offsite pulls b2crypt:borg with the key only in the environment" || bad "drill offsite" "rc=$rc $(grep '^rclone' "$FAKE_CALLS")"
+
 # ------------------------------------------------------------------ static
 mapfile -t SH < <(find ops infra/scripts -name '*.sh' -not -path '*/node_modules/*')
 badsyntax=""
