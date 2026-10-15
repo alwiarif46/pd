@@ -1,5 +1,6 @@
 import { request, seg, type CallOptions } from './http';
 import type {
+  AcceptInviteDto,
   BillingRedirectDto,
   CreatedOrgDto,
   Ok,
@@ -34,6 +35,17 @@ export function listMembers(opts?: CallOptions): Promise<OrgMemberDto[]> {
 /** Throws `ApiError` 402 when the plan has no free seat. */
 export function inviteMember(email: string, opts?: CallOptions): Promise<Ok> {
   return request('/api/org/invites', { method: 'POST', json: { email }, signal: opts?.signal });
+}
+
+/**
+ * Joins the organization an invite was sent for. `code` is the invite code, `<orgId>.<token>`.
+ * Signed-in users only; the invite must have been sent to the user's email address.
+ * Throws `ApiError` with code: `invite_invalid` (404, or 400 without a body),
+ * `invite_email_mismatch` (403), `invite_used`, `invite_expired`, `already_in_org` or
+ * `seats_full` (409). `seats_full` and `invite_email_mismatch` leave the invite pending.
+ */
+export function acceptInvite(code: string, opts?: CallOptions): Promise<AcceptInviteDto> {
+  return request('/api/invites/accept', { method: 'POST', json: { code }, signal: opts?.signal });
 }
 
 export function removeMember(userId: string, opts?: CallOptions): Promise<Ok> {

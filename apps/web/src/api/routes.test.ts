@@ -28,6 +28,7 @@ import {
   createOrg,
   getOrg,
   getProcessingInfo,
+  acceptInvite,
   inviteMember,
   listMembers,
   removeMember,
@@ -47,6 +48,7 @@ const cases: RouteCase[] = [
   ['updateOrg', () => updateOrg('Acme 2'), 'PATCH', '/api/org', { name: 'Acme 2' }],
   ['listMembers', () => listMembers(), 'GET', '/api/org/members', undefined],
   ['inviteMember', () => inviteMember('b@acme.com'), 'POST', '/api/org/invites', { email: 'b@acme.com' }],
+  ['acceptInvite', () => acceptInvite('o.t'), 'POST', '/api/invites/accept', { code: 'o.t' }],
   ['removeMember', () => removeMember('u/1'), 'DELETE', '/api/org/members/u%2F1', undefined],
   ['getProcessingInfo', () => getProcessingInfo(), 'GET', '/api/about/processing', undefined],
   // bids.ts

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { jsonBody, jsonResponse, lastCall, mockFetch, textResponse } from '../test/fetch';
 import { ApiError } from './errors';
 import { request, requestBlob, seg } from './http';
-import { onUnauthorized, setToken } from './session';
+import { onSeatLocked, onUnauthorized, setToken } from './session';
 
 async function rejection(promise: Promise<unknown>): Promise<unknown> {
   try {
@@ -188,6 +188,27 @@ describe('401 handling', () => {
     mockFetch(jsonResponse(401, { error: 'Wrong email or password' }));
     await rejection(request('/api/auth/login', { method: 'POST', json: {} }));
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe('seat_locked handling', () => {
+  it('notifies listeners only on a 403 with code seat_locked', async () => {
+    const listener = vi.fn();
+    unsubscribers.push(onSeatLocked(listener));
+    mockFetch(
+      jsonResponse(403, { error: 'No organization' }),
+      jsonResponse(402, { error: 'Out of credits', code: 'seat_locked' }),
+      jsonResponse(403, { error: 'No seat', code: 'seat_locked' }),
+      jsonResponse(403, { error: 'No seat', code: 'seat_locked' }),
+    );
+    await rejection(request('/api/org'));
+    await rejection(request('/api/org'));
+    expect(listener).not.toHaveBeenCalled();
+    const error = (await rejection(request('/api/org'))) as ApiError;
+    expect(error.code).toBe('seat_locked');
+    expect(listener).toHaveBeenCalledTimes(1);
+    await rejection(requestBlob('/api/documents/d/file'));
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 });
 

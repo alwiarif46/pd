@@ -161,6 +161,14 @@ export interface CreatedOrgDto {
   plan: Plan;
 }
 
+/** What `POST /api/invites/accept` answers. `alreadyMember` is true when the user had joined already. */
+export interface AcceptInviteDto {
+  orgId: string;
+  name: string;
+  role: 'owner' | 'member';
+  alreadyMember: boolean;
+}
+
 export interface ProcessingInfoDto {
   provider: string;
   model: string;

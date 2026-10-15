@@ -33,3 +33,23 @@ export function notifyUnauthorized(): void {
     listener();
   }
 }
+
+const seatLockedListeners = new Set<() => void>();
+
+/**
+ * Subscribes to 403 `seat_locked` responses: the signed-in member lost their seat (06 s5).
+ * Returns an unsubscribe function.
+ */
+export function onSeatLocked(listener: () => void): () => void {
+  seatLockedListeners.add(listener);
+  return () => {
+    seatLockedListeners.delete(listener);
+  };
+}
+
+/** Called by the request core only. */
+export function notifySeatLocked(): void {
+  for (const listener of [...seatLockedListeners]) {
+    listener();
+  }
+}

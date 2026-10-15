@@ -1,5 +1,5 @@
-import { ApiError, isAbortError, NETWORK_ERROR_MESSAGE } from './errors';
-import { getToken, notifyUnauthorized } from './session';
+import { ApiError, isAbortError, isSeatLocked, NETWORK_ERROR_MESSAGE } from './errors';
+import { getToken, notifySeatLocked, notifyUnauthorized } from './session';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -79,6 +79,14 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
 }
 
 async function errorFrom(response: Response): Promise<ApiError> {
+  const error = await parseError(response);
+  if (isSeatLocked(error)) {
+    notifySeatLocked();
+  }
+  return error;
+}
+
+async function parseError(response: Response): Promise<ApiError> {
   const text = await response.text();
   if (!text) {
     return new ApiError('The request failed', response.status);
