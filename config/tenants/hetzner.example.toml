@@ -1,0 +1,84 @@
+# Example tenant file for provider "hetzner". Copy to config/tenants/hetzner.toml before use;
+# keep it in step with config/tenant.toml (switch-provider.sh checks tenant.id, tenant.domain,
+# tenant.hostname, backup.bucket and backup.crypt_prefix are equal in both files).
+# Use:  infra/switch-provider.sh plan --to config/tenants/hetzner.toml
+# PD tenant config. Operator-specific values only. No secrets.
+# Scripts read this file (infra/lib/tenant.sh); nothing tenant-specific is hard-coded elsewhere.
+# Mirrors Drive's config/tenant.toml layout (Drive PR #3, D-146): [infra] provider selects the adapter in
+# infra/providers/<provider>/ and the provider's key goes in the secrets file (config/secrets.env.example).
+
+[tenant]
+id            = "shaavir-pd"
+product_name  = "PD"
+domain        = "pd.shaavir.com"
+dns_zone      = "shaavir.com"
+hostname      = "shaavir-pd-01"
+ssh_key_name  = "amaan-ed25519"
+# Local (build machine) secrets env file: KEY=VALUE lines, never in git. Env PD_SECRETS / --secrets override.
+secrets_file  = "C:/projects/secrets/pd.env"
+
+[server]
+admin_user    = "pdadmin"                      # OS admin user created by cloud-init
+
+[volumes]
+data_name      = "pd-data"
+data_size_gb   = 40
+data_type      = "high-speed-gen2"             # OVH Block Storage class (adapter ovh-us only)
+backup_name    = "pd-backup"
+backup_size_gb = 40
+backup_type    = "classic"                     # verify sizes vs the disk (open question Q-03)
+
+[network]
+cloudflare_only = true                         # host firewall: 443 only from infra/server/cloudflare-ips.txt (plan 01 s3)
+admin_ssh_cidrs = []                           # optional static office IPs for SSH on the public interface; empty = tailnet only
+
+[dns]
+proxied       = true                           # Cloudflare proxy in front of the origin (plan 01 s3)
+ttl           = 1                              # 1 = Cloudflare "auto"
+
+[admin_network]
+login_server  = "https://vpn.shaavir.com"      # Headscale
+server_tag    = "tag:pd"
+admins        = ["amaan"]
+
+[backup]
+bucket        = "shaavir-pd-backup-us"
+crypt_prefix  = "shaavir-pd"                   # b2crypt:<prefix>/...
+subprocessor  = "Backblaze, Inc. (encrypted off-site backups)"   # named in the app's privacy statement (Q-04)
+borg_retention = "--keep-within=2d --keep-daily=30"
+max_backup_age_hours = 2
+project_dir   = "/opt/pd"                      # where deploy.sh keeps the checkout and .env on the server
+
+# Infrastructure provider (plan 01 s9; pluggable since Drive D-146).
+# provider is an operator value: the adapter in infra/providers/<provider>/ ("ovh-us", "hetzner", "ssh").
+# Switching where a NEW server is built = this line + that provider's key in the secrets file.
+# Moving a RUNNING PD = infra/switch-provider.sh (Drive D-149).
+# The keys right below are the ovh-us adapter's; [infra.hetzner] and [infra.ssh] hold the other adapters' values.
+[infra]
+provider       = "hetzner"                       # US locations only (ash, hil)
+storage        = "volumes"
+subprocessor   = ""                              # "" = the adapter's provider.conf subprocessor; REQUIRED for provider "ssh" (the hosting company's legal name)
+bootstrap_ssh_hours = 6                          # host firewall: first-boot SSH from ADMIN_IP expires after N h
+auth_url       = "https://auth.cloud.ovh.us/v3"  # ovh-us: OVHcloud US Keystone (the EU/CA one is auth.cloud.ovh.net)
+auth_host      = "auth.cloud.ovh.us"             # residency guard: scripts refuse an auth_url on any other host
+region         = "US-EAST-VA-1"                  # Vint Hill, VA; US-WEST-OR-1 = Hillsboro, OR
+project_name   = "PD"                            # dedicated Public Cloud project
+project_id     = ""                              # Public Cloud project id; "" = not checked
+flavor         = "b3-16"                         # verify at purchase
+image          = "Ubuntu 24.04"                  # OVH image name (verify: openstack image list)
+public_network = "Ext-Net"                       # OVH public network (IPv4 + IPv6)
+security_group = "sg-pd"
+
+[infra.hetzner]                                  # adapter infra/providers/hetzner; key HCLOUD_TOKEN in the secrets file
+location       = "ash"                           # Ashburn, VA. "hil" = Hillsboro, OR
+locations      = ["ash", "hil"]                  # residency allow-list: a server or volume elsewhere is refused (US only)
+server_type    = "cpx31"                         # used only when CREATING; never rescaled by script
+image          = "ubuntu-24.04"
+firewall       = "fw-pd"
+dedicated_project = true                         # refuse a project that holds other servers (production)
+
+[infra.ssh]                                      # adapter infra/providers/ssh: any Ubuntu 24.04 box, no API
+ipv4           = ""                              # set when the server exists; feeds DNS
+ipv6           = ""                              # "" if the provider gives none
+bootstrap_user = "root"                          # first login; bootstrap-existing.sh turns root SSH off
+panel_url      = ""                              # provider control panel (console, rescue)

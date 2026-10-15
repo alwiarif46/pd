@@ -47,3 +47,7 @@ docs/plans/.versions/
 
 # Local dev database (pnpm dev:db)
 .dev/
+
+# Python bytecode
+__pycache__/
+*.pyc
