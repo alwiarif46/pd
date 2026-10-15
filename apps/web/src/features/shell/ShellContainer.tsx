@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import { isAbortError } from '@/api';
 import { Button } from '@/components/ui/button';
 import type { OutsidePage, Tab, UpgradeReason } from '@/types';
+import { EmptyState } from '@/ui/common/EmptyState';
 import { AppShell } from '@/ui/shell/AppShell';
 import { ConfirmDialog } from '@/ui/shell/ConfirmDialog';
 import { UpgradeDialog } from '@/ui/shell/UpgradeDialog';
@@ -19,7 +20,7 @@ import {
   placeholderShellBid,
   loadShell,
   needsPolling,
-  POLL_MS,
+  pollDelay,
   shellApi,
   toShellBid,
   upgradeAction,
@@ -35,17 +36,32 @@ import { activePageOf, isPaidTab, pageHref, TAB_TITLES, TABS, tabHref, type AppR
 import { screens } from './screens';
 
 type ShellState = { kind: 'loading' } | { kind: 'error'; message: string } | ShellData;
-type BidState = { bidId: string; data: BidData | null; error: string | null };
+type BidState = { bidId: string; data: BidData | null; error: string | null; failures: number };
 type ConfirmState = { open: boolean; options: ConfirmOptions; key: number };
 
 interface Props {
   route: Exclude<AppRoute, { kind: 'auth' }>;
   /** Test seam; defaults to the typed client. */
   api?: ShellApi;
+  /** Test seam: leaves the app for Stripe. Defaults to `window.location.assign`. */
+  leaveTo?: (url: string) => void;
 }
 
 function go(hash: string) {
   window.location.hash = hash;
+}
+
+function assign(url: string) {
+  window.location.assign(url);
+}
+
+/**
+ * Changes the hash without a history entry (selecting a row should not make Back walk through rows), then
+ * tells AppRoot, which follows `hashchange`, that the route changed.
+ */
+function replaceHash(hash: string) {
+  window.history.replaceState(window.history.state, '', hash);
+  window.dispatchEvent(new HashChangeEvent('hashchange'));
 }
 
 /** Padding for v0 pages outside a bid (the bids list and new bid). */
@@ -59,7 +75,7 @@ function PageFrame({ children }: { children: ReactNode }) {
  * dialog, the confirm dialog and the session. Polls every 3 s while anything on the bid is queued or
  * running, never when idle; reloads on window focus and after every change (`refresh`).
  */
-export function ShellContainer({ route, api = shellApi }: Props) {
+export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Props) {
   const [shell, setShell] = useState<ShellState>({ kind: 'loading' });
   const [shellVersion, setShellVersion] = useState(0);
   const [bidState, setBidState] = useState<BidState | null>(null);
@@ -80,23 +96,33 @@ export function ShellContainer({ route, api = shellApi }: Props) {
   // new bid then joins the switcher). A failed reload keeps what is shown.
   useEffect(() => {
     const abort = new AbortController();
-    loadShell(api, abort.signal).then(setShell, (error: unknown) => {
-      if (isAbortError(error)) return;
-      setShell((prev) => (prev.kind === 'ready' ? prev : { kind: 'error', message: messageOf(error) }));
-    });
+    loadShell(api, abort.signal).then(
+      (data) => {
+        if (!abort.signal.aborted) setShell(data);
+      },
+      (error: unknown) => {
+        if (abort.signal.aborted || isAbortError(error)) return;
+        setShell((prev) => (prev.kind === 'ready' ? prev : { kind: 'error', message: messageOf(error) }));
+      },
+    );
     return () => abort.abort();
   }, [api, shellVersion, bidId]);
 
-  // The open bid. Requests for a bid the user has left are aborted.
+  // The open bid. Requests for a bid the user has left are aborted. A failed reload keeps the data shown
+  // and counts the failure, which re-arms polling with a longer wait.
   useEffect(() => {
     if (!bidId) return;
     const abort = new AbortController();
     loadBid(api, bidId, abort.signal).then(
-      (data) => setBidState({ bidId, data, error: null }),
+      (data) => {
+        if (!abort.signal.aborted) setBidState({ bidId, data, error: null, failures: 0 });
+      },
       (error: unknown) => {
-        if (isAbortError(error)) return;
+        if (abort.signal.aborted || isAbortError(error)) return;
         setBidState((prev) =>
-          prev && prev.bidId === bidId && prev.data ? prev : { bidId, data: null, error: messageOf(error) },
+          prev && prev.bidId === bidId && prev.data
+            ? { ...prev, failures: prev.failures + 1 }
+            : { bidId, data: null, error: messageOf(error), failures: 0 },
         );
       },
     );
@@ -105,19 +131,21 @@ export function ShellContainer({ route, api = shellApi }: Props) {
 
   const bidData = bidState && bidState.bidId === bidId ? bidState.data : null;
   const bidError = bidState && bidState.bidId === bidId ? bidState.error : null;
+  const pollFailures = bidState && bidState.bidId === bidId ? bidState.failures : 0;
 
   const refresh = useCallback(() => {
     setShellVersion((n) => n + 1);
     setBidVersion((n) => n + 1);
   }, []);
 
-  // Poll while something is queued or running: one request set at a time, 3 s after the last answer.
+  // Poll while something is queued or running: one request set at a time, 3 s after the last answer
+  // (longer after failed polls, up to 10 s). A success or a failure each re-arms the timer.
   const polling = needsPolling(bidData);
   useEffect(() => {
     if (!polling) return;
-    const timer = window.setTimeout(() => setBidVersion((n) => n + 1), POLL_MS);
+    const timer = window.setTimeout(() => setBidVersion((n) => n + 1), pollDelay(pollFailures));
     return () => window.clearTimeout(timer);
-  }, [polling, bidData]);
+  }, [polling, bidData, pollFailures]);
 
   // When processing ends, credits may have been consumed: reload the organization once.
   const wasPolling = useRef(false);
@@ -150,13 +178,38 @@ export function ShellContainer({ route, api = shellApi }: Props) {
     setConfirmState((prev) => ({ ...prev, open: false }));
   }
 
+  // A confirm still open when the shell goes away (sign out, 401) answers "cancel".
+  useEffect(
+    () => () => {
+      resolveConfirm.current?.(false);
+      resolveConfirm.current = null;
+    },
+    [],
+  );
+
   const signOut = useCallback(() => {
     void api.logOut().finally(() => go('#/login'));
   }, [api]);
 
+  // One Checkout or portal request at a time: a double click must not open two Checkout sessions.
+  const upgrading = useRef(false);
+  function choosePlan(plan: 'starter' | 'growth') {
+    if (upgrading.current) return;
+    upgrading.current = true;
+    void upgradeAction(api, plan).then((outcome) => {
+      if (outcome.kind === 'redirect') {
+        leaveTo(outcome.url);
+        return;
+      }
+      upgrading.current = false;
+      setUpgrade((prev) => ({ ...prev, open: false }));
+      toast.info(outcome.message);
+    });
+  }
+
   const openRow = useCallback(
     (id: string | null) => {
-      if (bidId && tab) go(tabHref(bidId, tab, id));
+      if (bidId && tab) replaceHash(tabHref(bidId, tab, id));
     },
     [bidId, tab],
   );
@@ -300,6 +353,19 @@ export function ShellContainer({ route, api = shellApi }: Props) {
         </TabFrameContainer>
       );
     }
+    // Orals is hidden from the tab list while it is off for the bid; a typed or stale link says so.
+    if (route.tab === 'orals' && bidDto && !bidDto.oralsEnabled) {
+      const settings = tabHref(route.bidId, 'settings');
+      return (
+        <PageFrame>
+          <EmptyState
+            title="Orals is off for this bid"
+            text="Turn on Orals in the bid's settings to plan the oral presentation."
+            action={{ label: 'Open settings', onClick: () => go(settings) }}
+          />
+        </PageFrame>
+      );
+    }
     const Registered = screens.tabs.get(route.tab);
     if (Registered) return <Registered bidId={route.bidId} tab={route.tab} selectedRowId={route.rowId} />;
     return (
@@ -368,16 +434,7 @@ export function ShellContainer({ route, api = shellApi }: Props) {
         plan={org.plan}
         creditsLeft={org.creditsLeft}
         creditsResetOn={org.creditsResetOn}
-        onChoosePlan={(plan) => {
-          void upgradeAction(api, plan).then((outcome) => {
-            if (outcome.kind === 'redirect') {
-              window.location.assign(outcome.url);
-              return;
-            }
-            setUpgrade((prev) => ({ ...prev, open: false }));
-            toast.info(outcome.message);
-          });
-        }}
+        onChoosePlan={choosePlan}
         onClose={() => setUpgrade((prev) => ({ ...prev, open: false }))}
       />
       {dialogs}

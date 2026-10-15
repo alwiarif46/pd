@@ -23,6 +23,13 @@ export const shellApi: ShellApi = api;
 
 /** Poll interval while anything on the bid is queued or running. No polling when idle. */
 export const POLL_MS = 3000;
+/** Longest wait between polls after repeated failures. */
+export const POLL_MAX_MS = 10_000;
+
+/** The wait before the next poll: 3 s, then 6 s and 10 s after consecutive failed polls; reset by a success. */
+export function pollDelay(failures: number): number {
+  return Math.min(POLL_MAX_MS, POLL_MS * 2 ** Math.max(0, failures));
+}
 
 /* ---- Loading ---- */
 
@@ -137,14 +144,30 @@ function upgradeNotice(error: unknown): UpgradeOutcome {
 export async function upgradeAction(deps: ShellApi, plan: PaidPlan): Promise<UpgradeOutcome> {
   try {
     const { url } = await deps.startCheckout(plan);
-    return { kind: 'redirect', url };
+    return redirectTo(url);
   } catch (error) {
     if (!(error instanceof ApiError && error.status === 409)) return upgradeNotice(error);
   }
   try {
     const { url } = await deps.openBillingPortal();
-    return { kind: 'redirect', url };
+    return redirectTo(url);
   } catch (error) {
     return upgradeNotice(error);
   }
+}
+
+export const UNEXPECTED_BILLING_URL_MESSAGE = 'Billing could not be opened. Try again, or contact support.';
+
+/** Checkout and the portal are Stripe-hosted: only an https URL on stripe.com or a subdomain is followed. */
+export function isBillingUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && (parsed.hostname === 'stripe.com' || parsed.hostname.endsWith('.stripe.com'));
+  } catch {
+    return false;
+  }
+}
+
+function redirectTo(url: string): UpgradeOutcome {
+  return isBillingUrl(url) ? { kind: 'redirect', url } : { kind: 'notice', message: UNEXPECTED_BILLING_URL_MESSAGE };
 }

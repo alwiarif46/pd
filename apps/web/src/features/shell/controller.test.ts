@@ -4,13 +4,16 @@ import { summarizeOrg } from '@/features/shared/credits';
 import { bidDto, creditDto, docDto, jobDto, linkDto, meDto, orgPayload } from '@/test/fixtures';
 import {
   BILLING_UNAVAILABLE_MESSAGE,
+  isBillingUrl,
   jobsKey,
   loadBid,
   loadShell,
   needsPolling,
   noonOf,
   OWNER_ONLY_MESSAGE,
+  pollDelay,
   toShellBid,
+  UNEXPECTED_BILLING_URL_MESSAGE,
   upgradeAction,
   userOf,
   type ShellApi,
@@ -69,6 +72,10 @@ describe('needsPolling', () => {
     expect(needsPolling({ docs: [docDto({ extractStatus: 'pending' })], jobs: [] })).toBe(true);
     expect(needsPolling({ docs: [docDto({ extractStatus: 'pending', liveStatus: 'deleted' })], jobs: [] })).toBe(false);
     expect(needsPolling({ docs: [], jobs: [jobDto({ status: 'failed' })] })).toBe(false);
+  });
+
+  it('backs off after failed polls: 3 s, 6 s, then 10 s at most', () => {
+    expect([0, 1, 2, 3, 8].map(pollDelay)).toEqual([3000, 6000, 10_000, 10_000, 10_000]);
   });
 
   it('keys job states for legacy reloads, ignoring progress', () => {
@@ -163,6 +170,16 @@ describe('upgradeAction', () => {
       kind: 'notice',
       message: 'Something went wrong. Try again.',
     });
+  });
+
+  it('follows only https URLs on stripe.com', async () => {
+    for (const url of ['http://checkout.stripe.com/c/1', 'https://stripe.com.evil.example/c', 'https://evil.example/stripe.com', 'javascript:alert(1)', 'nope']) {
+      expect(isBillingUrl(url)).toBe(false);
+      const api = mockApi({ startCheckout: vi.fn(async () => ({ url })) });
+      expect(await upgradeAction(api, 'starter')).toEqual({ kind: 'notice', message: UNEXPECTED_BILLING_URL_MESSAGE });
+    }
+    expect(isBillingUrl('https://checkout.stripe.com/c/pay/cs_1')).toBe(true);
+    expect(isBillingUrl('https://stripe.com/x')).toBe(true);
   });
 
   it('maps portal errors the same way', async () => {

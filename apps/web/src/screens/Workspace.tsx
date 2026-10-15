@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError, api, uploadFile } from '../legacy-api';
 import { Dialog } from '../components/Dialog';
 import { RowDetail } from '../components/RowDetail';
@@ -97,9 +97,15 @@ export function Workspace({
     return reload();
   }, [bidId, tab, plan]);
 
-  // The shell polls while files process; reload in place when a job starts, finishes or fails.
+  // The shell polls while files process; reload in place when a job starts, finishes or fails. The key
+  // seen at mount, and the first one the shell sends after it, describe what the mount load already
+  // fetched, so only later changes reload.
+  const lastKey = useRef(refreshKey);
   useEffect(() => {
-    if (refreshKey) reload(true);
+    if (!refreshKey || refreshKey === lastKey.current) return;
+    const first = lastKey.current === '';
+    lastKey.current = refreshKey;
+    if (!first) reload(true);
   }, [refreshKey]);
 
   /** After a change here: reload this screen and let the shell reload its state. */
