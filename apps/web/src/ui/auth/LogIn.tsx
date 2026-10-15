@@ -13,7 +13,7 @@ import {
   fieldAria,
   useAuthForm,
 } from './AuthLayout';
-import type { LogInProps } from '@/types';
+import type { LogInProps } from './types';
 
 const CHECKS = { email: checkEmail, password: checkPassword };
 const INITIAL = { email: '', password: '' };

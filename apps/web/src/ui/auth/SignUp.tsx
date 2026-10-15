@@ -17,7 +17,7 @@ import {
   phoneDigits,
   useAuthForm,
 } from './AuthLayout';
-import type { SignUpProps } from '@/types';
+import type { SignUpProps } from './types';
 
 const CHECKS = {
   email: checkEmail,
