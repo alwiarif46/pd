@@ -10,6 +10,8 @@
   ],
   "scripts": {
     "dev": "turbo run dev",
+    "dev:db": "tsx apps/api/scripts/dev-db.ts",
+    "dev:api": "tsx apps/api/scripts/dev-api.ts",
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "turbo run lint",
