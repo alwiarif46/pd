@@ -20,6 +20,7 @@ import {
   overrideSolicitationKey,
   resolveViewToken,
   restoreDocument,
+  setAmendmentNo,
 } from './documents';
 import type { HttpMethod } from './http';
 import { listJobs, retryJob } from './jobs';
@@ -76,6 +77,7 @@ const cases: RouteCase[] = [
     { reason: 'Typo in the number' },
   ],
   ['restoreDocument', () => restoreDocument('d1'), 'POST', '/api/documents/d1/restore', undefined],
+  ['setAmendmentNo', () => setAmendmentNo('d1', 3), 'PATCH', '/api/documents/d1/amendment-no', { amendmentNo: 3 }],
   ['deleteDocument', () => deleteDocument('d1'), 'DELETE', '/api/documents/d1', undefined],
   // jobs.ts
   ['listJobs', () => listJobs('b1'), 'GET', '/api/bids/b1/jobs', undefined],

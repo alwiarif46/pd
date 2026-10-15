@@ -1,5 +1,5 @@
 import { request, requestBlob, seg, type CallOptions } from './http';
-import type { DocumentDto, DocumentPagesDto, KeyOverrideDto, Ok, RestoreDocumentDto, ViewTokenDto } from './types';
+import type { DocumentDto, DocumentPagesDto, KeyOverrideDto, Ok, RestoreDocumentDto, SetAmendmentNoDto, ViewTokenDto } from './types';
 
 export function listDocuments(bidId: string, opts?: CallOptions): Promise<DocumentDto[]> {
   return request(`/api/bids/${seg(bidId)}/documents`, { signal: opts?.signal });
@@ -54,6 +54,15 @@ export function overrideSolicitationKey(
  */
 export function restoreDocument(documentId: string, opts?: CallOptions): Promise<RestoreDocumentDto> {
   return request(`/api/documents/${seg(documentId)}/restore`, { method: 'POST', signal: opts?.signal });
+}
+
+/**
+ * Sets an amendment's number (1 to 999), open to any member. 409 `amendment_no_taken`,
+ * `document_deleted` or `not_an_amendment`; 400 `invalid_amendment_no`. An amendment waiting in
+ * `needs_number` resumes processing.
+ */
+export function setAmendmentNo(documentId: string, amendmentNo: number, opts?: CallOptions): Promise<SetAmendmentNoDto> {
+  return request(`/api/documents/${seg(documentId)}/amendment-no`, { method: 'PATCH', json: { amendmentNo }, signal: opts?.signal });
 }
 
 export function deleteDocument(documentId: string, opts?: CallOptions): Promise<Ok> {

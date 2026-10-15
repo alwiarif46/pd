@@ -228,6 +228,8 @@ export interface OpenUploadInput {
   declaredSize: number;
   sha256: string;
   chunkCount: number;
+  /** Amendments only: the amendment's number, 1 to 999. 409 `amendment_no_taken` when the bid already has it. */
+  amendmentNo?: number;
 }
 
 /** `{ duplicate: true }` (200) when the file is already on the bid, otherwise a new session (201). */
@@ -267,6 +269,21 @@ export interface DocumentDto extends BidScopedDto {
   keyReason: KeyReason | null;
   /** The solicitation number the amendment check found (the matched text, or the top labelled number); null if none or not an amendment. */
   keyFound: string | null;
+  /** Amendments only: where `amendmentNo` came from. `sequence` is assumed (no number in the file) and editable. */
+  amendmentNoSource: AmendmentNoSource | null;
+  /** Amendments only: the number read from the file, when one was found (it may differ from a typed one). */
+  amendmentNoFound: number | null;
+  /** Amendments only: the amendment's status; `needs_number` waits for the user to set the number. */
+  amendmentStatus: AmendmentStatus | null;
+}
+
+export type AmendmentNoSource = 'user' | 'document' | 'sequence';
+export type AmendmentStatus = 'held' | 'needs_number' | 'processing' | 'failed' | 'needs_confirmation' | 'applied';
+
+/** PATCH /api/documents/:id/amendment-no. */
+export interface SetAmendmentNoDto {
+  ok: true;
+  amendmentNo: number;
 }
 
 export interface ViewTokenDto {
