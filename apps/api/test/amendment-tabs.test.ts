@@ -64,6 +64,7 @@ type Payload = { orgId: string; bidId: string; documentId: string; jobId: string
 describe.skipIf(Boolean(unavailable))('amendment step 8: bid facts and dates', () => {
   let app: FastifyInstance;
   let tabs: typeof import('../../worker/src/amendment-tabs-job.js');
+  let aiJobs: typeof import('../../worker/src/ai-jobs.js');
   let classify: typeof import('../../worker/src/classify-job.js');
 
   beforeAll(async () => {
@@ -72,6 +73,7 @@ describe.skipIf(Boolean(unavailable))('amendment step 8: bid facts and dates', (
     const { buildApp } = await import('../src/app.js');
     app = await buildApp({ logger: false });
     tabs = await import('../../worker/src/amendment-tabs-job.js');
+    aiJobs = await import('../../worker/src/ai-jobs.js');
     classify = await import('../../worker/src/classify-job.js');
   });
 
@@ -360,6 +362,41 @@ describe.skipIf(Boolean(unavailable))('amendment step 8: bid facts and dates', (
       ai.facts = [{ field: 'agency', value: 'Department of the Air Force', sourceQuote: 'Amendment No. 6', sourcePage: 1 }];
       expect(await run(tenant, six)).toBe('applied');
       expect((await factsOf(tenant)).find((fact) => fact.id === navy.id)).toMatchObject({ supersedeStatus: 'superseded', changedByAmendment: 6 });
+    });
+
+    it('a solicitation-set file whose overview and dates run after step 8 writes its keyed rows already superseded', async () => {
+      const { tenant } = await setup('at-late');
+      const documentId = await amendment(tenant, 2);
+      expect(await run(tenant, documentId)).toBe('applied');
+      const late = await withOrg(tenant.orgId, async (db) => {
+        const [document] = await db.insert(schema.documents).values({
+          orgId: tenant.orgId, bidId: tenant.bidId, fileName: 'attachment.pdf', mime: 'application/pdf', sizeBytes: 5,
+          sha256: randomUUID(), kind: 'attachment', storagePath: `docs/${randomUUID()}.pdf`, liveStatus: 'live',
+        }).returning();
+        await db.insert(schema.pages).values({
+          orgId: tenant.orgId, documentId: document.id, pageNo: 1, text: 'Issued by the Department of the Army.\nProposals are due 2026-12-15.\nThe kickoff is 2027-01-04.',
+        });
+        return document.id;
+      });
+      ai.facts = [
+        { field: 'agency', value: 'Department of the Army', sourceQuote: 'Issued by the Department of the Army', sourcePage: 1 },
+        { field: 'naics', value: '541512', sourceQuote: 'Issued by the Department of the Army', sourcePage: 1 },
+      ];
+      const latePayload = { ...payload(tenant, documentId), documentId: late, kind: 'attachment' as const };
+      await aiJobs.processOverview(latePayload);
+      await aiJobs.processDates(latePayload);
+      const facts = await factsOf(tenant);
+      const navy = facts.find((fact) => fact.documentId === documentId && fact.factKey === 'agency')!;
+      expect(facts.find((fact) => fact.documentId === late && fact.factKey === 'agency'))
+        .toMatchObject({ supersedeStatus: 'superseded', supersededByRowId: navy.id, changedByAmendment: 2, amendmentNo: 0 });
+      // No amendment wrote the NAICS: the late fact is added like any other.
+      expect(facts.find((fact) => fact.documentId === late && fact.factKey === 'naics')).toMatchObject({ supersedeStatus: null });
+      const dates = await datesOf(tenant);
+      const newDue = dates.find((row) => row.documentId === documentId && row.dateKey === 'proposal_due')!;
+      expect(dates.find((row) => row.documentId === late && row.dateKey === 'proposal_due'))
+        .toMatchObject({ supersedeStatus: 'superseded', supersededByRowId: newDue.id, changedByAmendment: 2 });
+      expect(dates.find((row) => row.documentId === late && row.dateKey === 'other')).toMatchObject({ supersedeStatus: null });
+      expect(active(dates).filter((row) => row.dateKey === 'proposal_due').map((row) => row.id)).toEqual([newDue.id]);
     });
 
     it('gives the same facts and dates in force whichever amendment finishes first', async () => {
