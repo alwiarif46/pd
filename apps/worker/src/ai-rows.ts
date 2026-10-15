@@ -1,4 +1,4 @@
-import { and, eq, isNull, or, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { schema, withOrg } from '@pd/core';
 import { shareOrg } from './key-check.js';
 import type { JobPayload } from './redis.js';
@@ -6,20 +6,6 @@ import type { JobPayload } from './redis.js';
 type Db = Parameters<Parameters<typeof withOrg>[1]>[0];
 type FactRow = typeof schema.bidFacts.$inferInsert;
 type DateRow = typeof schema.scheduleActivities.$inferInsert;
-
-/**
- * An AI row nobody has touched: not edited (no row_history entry), not superseded, withdrawn or
- * changed by an amendment. Only these are replaced when a document's step runs again.
- */
-function untouched(table: typeof schema.bidFacts | typeof schema.scheduleActivities, name: 'bid_facts' | 'schedule_activities') {
-  return and(
-    eq(table.origin, 'ai'),
-    or(isNull(table.supersedeStatus), eq(table.supersedeStatus, 'active')),
-    isNull(table.changedByAmendment),
-    isNull(table.supersededByRowId),
-    sql`not exists (select 1 from row_history h where h.row_table = ${name} and h.row_id = ${table.id})`,
-  );
-}
 
 /**
  * Locks the document (after the organization key share the inserts need, credits.ts lock order)
@@ -53,18 +39,18 @@ const dateKey = (row: { sourcePage?: number | null; sourceQuote?: string | null 
 
 /**
  * Writes the overview step's bid facts for a document so a rerun (a retry, a kick of a held file)
- * does not add them twice: the document's untouched AI facts (not confirmed, see untouched) are
- * replaced; a fact a user confirmed, edited, or an amendment changed stays, and a new fact with
- * the same field and quote as a kept one is not added again. User rows are never touched.
+ * does not add them twice. Insert-only: a fact whose field and quote the document already has is
+ * not added again, and no existing row is ever deleted or changed, since users edit, confirm and
+ * lock these rows and not every edit path records row history. Under the document lock, so two
+ * runs of one document write one after the other.
  */
-export async function replaceDocumentFacts(payload: JobPayload, facts: FactRow[]): Promise<void> {
+export async function writeDocumentFacts(payload: JobPayload, facts: FactRow[]): Promise<void> {
   await withOrg(payload.orgId, async (db) => {
     if (!await lockLiveDocument(db, payload)) {
       return;
     }
-    const mine = and(eq(schema.bidFacts.documentId, payload.documentId), eq(schema.bidFacts.orgId, payload.orgId));
-    await db.delete(schema.bidFacts).where(and(mine, eq(schema.bidFacts.confirmed, false), untouched(schema.bidFacts, 'bid_facts')));
-    const kept = await db.select({ field: schema.bidFacts.field, sourceQuote: schema.bidFacts.sourceQuote }).from(schema.bidFacts).where(mine);
+    const kept = await db.select({ field: schema.bidFacts.field, sourceQuote: schema.bidFacts.sourceQuote }).from(schema.bidFacts)
+      .where(and(eq(schema.bidFacts.documentId, payload.documentId), eq(schema.bidFacts.orgId, payload.orgId)));
     const rows = fresh(facts, new Set(kept.map(factKey)), factKey);
     if (rows.length > 0) {
       await db.insert(schema.bidFacts).values(rows);
@@ -72,16 +58,15 @@ export async function replaceDocumentFacts(payload: JobPayload, facts: FactRow[]
   });
 }
 
-/** The dates step's schedule rows for a document, replaced the same way (key: page and quote). */
-export async function replaceDocumentDates(payload: JobPayload, dates: DateRow[]): Promise<void> {
+/** The dates step's schedule rows for a document, written the same way (key: page and quote). */
+export async function writeDocumentDates(payload: JobPayload, dates: DateRow[]): Promise<void> {
   await withOrg(payload.orgId, async (db) => {
     if (!await lockLiveDocument(db, payload)) {
       return;
     }
-    const mine = and(eq(schema.scheduleActivities.documentId, payload.documentId), eq(schema.scheduleActivities.orgId, payload.orgId));
-    await db.delete(schema.scheduleActivities).where(and(mine, untouched(schema.scheduleActivities, 'schedule_activities')));
     const kept = await db.select({ sourcePage: schema.scheduleActivities.sourcePage, sourceQuote: schema.scheduleActivities.sourceQuote })
-      .from(schema.scheduleActivities).where(mine);
+      .from(schema.scheduleActivities)
+      .where(and(eq(schema.scheduleActivities.documentId, payload.documentId), eq(schema.scheduleActivities.orgId, payload.orgId)));
     const rows = fresh(dates, new Set(kept.map(dateKey)), dateKey);
     if (rows.length > 0) {
       await db.insert(schema.scheduleActivities).values(rows);

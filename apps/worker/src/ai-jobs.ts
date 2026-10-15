@@ -13,7 +13,7 @@ import { schema, withOrg } from '@pd/core';
 import { checkCredit, heldUnlessCredited } from './credit-gate.js';
 import { shareOrg } from './key-check.js';
 import { kickAmendments, kickHeldDocuments } from './kick.js';
-import { replaceDocumentDates, replaceDocumentFacts } from './ai-rows.js';
+import { writeDocumentDates, writeDocumentFacts } from './ai-rows.js';
 import { allocateReqIds } from './req-ids.js';
 import type { JobPayload } from './redis.js';
 
@@ -319,8 +319,8 @@ export async function processOverview(payload: JobPayload): Promise<void> {
       origin: 'ai' as const,
     }];
   });
-  // A rerun (retry, or a kick of a held file) replaces this document's untouched AI facts.
-  await replaceDocumentFacts(payload, facts);
+  // A rerun (retry, or a kick of a held file) adds only facts the document does not have yet.
+  await writeDocumentFacts(payload, facts);
   await recordRun({
     orgId: payload.orgId,
     bidId: payload.bidId,
@@ -339,8 +339,8 @@ export async function processOverview(payload: JobPayload): Promise<void> {
 export async function processDates(payload: JobPayload): Promise<void> {
   const pages = await loadPages(payload.orgId, payload.documentId);
   const hits = preScan(pages).dates;
-  // A rerun replaces this document's untouched AI dates, so it never adds them twice.
-  await replaceDocumentDates(payload, hits.map((hit) => ({
+  // A rerun adds only dates the document does not have yet, and never changes existing rows.
+  await writeDocumentDates(payload, hits.map((hit) => ({
     orgId: payload.orgId,
     bidId: payload.bidId,
     label: 'Date from solicitation',
