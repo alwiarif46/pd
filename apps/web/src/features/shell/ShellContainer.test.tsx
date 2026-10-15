@@ -64,7 +64,7 @@ describe('ShellContainer', () => {
     expect(screen.queryByRole('navigation', { name: 'Account and bid' })).toBeNull();
     expect(screen.queryByRole('combobox')).toBeNull();
 
-    await userEvent.click(screen.getByRole('button', { name: /Upgrade plan/ }));
+    await userEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Upgrade plan' }));
     expect(await screen.findByText('This tab is on a paid plan.')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Choose Starter' }));
     expect(api.startCheckout).toHaveBeenCalledWith('starter');
@@ -120,13 +120,12 @@ describe('ShellContainer', () => {
   });
 
   it.each([
-    ['processing', [jobDto({ status: 'running', type: 'scan' })], [docDto()]],
-    ['waiting', [], [docDto({ markingStatus: 'blocked', markingFound: ['CUI'], markingPage: 2 })]],
-  ] as const)('shows the %s signal on the Documents tab with its label', async (signal, jobs, docs) => {
+    ['processing', 'Processing', [jobDto({ status: 'running', type: 'scan' })], [docDto()]],
+    ['waiting', 'Needs you', [], [docDto({ markingStatus: 'blocked', markingFound: ['CUI'], markingPage: 2 })]],
+  ] as const)('shows the %s signal on the Documents tab with its label', async (_signal, label, jobs, docs) => {
     const api = mockApi({ listJobs: vi.fn(async () => [...jobs]), listDocuments: vi.fn(async () => [...docs]) });
     render(<ShellContainer route={{ kind: 'tab', bidId: 'bid-1', tab: 'documents', rowId: null }} api={api} />);
-    const documents = await screen.findByRole('button', { name: 'Documents' });
-    await waitFor(() => expect(within(documents).getByLabelText(signal)).toBeTruthy());
+    expect(await screen.findByRole('button', { name: `Documents, ${label}` })).toBeTruthy();
   });
 
   it('writes the due date and the credit reset as the right calendar days in Los Angeles', async () => {
@@ -209,7 +208,7 @@ describe('ShellContainer', () => {
     const api = mockApi({ startCheckout: vi.fn(() => new Promise<{ url: string }>((resolve) => (finish = resolve))) });
     const leaveTo = vi.fn();
     render(<ShellContainer route={outline} api={api} leaveTo={leaveTo} />);
-    await userEvent.click(await screen.findByRole('button', { name: /Upgrade plan/ }));
+    await userEvent.click(within(await screen.findByRole('banner')).getByRole('button', { name: 'Upgrade plan' }));
     const choose = await screen.findByRole('button', { name: 'Choose Growth' });
     await userEvent.click(choose);
     await userEvent.click(choose);
@@ -222,7 +221,7 @@ describe('ShellContainer', () => {
     const api = mockApi({ startCheckout: vi.fn(async () => ({ url: 'https://evil.example/pay' })) });
     const leaveTo = vi.fn();
     render(<ShellContainer route={outline} api={api} leaveTo={leaveTo} />);
-    await userEvent.click(await screen.findByRole('button', { name: /Upgrade plan/ }));
+    await userEvent.click(within(await screen.findByRole('banner')).getByRole('button', { name: 'Upgrade plan' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Choose Starter' }));
     await waitFor(() => expect(screen.queryByText('This tab is on a paid plan.')).toBeNull());
     expect(leaveTo).not.toHaveBeenCalled();
