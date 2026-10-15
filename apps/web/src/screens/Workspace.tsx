@@ -400,8 +400,8 @@ function Schedule({ bid, data, onOpen, onReload, onError }: Panel) {
     <div className="stack">
       <div className="row no-print">
         <button className="btn secondary" type="button" onClick={() => setMode(mode === 'calendar' ? 'list' : 'calendar')}>{mode === 'calendar' ? 'Milestone list' : 'Calendar'}</button>
-        <button className="btn secondary" type="button" onClick={() => api(`/api/bids/${bid.id}/tabs/schedule/seed`, { method: 'POST', body: JSON.stringify({ template: 'standard' }) }).then(onReload)}>Standard template</button>
-        <button className="btn secondary" type="button" onClick={() => api(`/api/bids/${bid.id}/tabs/schedule/seed`, { method: 'POST', body: JSON.stringify({ template: 'color-reviews' }) }).then(onReload)}>Color-team template</button>
+        <button className="btn secondary" type="button" onClick={() => api(`/api/bids/${bid.id}/tabs/schedule/seed`, { method: 'POST', body: JSON.stringify({ template: 'standard' }) }).then(onReload).catch((err: Error) => onError(err.message))}>Standard template</button>
+        <button className="btn secondary" type="button" onClick={() => api(`/api/bids/${bid.id}/tabs/schedule/seed`, { method: 'POST', body: JSON.stringify({ template: 'color-reviews' }) }).then(onReload).catch((err: Error) => onError(err.message))}>Color-team template</button>
         <button className="btn secondary" type="button" onClick={() => downloadXlsx('schedule.xlsx', sheet)}>XLSX</button>
         <button className="btn secondary" type="button" onClick={() => downloadCsv('schedule.csv', sheet)}>CSV</button>
         <button className="btn secondary" type="button" onClick={() => downloadIcs('schedule.ics', activities.filter((item) => item.startDate).map((item) => ({ title: item.label, start: dayKey(item.startDate), end: dayKey(item.endDate || item.startDate) })))}>ICS</button>

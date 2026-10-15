@@ -71,6 +71,13 @@
       "when": 1792050879891,
       "tag": "0009_amendment_numbering",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792094275532,
+      "tag": "0010_schedule_kind",
+      "breakpoints": true
     }
   ]
 }

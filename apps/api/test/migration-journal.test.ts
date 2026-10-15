@@ -2,7 +2,8 @@
  * The migration chain is consistent: the journal is strictly increasing by idx and by when
  * (the migrator skips a migration whose `when` is not after the last one applied), every tag
  * names a .sql file on disk and every .sql file is in the journal, and each snapshot's prevId is
- * the previous snapshot's id (drizzle-kit refuses colliding snapshots).
+ * the previous snapshot's id (drizzle-kit refuses colliding snapshots). A migration that lifts
+ * FORCE ROW LEVEL SECURITY for a backfill or sets lock_timeout puts it back later in the file.
  */
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -44,6 +45,24 @@ describe('migration journal and snapshots', () => {
     expect(new Set(snapshots.map((snapshot) => snapshot.id)).size).toBe(snapshots.length);
     for (let index = 1; index < snapshots.length; index += 1) {
       expect(snapshots[index].prevId, entries[index].tag).toBe(snapshots[index - 1].id);
+    }
+  });
+  it('puts back FORCE ROW LEVEL SECURITY and lock_timeout wherever a migration lifts them', async () => {
+    const files = (await readdir(folder)).filter((file) => file.endsWith('.sql')).sort();
+    for (const file of files) {
+      const statements = (await readFile(join(folder, file), 'utf-8'))
+        .split('--> statement-breakpoint')
+        .map((statement) => statement.replace(/^\s*--.*$/gm, '').trim());
+      statements.forEach((statement, index) => {
+        const lifted = /^ALTER TABLE "(\w+)" NO FORCE ROW LEVEL SECURITY;?$/.exec(statement);
+        if (lifted) {
+          const restore = `ALTER TABLE "${lifted[1]}" FORCE ROW LEVEL SECURITY`;
+          expect(statements.slice(index + 1).some((later) => later.startsWith(restore)), `${file}: ${lifted[1]}`).toBe(true);
+        }
+        if (/^SET LOCAL lock_timeout = /.test(statement)) {
+          expect(statements.slice(index + 1).some((later) => later.startsWith('SET LOCAL lock_timeout TO DEFAULT')), file).toBe(true);
+        }
+      });
     }
   });
 });

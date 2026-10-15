@@ -1,5 +1,6 @@
 import { type AnyPgColumn, index, pgTable, uniqueIndex, uuid, text, timestamp, boolean, integer, jsonb, decimal } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
+import type { ActivityKind, ActivityOrigin, ReviewColor } from '../schedule';
 
 /** documents.key_status values (migration 0008). */
 export type KeyStatus = 'match' | 'mismatch' | 'not_found' | 'bid_key_pending' | 'overridden';
@@ -160,6 +161,9 @@ export const bids = pgTable('bids', {
   creditStatus: text('credit_status').$type<'reserved' | 'consumed' | 'released'>(),
   keyOverridesUsed: integer('key_overrides_used').notNull().default(0),
   retentionExtendedUntil: timestamp('retention_extended_until'),
+  // The schedule's "Workdays only" setting (migration 0010): shift, scale, and templates skip
+  // weekends and US federal holidays when true (packages/core schedule.ts).
+  scheduleWorkdaysOnly: boolean('schedule_workdays_only').notNull().default(true),
 });
 
 export const documents = pgTable('documents', {
@@ -467,6 +471,13 @@ export const scheduleActivities = pgTable('schedule_activities', {
   status: text('status'),
   locked: boolean('locked').notNull().default(false),
   ...sourceColumns,
+  // CHECK schedule_activities_origin_check (migration 0010): 'template' rows came from a schedule template.
+  origin: text('origin').$type<ActivityOrigin>(),
+  // CHECK schedule_activities_kind_check (migration 0010): the ACTIVITY_KINDS list.
+  kind: text('kind').notNull().default('custom').$type<ActivityKind>(),
+  // CHECK schedule_activities_review_color_check (REVIEW_COLORS) and
+  // schedule_activities_review_color_kind_check (only a 'review' has a color), migration 0010.
+  reviewColor: text('review_color').$type<ReviewColor>(),
 });
 
 export const complianceRows = pgTable('compliance_rows', {

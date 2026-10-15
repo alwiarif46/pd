@@ -30,6 +30,7 @@ export function bidDto(over: Partial<BidDto> = {}): BidDto {
     timeZone: 'America/New_York',
     countMode: null,
     oralsEnabled: false,
+    scheduleWorkdaysOnly: true,
     creditId: 'credit-1',
     creditStatus: 'reserved',
     keyOverridesUsed: 0,
