@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "lint": "eslint . --max-warnings 0",
+    "v0:integrate": "node scripts/integrate-v0.mjs",
+    "v0:check": "node scripts/integrate-v0.mjs --check",
     "clean": "rm -rf dist"
   },
   "dependencies": {
