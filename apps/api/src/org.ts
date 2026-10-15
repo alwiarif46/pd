@@ -1,12 +1,27 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { isUuid, PLAN_LIMITS, type Plan, schema, userMemberships, withOrg } from '@pd/core';
+import { isUuid, mbCapForPlan, PLAN_LIMITS, type Plan, schema, userMemberships, withOrg } from '@pd/core';
+import { billingAvailable, registerBilling } from './billing.js';
 import { requireAuth, requireUser } from './context.js';
 import { BODY_REQUIRED, readBody, text } from './body.js';
 import { currentCreditPeriod, expireAbandonedUploads, removeChunkDirs } from './credits.js';
 import { inOrg } from './scope.js';
 import { hashToken, isWorkEmail, newToken, sendOutOfBand } from './security.js';
+
+/** The organization fields GET /api/org returns (no Stripe customer or subscription id). */
+const PUBLIC_ORG_COLUMNS = {
+  id: schema.organizations.id,
+  createdAt: schema.organizations.createdAt,
+  updatedAt: schema.organizations.updatedAt,
+  name: schema.organizations.name,
+  emailDomain: schema.organizations.emailDomain,
+  plan: schema.organizations.plan,
+  planStatus: schema.organizations.planStatus,
+  cycleStart: schema.organizations.cycleStart,
+  cycleEnd: schema.organizations.cycleEnd,
+  freeFirstMonthEnds: schema.organizations.freeFirstMonthEnds,
+};
 
 function seatLimit(plan: Plan): number {
   return PLAN_LIMITS[plan].maxUsers;
@@ -43,7 +58,7 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
         id: orgId,
         name,
         plan: 'free',
-        planStatus: 'active',
+        planStatus: 'free',
       }).returning();
       await db.insert(schema.memberships).values({
         orgId,
@@ -62,10 +77,19 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
       const now = new Date();
       // Abandoned uploads give their reserved credits back before the counts are shown.
       abandoned.push(...await expireAbandonedUploads(db, orgId, now));
-      const [org] = await db.select().from(schema.organizations).where(eq(schema.organizations.id, orgId));
+      // Stripe ids stay on the server: members see this payload too, and the web never needs them.
+      const [org] = await db.select(PUBLIC_ORG_COLUMNS).from(schema.organizations).where(eq(schema.organizations.id, orgId));
       // The period that holds now, or null before the first credit of this period is reserved.
       const credits = await currentCreditPeriod(db, orgId, now);
-      return { org: org ?? null, credits, role: auth.role };
+      const plan = (org?.plan ?? 'free') as Plan;
+      return {
+        org: org ?? null,
+        credits,
+        role: auth.role,
+        seatLimit: seatLimit(plan),
+        mbCap: mbCapForPlan(plan),
+        billingAvailable: billingAvailable(),
+      };
     });
     await removeChunkDirs(process.env.DATA_DIR || '/data/files', orgId, abandoned);
     return result;
@@ -100,8 +124,21 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
 
   app.get('/api/org/members', { preHandler: requireAuth }, async (request) => {
     const auth = request.auth!;
-    return withOrg(auth.orgId!, async (db) => {
-      return db.select().from(schema.memberships).where(eq(schema.memberships.orgId, auth.orgId!));
+    const orgId = auth.orgId!;
+    return withOrg(orgId, async (db) => {
+      // `users` has no row-level security; the join starts from this organization's memberships.
+      const rows = await db.select({
+        orgId: schema.memberships.orgId,
+        userId: schema.memberships.userId,
+        name: schema.users.name,
+        email: schema.users.email,
+        role: schema.memberships.role,
+        joinedAt: schema.memberships.createdAt,
+      }).from(schema.memberships)
+        .innerJoin(schema.users, eq(schema.users.id, schema.memberships.userId))
+        .where(eq(schema.memberships.orgId, orgId))
+        .orderBy(schema.memberships.createdAt, schema.memberships.id);
+      return rows.map((row) => ({ ...row, isYou: row.userId === auth.userId }));
     });
   });
 
@@ -167,4 +204,6 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
       return { ok: true };
     });
   });
+
+  await registerBilling(app);
 }
