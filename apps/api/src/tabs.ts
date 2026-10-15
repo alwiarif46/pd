@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import { isUuid, schema } from '@pd/core';
 import { registerCheckThese } from './check-these.js';
 import { requireAuth } from './context.js';
+import { apiError, type ErrorCode } from './errors.js';
+import { insertActivity, patchActivity, registerSchedule, scheduleTab, seedSchedule } from './schedule.js';
 import { type Db, findBid, findDocument, inOrg } from './scope.js';
 
 const TABS = [
@@ -78,8 +80,16 @@ const LESSONS = [
   'What feedback did the evaluator give?',
 ];
 
-/** What insert, patch, and move decided: a value, or the error the route answers with. */
-export type Result<T> = { ok: true; value: T } | { ok: false; code: 400 | 404 | 409; error: string };
+/**
+ * What insert, patch, and move decided: a value, or the error the route answers with
+ * (`{ error }`, plus `code` when `errorCode` is set; errors.ts).
+ */
+export type Result<T> = { ok: true; value: T } | { ok: false; code: 400 | 404 | 409; error: string; errorCode?: ErrorCode };
+
+/** The body a refused Result answers with. */
+function errorBody(result: { error: string; errorCode?: ErrorCode }) {
+  return result.errorCode ? apiError(result.errorCode, result.error) : { error: result.error };
+}
 
 function ok<T>(value: T): Result<T> {
   return { ok: true, value };
@@ -414,17 +424,14 @@ async function present(db: Db, orgId: string, table: RowTable, row: object): Pro
   }
 }
 
-// 'resumes' and 'reviews' are loaded in the tab route itself, through their parent rows.
-async function loadTab(db: Db, orgId: string, bidId: string, tab: Exclude<TabName, 'resumes' | 'reviews'>) {
+// 'resumes' and 'reviews' are loaded in the tab route itself, through their parent rows, and
+// 'schedule' there too, with the bid's setting (schedule.ts).
+async function loadTab(db: Db, orgId: string, bidId: string, tab: Exclude<TabName, 'resumes' | 'reviews' | 'schedule'>) {
   switch (tab) {
     case 'overview':
       return {
         facts: await db.select().from(schema.bidFacts).where(eq(schema.bidFacts.bidId, bidId)),
         kickoff: await db.select().from(schema.kickoffItems).where(eq(schema.kickoffItems.bidId, bidId)),
-      };
-    case 'schedule':
-      return {
-        activities: await db.select().from(schema.scheduleActivities).where(eq(schema.scheduleActivities.bidId, bidId)),
       };
     case 'compliance':
       return {
@@ -453,6 +460,7 @@ async function loadTab(db: Db, orgId: string, bidId: string, tab: Exclude<TabNam
 
 export async function registerTabs(app: FastifyInstance): Promise<void> {
   await registerCheckThese(app);
+  await registerSchedule(app);
 
   app.get('/api/bids/:id/tabs/:tab', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
@@ -464,6 +472,9 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
       const bid = await findBid(db, orgId, id);
       if (!bid) {
         return respond(404, { error: 'Bid not found' });
+      }
+      if (tab === 'schedule') {
+        return scheduleTab(db, orgId, bid);
       }
       if (tab === 'resumes') {
         const requirements = await db.select().from(schema.personnelRequirements).where(eq(schema.personnelRequirements.bidId, id));
@@ -542,7 +553,7 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
       }
       const result = await patchRow(db, orgId, userId, id, table, rowId, fields);
       if (!result.ok) {
-        return respond(result.code, { error: result.error });
+        return respond(result.code, errorBody(result));
       }
       return { ok: true };
     });
@@ -584,7 +595,7 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
       }
       const created = await insertRow(db, orgId, userId, id, tab, body);
       if (!created.ok) {
-        return respond(created.code, { error: created.error });
+        return respond(created.code, errorBody(created));
       }
       return respond(201, await present(db, orgId, created.value.table, created.value.row));
     });
@@ -669,67 +680,13 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
           })));
         }
       } else if (tab === 'schedule') {
-        const template = (request.body as { template?: string }).template;
-        const labels = template === 'color-reviews'
-          ? ['Pink team', 'Red team', 'Gold team', 'Production']
-          : ['Kickoff', 'Storyboard', 'Draft', 'Pink team', 'Red team', 'Production', 'Submit'];
-        const start = bid.startDate ?? new Date();
-        await db.insert(schema.scheduleActivities).values(labels.map((label, index) => ({
-          orgId,
-          bidId: id,
-          label,
-          startDate: new Date(start.getTime() + index * 86400000),
-          endDate: new Date(start.getTime() + index * 86400000),
-          origin: 'user' as const,
-        })));
+        const seeded = await seedSchedule(db, orgId, bid, (request.body ?? {}) as Record<string, unknown>);
+        if (!seeded.ok) {
+          return respond(seeded.code, errorBody(seeded));
+        }
+        return seeded.value;
       }
       return { ok: true };
-    });
-  });
-
-  app.post('/api/bids/:id/schedule/adjust', { preHandler: requireAuth }, async (request, reply) => {
-    const orgId = request.auth!.orgId!;
-    const id = (request.params as { id: string }).id;
-    const body = request.body as { mode?: string; previousDue?: string; nextDue?: string };
-    if (body.mode !== 'shift' && body.mode !== 'scale' && body.mode !== 'keep') {
-      return reply.code(400).send({ error: 'Choose shift, scale, or keep' });
-    }
-    return inOrg(reply, orgId, async (db, respond) => {
-      const bid = await findBid(db, orgId, id);
-      if (!bid) {
-        return respond(404, { error: 'Bid not found' });
-      }
-      if (body.mode === 'keep' || !body.previousDue || !body.nextDue) {
-        return { ok: true, moved: 0 };
-      }
-      const previous = new Date(body.previousDue).getTime();
-      const next = new Date(body.nextDue).getTime();
-      const delta = next - previous;
-      const anchor = (bid.startDate ?? new Date(previous)).getTime();
-      const oldSpan = previous - anchor;
-      const activities = await db.select().from(schema.scheduleActivities).where(eq(schema.scheduleActivities.bidId, id));
-      let moved = 0;
-      for (const activity of activities) {
-        if (activity.locked || !activity.startDate) {
-          continue;
-        }
-        const startMs = activity.startDate.getTime();
-        const endMs = activity.endDate?.getTime() ?? startMs;
-        let nextStart = startMs + delta;
-        let nextEnd = endMs + delta;
-        if (body.mode === 'scale' && oldSpan !== 0) {
-          const ratio = (next - anchor) / oldSpan;
-          nextStart = anchor + (startMs - anchor) * ratio;
-          nextEnd = anchor + (endMs - anchor) * ratio;
-        }
-        await db.update(schema.scheduleActivities).set({
-          startDate: new Date(nextStart),
-          endDate: new Date(nextEnd),
-          updatedAt: new Date(),
-        }).where(and(eq(schema.scheduleActivities.id, activity.id), eq(schema.scheduleActivities.orgId, orgId)));
-        moved += 1;
-      }
-      return { ok: true, moved };
     });
   });
 
@@ -1073,16 +1030,8 @@ async function insertRow(
       }
       return fail(400, MISSING);
     case 'schedule': {
-      if (!text(body.label)) return fail(400, MISSING);
-      const [activity] = await db.insert(schema.scheduleActivities).values({
-        orgId,
-        bidId,
-        label: text(body.label)!,
-        startDate: when(body.startDate),
-        endDate: when(body.endDate) ?? when(body.startDate),
-        origin: 'user',
-      }).returning();
-      return created('schedule_activities', activity);
+      const activity = await insertActivity(db, orgId, bidId, body);
+      return activity.ok ? created('schedule_activities', activity.value) : activity;
     }
     case 'compliance': {
       if (!text(body.requirementText)) return fail(400, MISSING);
@@ -1316,19 +1265,7 @@ async function patchRow(
       }).where(and(eq(schema.kickoffItems.id, rowId), eq(schema.kickoffItems.orgId, orgId)));
       return ok(true);
     case 'schedule_activities':
-      if (record.locked === true && fields.startDate) {
-        return ok(true);
-      }
-      await db.update(schema.scheduleActivities).set({
-        label: fields.label === undefined ? String(record.label) : (text(fields.label) ?? String(record.label)),
-        startDate: fields.startDate === undefined ? (record.startDate as Date | null) : when(fields.startDate),
-        endDate: fields.endDate === undefined ? (record.endDate as Date | null) : when(fields.endDate),
-        locked: fields.locked === undefined ? Boolean(record.locked) : flag(fields.locked),
-        owner: fields.owner === undefined ? text(record.owner) : text(fields.owner),
-        status: fields.status === undefined ? text(record.status) : text(fields.status),
-        updatedAt: new Date(),
-      }).where(and(eq(schema.scheduleActivities.id, rowId), eq(schema.scheduleActivities.orgId, orgId)));
-      return ok(true);
+      return patchActivity(db, orgId, current as typeof schema.scheduleActivities.$inferSelect, fields);
     case 'compliance_rows': {
       const status = input(ROW_STATUS, fields.status);
       if (!status.ok) return status;

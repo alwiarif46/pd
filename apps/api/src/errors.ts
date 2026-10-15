@@ -24,6 +24,8 @@ export const ERROR_MESSAGES = {
   link_already_decided: 'This amendment change was already decided. Decisions are final.',
   row_already_closed: 'The row this change replaces or withdraws is already superseded, withdrawn or removed.',
   new_row_missing: 'The replacing row was removed, so this change cannot be confirmed. Reject it instead.',
+  activity_locked: 'This activity is locked. Unlock it before you move its dates.',
+  due_date_required: 'Set the due date in Bid settings first. Templates count back from it.',
 } as const;
 
 export type ErrorCode = keyof typeof ERROR_MESSAGES;
