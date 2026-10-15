@@ -43,6 +43,13 @@
       "when": 1792015835214,
       "tag": "0005_documents_and_bids",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792040772315,
+      "tag": "0006_tab_rows",
+      "breakpoints": true
     }
   ]
 }

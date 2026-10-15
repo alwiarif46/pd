@@ -20,6 +20,7 @@ const TENANT_TABLES = [
   'bid_facts', 'kickoff_items', 'schedule_activities', 'compliance_rows', 'outline_items',
   'personnel_requirements', 'candidates', 'resume_matches', 'reviews', 'review_assignments',
   'review_findings', 'production_items', 'orals_items', 'lessons', 'row_history',
+  'check_these',
 ];
 
 describe.skipIf(Boolean(unavailable))('row-level security catalog', () => {

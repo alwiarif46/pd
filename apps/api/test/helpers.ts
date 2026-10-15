@@ -78,8 +78,8 @@ export async function seedBidRows(db: Db, orgId: string, bidId: string, label: s
   const [review] = await db.insert(schema.reviews).values({ ...base, type: 'red' }).returning();
   const [assignment] = await db.insert(schema.reviewAssignments).values({ orgId, reviewId: review.id, reviewerName: 'Sam' }).returning();
   const [finding] = await db.insert(schema.reviewFindings).values({ orgId, reviewId: review.id, kind: 'strength', text: 'Clear' }).returning();
-  const [production] = await db.insert(schema.productionItems).values({ ...base, category: 'Fonts', rule: '12pt' }).returning();
-  const [oral] = await db.insert(schema.oralsItems).values({ ...base, category: 'Rules', item: '30 minutes' }).returning();
+  const [production] = await db.insert(schema.productionItems).values({ ...base, category: 'format', rule: '12pt' }).returning();
+  const [oral] = await db.insert(schema.oralsItems).values({ ...base, category: 'rules', item: '30 minutes' }).returning();
   const [lesson] = await db.insert(schema.lessons).values({ ...base, question: 'What worked?', answer: '' }).returning();
   return {
     rows: {
