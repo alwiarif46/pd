@@ -281,8 +281,14 @@ describe.skipIf(Boolean(unavailable))('amendment run', () => {
     it('reruns, retries and duplicate jobs write nothing more; two concurrent jobs write one row set', async () => {
       const { tenant } = await setup('aa-once');
       const documentId = await ready(tenant);
-      const [first, second] = await Promise.all([run(tenant, documentId), run(tenant, documentId)]);
-      expect([first, second].sort()).toEqual(['applied', 'stopped']);
+      // Two jobs both past the pre-check and the AI work, queued on the bid lock: exactly one writes.
+      const { waiting, results } = await raceInOrder(tenant.orgId, 'select id from bids where id = $1 for update', [tenant.bidId], [
+        () => run(tenant, documentId),
+        () => run(tenant, documentId),
+      ]);
+      expect(waiting).toBe(2);
+      expect(results.map((result) => fulfilled(result))).toEqual(['applied', 'stopped']);
+      expect(ai.calls.extract).toBe(2);
       const count = (await rowsOf(tenant)).length;
       const linkCount = (await linksOf(tenant, documentId)).length;
       const calls = ai.calls.extract;
@@ -349,6 +355,28 @@ describe.skipIf(Boolean(unavailable))('amendment run', () => {
       expect((await credit(tenant)).creditStatus).toBe('consumed');
       expect(kicked(documentId)).toHaveLength(1);
       expect(await run(tenant, documentId)).toBe('applied');
+    });
+
+    it('a released or missing credit fails the amendment visibly instead of leaving it processing', async () => {
+      for (const creditStatus of ['released', null] as const) {
+        const { tenant } = await setup(`aa-no-credit-${creditStatus ?? 'none'}`);
+        const documentId = await ready(tenant);
+        ai.calls.extract = 0;
+        await withOrg(tenant.orgId, (db) => db.update(schema.bids).set({ creditStatus }).where(eq(schema.bids.id, tenant.bidId)));
+        expect(await run(tenant, documentId)).toBe('stopped');
+        expect(ai.calls.extract).toBe(0);
+        expect((await amendmentOf(tenant, documentId)).status).toBe('failed');
+        const jobs = await withOrg(tenant.orgId, (db) => db.select().from(schema.jobs).where(and(
+          eq(schema.jobs.documentId, documentId), eq(schema.jobs.status, 'failed'),
+        )));
+        expect(jobs.map((job) => [job.type, job.error])).toEqual([
+          ['classify', 'The solicitation has no RFP credit, so the amendment cannot run. Process the solicitation again, then retry.'],
+        ]);
+        // Once the solicitation holds a consumed credit again, the retry runs it.
+        await withOrg(tenant.orgId, (db) => db.update(schema.bids).set({ creditStatus: 'consumed' }).where(eq(schema.bids.id, tenant.bidId)));
+        await classify.processClassify(payload(tenant, documentId));
+        expect(await run(tenant, documentId)).toBe('applied');
+      }
     });
 
     it('runs amendments in number order: Amd 3 waits for Amd 2, is kicked, and sees its rows', async () => {
@@ -578,6 +606,26 @@ describe.skipIf(Boolean(unavailable))('amendment run', () => {
           const rows = await rowsOf(tenant);
           expect(rows.filter((row) => row.documentId === documentId).map((row) => row.amendmentNo)).toEqual([7, 7]);
           expect(rows.find((row) => row.id === a)).toMatchObject({ changedByAmendment: 7 });
+        }
+      }
+    });
+
+    it('a row delete and the amendment write closing that row queue on the bid: no deadlock, the row closed at most once', async () => {
+      for (let round = 0; round < 3; round += 1) {
+        for (const deleteFirst of [true, false]) {
+          const { tenant, a } = await setup(`aa-race-rowdel-${round}`);
+          const documentId = await ready(tenant);
+          const remove = () => as(app, tenant.token)('DELETE', `/api/bids/${tenant.bidId}/rows/compliance_rows/${a}`);
+          const write = () => run(tenant, documentId);
+          const { waiting, results } = await raceInOrder(tenant.orgId, 'select id from bids where id = $1 for update', [tenant.bidId],
+            deleteFirst ? [remove, write] : [write, remove]);
+          expect(waiting).toBe(2);
+          expect((fulfilled(results[deleteFirst ? 0 : 1]) as Reply).statusCode).toBe(200);
+          expect(fulfilled(results[deleteFirst ? 1 : 0])).toBe('applied');
+          expect((await rowsOf(tenant)).some((row) => row.id === a)).toBe(false);
+          // The delete went first: the write dropped its link to the removed row.
+          const supersedes = (await linksOf(tenant, documentId)).filter((item) => item.action === 'supersede');
+          expect(supersedes).toHaveLength(deleteFirst ? 0 : 1);
         }
       }
     });
