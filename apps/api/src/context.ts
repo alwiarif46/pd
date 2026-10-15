@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { getDb, schema, userMemberships } from '@pd/core';
+import { getDb, schema, seatHolders, userMemberships, withOrg } from '@pd/core';
+import { apiError } from './errors.js';
 import { hashToken } from './security.js';
 
 export interface AuthContext {
@@ -49,6 +50,17 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply):
   if (reply.sent || !request.auth?.orgId || !request.auth.role) {
     if (!reply.sent) {
       reply.code(403).send({ error: 'No organization' });
+    }
+    return;
+  }
+  // Seats after a move to a smaller plan (06 s5): a member beyond the plan's seats keeps the
+  // membership but has no access until the owner removes members or upgrades. Owners always
+  // hold a seat, so they are never checked. One query, under row-level security.
+  if (request.auth.role === 'member') {
+    const { orgId, userId } = request.auth;
+    const seats = await withOrg(orgId, (db) => seatHolders(db, orgId));
+    if (seats.find((seat) => seat.userId === userId)?.seatLocked !== false) {
+      reply.code(403).send(apiError('seat_locked'));
     }
   }
 }

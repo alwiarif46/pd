@@ -75,6 +75,7 @@ export * from './credits';
 export * from './retention';
 export * from './amendment-numbers';
 export * from './job-ids';
+export * from './seats';
 
 // Database
 export * from './db';

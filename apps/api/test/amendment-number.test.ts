@@ -355,7 +355,8 @@ describe.skipIf(Boolean(unavailable))('amendment numbers', () => {
   describe('PATCH /api/documents/:id/amendment-no', () => {
     async function memberCall(tenant: Tenant) {
       const member = await createUser('an-member');
-      await withOrg(tenant.orgId, (db) => db.insert(schema.memberships).values({ orgId: tenant.orgId, userId: member.userId, role: 'member' }));
+      // Joined before createTenant's member, so it holds the free plan's second seat (06 s5).
+      await withOrg(tenant.orgId, (db) => db.insert(schema.memberships).values({ orgId: tenant.orgId, userId: member.userId, role: 'member', createdAt: new Date(0) }));
       return { call: as(app, member.token), userId: member.userId };
     }
 

@@ -54,10 +54,10 @@ describe('openBillingPortal', () => {
 });
 
 describe('org payloads', () => {
-  it('listMembers returns names, emails, and isYou as the API sends them', async () => {
+  it('listMembers returns names, emails, isYou, and seatLocked as the API sends them', async () => {
     const members: OrgMemberDto[] = [
-      { orgId: 'o1', userId: 'u1', name: 'Ann', email: 'ann@acme.com', role: 'owner', joinedAt: '2026-10-01T00:00:00.000Z', isYou: true },
-      { orgId: 'o1', userId: 'u2', name: null, email: 'bo@acme.com', role: 'member', joinedAt: '2026-10-02T00:00:00.000Z', isYou: false },
+      { orgId: 'o1', userId: 'u1', name: 'Ann', email: 'ann@acme.com', role: 'owner', joinedAt: '2026-10-01T00:00:00.000Z', isYou: true, seatLocked: false },
+      { orgId: 'o1', userId: 'u2', name: null, email: 'bo@acme.com', role: 'member', joinedAt: '2026-10-02T00:00:00.000Z', isYou: false, seatLocked: true },
     ];
     mockFetch(jsonResponse(200, members));
     await expect(listMembers()).resolves.toEqual(members);

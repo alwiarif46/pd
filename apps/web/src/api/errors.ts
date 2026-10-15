@@ -15,6 +15,17 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The code of a 403 the api sends to a member the plan has no seat for (06 s5): every org route
+ * refuses them until the owner removes members or upgrades.
+ */
+export const SEAT_LOCKED = 'seat_locked';
+
+/** True when the api refused the signed-in member for lack of a seat (`SEAT_LOCKED`). */
+export function isSeatLocked(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403 && error.code === SEAT_LOCKED;
+}
+
 /** True when the error comes from an aborted request (`AbortController.abort()`). */
 export function isAbortError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'AbortError';

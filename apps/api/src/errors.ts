@@ -23,6 +23,7 @@ export const ERROR_MESSAGES = {
   invalid_amendment_no: 'The amendment number must be a whole number from 1 to 999.',
   link_already_decided: 'This amendment change was already decided. Decisions are final.',
   row_already_closed: 'The row this change replaces or withdraws is already superseded, withdrawn or removed.',
+  seat_locked: 'All seats on the plan are taken, so you have no access for now. Ask the owner to upgrade or to free a seat.',
   new_row_missing: 'The replacing row was removed, so this change cannot be confirmed. Reject it instead.',
 } as const;
 

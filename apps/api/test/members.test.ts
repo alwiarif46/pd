@@ -14,6 +14,7 @@ interface MemberDto {
   role: 'owner' | 'member';
   joinedAt: string;
   isYou: boolean;
+  seatLocked: boolean;
 }
 
 describe.skipIf(Boolean(unavailable))('GET /api/org/members and GET /api/org', () => {
@@ -62,7 +63,7 @@ describe.skipIf(Boolean(unavailable))('GET /api/org/members and GET /api/org', (
     expect(members[1]).toMatchObject({ name: null, role: 'member', isYou: false });
     expect(members[1].email).toMatch(/^members-a-member-/);
     expect(Number.isNaN(Date.parse(members[0].joinedAt))).toBe(false);
-    expect(Object.keys(members[0]).sort()).toEqual(['email', 'isYou', 'joinedAt', 'name', 'orgId', 'role', 'userId']);
+    expect(Object.keys(members[0]).sort()).toEqual(['email', 'isYou', 'joinedAt', 'name', 'orgId', 'role', 'seatLocked', 'userId']);
     expect(members.every((member) => member.orgId === org.orgId)).toBe(true);
 
     const asMember = (await org.memberCall('GET', '/api/org/members')).json<MemberDto[]>();
