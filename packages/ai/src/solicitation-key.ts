@@ -154,8 +154,11 @@ export function readValue(rest: string): string | null {
 
 interface Located extends KeyCandidate { rank: number; line: number; column: number }
 
-/** The lines searched for labels: all of pages 1 and 2, and the first and last 3 lines of every page. */
-function searchedLines(page: PageText): number[] {
+/**
+ * The line indexes searched for labels: all of pages 1 and 2, and the first and last 3 lines of
+ * every page. Also used by extractAmendmentNumber.
+ */
+export function linesToSearch(page: PageText): number[] {
   const all = lines(page.text);
   if (page.pageNo <= 2 || all.length <= 6) {
     return all.map((_, index) => index);
@@ -167,7 +170,7 @@ function locate(pages: PageText[]): Located[] {
   const found: Located[] = [];
   for (const page of pages) {
     const all = lines(page.text);
-    for (const index of searchedLines(page)) {
+    for (const index of linesToSearch(page)) {
       const line = all[index];
       for (const rule of LABELS) {
         for (const label of line.matchAll(rule.pattern)) {

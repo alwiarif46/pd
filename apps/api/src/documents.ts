@@ -1,11 +1,13 @@
 import { createReadStream } from 'node:fs';
 import { rm, stat } from 'node:fs/promises';
-import { and, asc, eq, gt, gte, inArray, isNull, lt, lte, max, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, max, or, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import {
+  amendmentNoTaken,
   canRestore,
   type DocumentLiveStatus,
   documentLiveUntil,
+  isAmendmentNo,
   isUuid,
   keyOverridesLeft,
   keyOverridesPerBid,
@@ -131,12 +133,20 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
         documentId: schema.amendments.documentId,
         solicitationKeyFound: schema.amendments.solicitationKeyFound,
         keyOverride: schema.amendments.keyOverride,
+        status: schema.amendments.status,
       }).from(schema.amendments).where(and(eq(schema.amendments.bidId, bidId), eq(schema.amendments.orgId, orgId)));
       return documents.map(({ keyStatus, keyFound, ...document }) => ({
         ...document,
         ...keyCheckFor({ kind: document.kind, keyStatus }, amendments.filter((row) => row.documentId === document.id)),
         // The number the key check found on an amendment (5.11), shown beside a mismatch.
         keyFound: document.kind === 'amendment' ? keyFound : null,
+        // Amendments only (5.11): where the number came from ('sequence' is shown as assumed and
+        // editable), the number read from the file, and the amendment's status.
+        amendmentNoSource: document.kind === 'amendment' ? document.amendmentNoSource : null,
+        amendmentNoFound: document.kind === 'amendment' ? document.amendmentNoFound : null,
+        amendmentStatus: document.kind === 'amendment'
+          ? amendments.find((row) => row.documentId === document.id)?.status ?? null
+          : null,
         liveUntil: document.liveStatus === 'deleted' ? null : documentLiveUntil({
           plan,
           kind: document.kind,
@@ -339,6 +349,148 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
             bidId: document.bidId,
             documentId,
             jobId: job.id,
+            storagePath: document.storagePath ?? '',
+            kind: 'amendment',
+          }),
+        }],
+      };
+    });
+    await queueAfterCommit(orgId, outcome);
+    return reply.code(outcome.code).send(outcome.body);
+  });
+
+  /**
+   * Sets an amendment's number (04 s3.1; 09 s5.11), open to any member. The number must be 1 to
+   * 999 and not taken on the bid (packages/core amendment-numbers.ts). One transaction, lock order
+   * organization (key share) -> document -> bid -> amendment -> compliance rows (by id):
+   * documents.amendment_no (source 'user') and the amendments mirror; amendment_no of the rows this
+   * amendment added; changed_by_amendment of the rows its auto or confirmed links closed; a
+   * row_history entry for each row changed. An amendment waiting in needs_number goes to
+   * processing, and a classify job is queued after COMMIT (the key check then runs the step).
+   */
+  app.patch('/api/documents/:id/amendment-no', { preHandler: requireAuth }, async (request, reply) => {
+    const auth = request.auth!;
+    const orgId = auth.orgId!;
+    const documentId = (request.params as { id: string }).id;
+    const amendmentNo = (request.body as { amendmentNo?: unknown } | null)?.amendmentNo;
+    if (!isUuid(documentId)) {
+      return reply.code(404).send({ error: 'Document not found' });
+    }
+    if (!isAmendmentNo(amendmentNo)) {
+      return reply.code(400).send(apiError('invalid_amendment_no'));
+    }
+    const outcome = await withOrg(orgId, async (db): Promise<Outcome> => {
+      // The history and job rows inserted below take FOR KEY SHARE on the organization; take it
+      // before the bid (lock order organizations -> bids, credits.ts shareOrg).
+      await shareOrg(db, orgId);
+      const [document] = await db.select().from(schema.documents).where(and(
+        eq(schema.documents.id, documentId),
+        eq(schema.documents.orgId, orgId),
+      )).for('update');
+      if (!document) {
+        return { code: 404, body: { error: 'Document not found' } };
+      }
+      if (document.liveStatus === 'deleted') {
+        return { code: 409, body: apiError('document_deleted') };
+      }
+      if (document.kind !== 'amendment') {
+        return { code: 409, body: apiError('not_an_amendment', 'Only an amendment has an amendment number.') };
+      }
+      const [bid] = await lockBid(db, orgId, document.bidId);
+      if (!bid) {
+        return { code: 404, body: { error: 'Document not found' } };
+      }
+      if (await amendmentNoTaken(db, { orgId, bidId: bid.id, documentId }, amendmentNo)) {
+        return { code: 409, body: apiError('amendment_no_taken') };
+      }
+      const [amendment] = await db.select().from(schema.amendments).where(and(
+        eq(schema.amendments.documentId, documentId),
+        eq(schema.amendments.orgId, orgId),
+      )).for('update');
+      const now = new Date();
+      await db.update(schema.documents).set({ amendmentNo, amendmentNoSource: 'user', updatedAt: now })
+        .where(and(eq(schema.documents.id, documentId), eq(schema.documents.orgId, orgId)));
+
+      // Rows the amendment closed through an auto or confirmed supersede or withdraw link.
+      const closed = new Set(amendment ? (await db.select({ oldRowId: schema.amendmentLinks.oldRowId })
+        .from(schema.amendmentLinks).where(and(
+          eq(schema.amendmentLinks.amendmentId, amendment.id),
+          eq(schema.amendmentLinks.orgId, orgId),
+          eq(schema.amendmentLinks.rowTable, 'compliance_rows'),
+          inArray(schema.amendmentLinks.action, ['supersede', 'withdraw']),
+          inArray(schema.amendmentLinks.status, ['auto', 'confirmed']),
+          isNotNull(schema.amendmentLinks.oldRowId),
+        ))).flatMap((link) => (link.oldRowId ? [link.oldRowId] : [])) : []);
+      const rows = await db.select({
+        id: schema.complianceRows.id,
+        documentId: schema.complianceRows.documentId,
+        amendmentNo: schema.complianceRows.amendmentNo,
+        changedByAmendment: schema.complianceRows.changedByAmendment,
+        supersedeStatus: schema.complianceRows.supersedeStatus,
+      }).from(schema.complianceRows).where(and(
+        eq(schema.complianceRows.bidId, bid.id),
+        eq(schema.complianceRows.orgId, orgId),
+        closed.size > 0
+          ? or(eq(schema.complianceRows.documentId, documentId), inArray(schema.complianceRows.id, [...closed]))
+          : eq(schema.complianceRows.documentId, documentId),
+      )).orderBy(asc(schema.complianceRows.id)).for('update');
+      const history: (typeof schema.rowHistory.$inferInsert)[] = [];
+      for (const row of rows) {
+        const change: { amendmentNo?: number; changedByAmendment?: number } = {};
+        // Rows the amendment added carry its number; a row promoted by hand from its "check these"
+        // list keeps 0.
+        if (row.documentId === documentId && row.amendmentNo > 0 && row.amendmentNo !== amendmentNo) {
+          change.amendmentNo = amendmentNo;
+          history.push({
+            orgId, rowTable: 'compliance_rows', rowId: row.id, userId: auth.userId, field: 'amendment_no',
+            oldValue: String(row.amendmentNo), newValue: String(amendmentNo), changedAt: now,
+          });
+        }
+        if (closed.has(row.id) && row.supersedeStatus !== 'active' && row.changedByAmendment !== amendmentNo) {
+          change.changedByAmendment = amendmentNo;
+          history.push({
+            orgId, rowTable: 'compliance_rows', rowId: row.id, userId: auth.userId, field: 'changed_by_amendment',
+            oldValue: row.changedByAmendment === null ? null : String(row.changedByAmendment), newValue: String(amendmentNo), changedAt: now,
+          });
+        }
+        if (Object.keys(change).length > 0) {
+          await db.update(schema.complianceRows).set({ ...change, updatedAt: now })
+            .where(and(eq(schema.complianceRows.id, row.id), eq(schema.complianceRows.orgId, orgId)));
+        }
+      }
+      if (history.length > 0) {
+        await db.insert(schema.rowHistory).values(history);
+      }
+      const resumes = amendment?.status === 'needs_number';
+      if (amendment) {
+        await db.update(schema.amendments).set({
+          amendmentNo,
+          ...(resumes ? { status: 'processing' as const } : {}),
+          updatedAt: now,
+        }).where(and(eq(schema.amendments.id, amendment.id), eq(schema.amendments.orgId, orgId)));
+      }
+      if (!resumes) {
+        return { code: 200, body: { ok: true, amendmentNo } };
+      }
+      const [job] = await db.insert(schema.jobs).values({
+        orgId,
+        bidId: document.bidId,
+        documentId,
+        type: 'classify',
+        status: 'pending',
+      }).returning();
+      return {
+        code: 200,
+        body: { ok: true, amendmentNo },
+        queue: [{
+          jobId: job.id,
+          enqueue: () => enqueueClassify({
+            orgId,
+            bidId: document.bidId,
+            documentId,
+            jobId: job.id,
+            // Classify and the key check read the page text, never the stored file, so an archived
+            // amendment (no storage path) is checked the same way.
             storagePath: document.storagePath ?? '',
             kind: 'amendment',
           }),

@@ -1,10 +1,20 @@
 import { type AnyPgColumn, index, pgTable, uniqueIndex, uuid, text, timestamp, boolean, integer, jsonb, decimal } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 
 /** documents.key_status values (migration 0008). */
 export type KeyStatus = 'match' | 'mismatch' | 'not_found' | 'bid_key_pending' | 'overridden';
-/** amendments.status values (migration 0008). */
-export type AmendmentStatus = 'held' | 'processing' | 'needs_confirmation' | 'applied';
+/**
+ * amendments.status values (migrations 0008, 0009). 'needs_number': the key matched (or was
+ * overridden) but the amendment number could not be settled (the number in the file is taken by
+ * another amendment, or page 1 names two numbers); the user sets it. 'failed': the amendment step
+ * threw; a retry returns it to processing.
+ */
+export type AmendmentStatus = 'held' | 'processing' | 'needs_number' | 'failed' | 'needs_confirmation' | 'applied';
+/**
+ * documents.amendment_no_source values (migration 0009): 'user' typed at upload or set later,
+ * 'document' read from the file, 'sequence' the next number on the bid (shown as assumed).
+ */
+export type AmendmentNoSource = 'user' | 'document' | 'sequence';
 
 // Base columns for all tables
 const baseColumns = {
@@ -161,7 +171,15 @@ export const documents = pgTable('documents', {
   sizeBytes: integer('size_bytes').notNull(),
   sha256: text('sha256').notNull(),
   kind: text('kind').notNull().$type<'solicitation' | 'amendment' | 'attachment' | 'resume' | 'draft'>(),
+  // Amendments only: 1 to 999 (CHECK documents_amendment_no_check, migration 0009). Unique among
+  // the bid's amendments that are not deleted (documents_bid_amendment_no_uq). The index is a
+  // backstop: the worker and the api check the full rule, which also keeps the number of a
+  // deleted amendment that wrote rows (packages/core amendment-numbers.ts).
   amendmentNo: integer('amendment_no'),
+  // Where amendment_no came from (CHECK documents_amendment_no_source_check, migration 0009).
+  amendmentNoSource: text('amendment_no_source').$type<AmendmentNoSource>(),
+  // The amendment number read from the file, when one was found (it may differ from a typed one).
+  amendmentNoFound: integer('amendment_no_found'),
   storagePath: text('storage_path'),
   viewerPath: text('viewer_path'),
   extractMethod: text('extract_method').$type<'pdf_text' | 'ocr' | 'docx_pdf' | 'docx_text_fallback' | 'xlsx'>(),
@@ -183,7 +201,10 @@ export const documents = pgTable('documents', {
   keyStatus: text('key_status').$type<KeyStatus>(),
   // The number the check found: the matched text on a match, else the top labelled candidate.
   keyFound: text('key_found'),
-});
+}, (table) => ({
+  bidAmendmentNo: uniqueIndex('documents_bid_amendment_no_uq').on(table.bidId, table.amendmentNo)
+    .where(sql`kind = 'amendment' and amendment_no is not null and live_status is distinct from 'deleted'`),
+}));
 
 export const uploadSessions = pgTable('upload_sessions', {
   ...baseColumns,
@@ -201,6 +222,8 @@ export const uploadSessions = pgTable('upload_sessions', {
   expiresAt: timestamp('expires_at').notNull(),
   // The credit this session reserved for its bid, if any. Released when the session is abandoned.
   creditId: uuid('credit_id').references(() => rfpCredits.id),
+  // Amendments only: the number typed at upload, 1 to 999 (CHECK in migration 0009).
+  amendmentNo: integer('amendment_no'),
 });
 
 export const amendments = pgTable('amendments', {
@@ -208,7 +231,8 @@ export const amendments = pgTable('amendments', {
   orgId: uuid('org_id').notNull().references(() => organizations.id),
   bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
   documentId: uuid('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
-  amendmentNo: integer('amendment_no').notNull(),
+  // Mirrors documents.amendment_no: null until the number is settled (migration 0009).
+  amendmentNo: integer('amendment_no'),
   solicitationKeyFound: boolean('solicitation_key_found').notNull(),
   keyOverride: boolean('key_override').notNull().default(false),
   overrideReason: text('override_reason'),
@@ -234,7 +258,15 @@ export const amendmentLinks = pgTable('amendment_links', {
   confidence: decimal('confidence', { precision: 3, scale: 2 }),
   status: text('status').notNull().$type<'auto' | 'proposed' | 'confirmed' | 'rejected'>(),
   decidedBy: uuid('decided_by').references(() => users.id),
-});
+  // The amendment text that justifies a supersede or withdraw, quote-checked against the
+  // amendment's pages (migration 0009); null on add links and on links written before 0009.
+  sourcePage: integer('source_page'),
+  sourceQuote: text('source_quote'),
+}, (table) => ({
+  amendmentIdx: index('amendment_links_amendment_id_idx').on(table.amendmentId),
+  oldRowIdx: index('amendment_links_old_row_id_idx').on(table.oldRowId),
+  newRowIdx: index('amendment_links_new_row_id_idx').on(table.newRowId),
+}));
 
 export const pages = pgTable('pages', {
   ...baseColumns,
@@ -452,7 +484,10 @@ export const complianceRows = pgTable('compliance_rows', {
   owner: text('owner'),
   // CHECK (open, assigned, drafted, done) in migration 0006.
   status: text('status').notNull().default('open').$type<'open' | 'assigned' | 'drafted' | 'done'>(),
-});
+}, (table) => ({
+  // req_id allocation reads the highest suffix per prefix on the bid (migration 0009).
+  bidReqIdx: index('compliance_rows_bid_id_req_id_idx').on(table.bidId, table.reqId),
+}));
 
 export const outlineItems = pgTable('outline_items', {
   ...baseColumns,

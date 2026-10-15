@@ -355,10 +355,11 @@ export async function processAmendmentJob(payload: JobPayload): Promise<void> {
       eq(schema.amendments.documentId, payload.documentId),
       eq(schema.amendments.orgId, payload.orgId),
     ));
-    if (!document || document.liveStatus === 'deleted' || !amendmentMayRun(amendment)) {
+    // The number is settled by the key check (or the user) before the step runs.
+    if (!document || document.liveStatus === 'deleted' || !amendmentMayRun(amendment) || amendment.amendmentNo === null) {
       return null;
     }
-    return amendment;
+    return { ...amendment, amendmentNo: amendment.amendmentNo };
   });
   if (!ready) {
     return;

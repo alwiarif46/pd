@@ -3,10 +3,13 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { and, eq, gt } from 'drizzle-orm';
+import { and, eq, gt, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import {
+  amendmentNoTaken,
   fitsBidCap,
+  isAmendmentNo,
+  isAmendmentNoConflict,
   isUuid,
   isValidFileSize,
   normalizeSolicitationKey,
@@ -71,11 +74,14 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       chunkCount?: unknown;
       /** The solicitation number printed on the file, when the client knows it. */
       solicitationNumber?: unknown;
+      /** Amendments only: the amendment's number, 1 to 999, when the user types it (04 s3.1). */
+      amendmentNo?: unknown;
     };
     const kind = typeof body.kind === 'string' ? body.kind : '';
     const fileName = typeof body.fileName === 'string' ? body.fileName.trim() : '';
     const declaredSize = body.declaredSize;
     const chunkCount = body.chunkCount;
+    const amendmentNo = body.amendmentNo ?? null;
     if (
       !fileName
       || !isKind(kind)
@@ -84,6 +90,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       || typeof chunkCount !== 'number' || !Number.isSafeInteger(chunkCount) || chunkCount < 1
       // Every chunk holds at least 1 byte and at most CHUNK_BYTES.
       || chunkCount > declaredSize || chunkCount * CHUNK_BYTES < declaredSize
+      || (amendmentNo !== null && (kind !== 'amendment' || !isAmendmentNo(amendmentNo)))
     ) {
       return reply.code(400).send(apiError('invalid_upload'));
     }
@@ -149,6 +156,11 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       if ((kind === 'attachment' || kind === 'amendment') && !holdsCredit && !liveSolicitation) {
         return respond(409, apiError('solicitation_first'));
       }
+      // A typed amendment number must be free on the bid, counting other open sessions (checked
+      // under the bid lock; complete checks again).
+      if (amendmentNo !== null && await amendmentNoTaken(db, { orgId, bidId, now, includeSessions: true }, amendmentNo)) {
+        return respond(409, apiError('amendment_no_taken'));
+      }
       const needsCredit = kind === 'solicitation' && !holdsCredit;
       const period = needsCredit ? await currentCreditPeriod(db, orgId, now) : null;
       const decision = reserveCredit(
@@ -196,6 +208,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
         status: 'open',
         expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
         creditId,
+        amendmentNo,
       }).returning();
       return respond(201, { id: session.id, expiresAt: session.expiresAt, creditReserved: creditId !== null });
     });
@@ -371,7 +384,24 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
           ));
         }
       }
-      const [document] = await db.insert(schema.documents).values({
+      // An amendment's typed number is checked again under the bid lock (the same order as the
+      // solicitation branch: session, organization, bid): another upload, the worker's key check
+      // or PATCH of a number may have taken it since the session started. On 409
+      // amendment_no_taken the session is reopened with its number unchanged, so completing it
+      // again is refused for as long as the number is taken: the client starts a new session with
+      // another number (or none). The number is not dropped silently.
+      const amendmentNo = session.kind === 'amendment' ? session.amendmentNo : null;
+      if (session.kind === 'amendment') {
+        const org = await lockOrg(db, orgId);
+        const [bid] = await lockBid(db, orgId, session.bidId);
+        if (!org || !bid) {
+          return refuse(404, { error: 'Bid not found' });
+        }
+        if (amendmentNo !== null && await amendmentNoTaken(db, { orgId, bidId: bid.id }, amendmentNo)) {
+          return refuse(409, apiError('amendment_no_taken'));
+        }
+      }
+      const values = {
         orgId,
         bidId: session.bidId,
         fileName: session.fileName,
@@ -379,11 +409,27 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
         sizeBytes: file.length,
         sha256: digest,
         kind: session.kind,
+        amendmentNo,
+        amendmentNoSource: amendmentNo === null ? null : 'user' as const,
         storagePath,
         scanStatus: 'pending',
         extractStatus: 'pending',
-        liveStatus: 'live',
-      }).returning();
+        liveStatus: 'live' as const,
+      };
+      // The unique index on the bid's amendment numbers is a backstop for the check above. Its
+      // violation is caught at a savepoint, so the session can still be reopened.
+      await db.execute(sql`savepoint document_insert`);
+      let document: typeof schema.documents.$inferSelect;
+      try {
+        [document] = await db.insert(schema.documents).values(values).returning();
+        await db.execute(sql`release savepoint document_insert`);
+      } catch (error) {
+        if (!isAmendmentNoConflict(error)) {
+          throw error;
+        }
+        await db.execute(sql`rollback to savepoint document_insert`);
+        return refuse(409, apiError('amendment_no_taken'));
+      }
       const [job] = await db.insert(schema.jobs).values({
         orgId,
         bidId: session.bidId,

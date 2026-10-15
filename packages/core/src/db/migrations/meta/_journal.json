@@ -64,6 +64,13 @@
       "when": 1792044313961,
       "tag": "0008_amendment_key_check",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792050879891,
+      "tag": "0009_amendment_numbering",
+      "breakpoints": true
     }
   ]
 }
