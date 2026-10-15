@@ -22,6 +22,7 @@ const bid: BidDto = {
   timeZone: null,
   countMode: null,
   oralsEnabled: false,
+  scheduleWorkdaysOnly: true,
   creditId: null,
   creditStatus: null,
   keyOverridesUsed: 0,
