@@ -4,6 +4,7 @@ import { rm, stat } from 'node:fs/promises';
 import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, max, or, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import {
+  amendmentKickJobId,
   amendmentNoTaken,
   canRestore,
   type DocumentLiveStatus,
@@ -769,7 +770,7 @@ async function kickAmendments(orgId: string, bidId: string): Promise<void> {
         jobId: randomUUID(),
         storagePath: next.storagePath ?? '',
         kind: 'amendment',
-      }, `ai:amendment:${next.documentId}:${Date.now()}`);
+      }, amendmentKickJobId(next.documentId));
     } catch (error) {
       console.error(`Could not queue amendment ${next.documentId}`, error);
       await withOrg(orgId, async (db) => {

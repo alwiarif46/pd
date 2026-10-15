@@ -17,3 +17,11 @@ export function queueJobId(stage: string, jobId: string): string {
 export function legacyQueueJobId(stage: string, jobId: string): string {
   return `${stage}:${jobId}`;
 }
+
+/**
+ * The BullMQ id of an amendment kick (04 s3.1): fresh each time (`now`), since the same
+ * amendment may need to be queued again after BullMQ has seen an earlier kick. Colon-free.
+ */
+export function amendmentKickJobId(documentId: string, now: number = Date.now()): string {
+  return `ai-amendment-kick-${documentId}-${now}`;
+}

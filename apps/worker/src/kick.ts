@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { nextAmendmentToRun, withOrg } from '@pd/core';
+import { amendmentKickJobId, nextAmendmentToRun, withOrg } from '@pd/core';
 import { enqueue } from './enqueue.js';
 import { recordQueueFailure } from './key-check.js';
 import type { JobPayload } from './redis.js';
@@ -27,7 +27,7 @@ export async function kickAmendments(orgId: string, bidId: string): Promise<void
       storagePath: next.storagePath ?? '',
       kind: 'amendment',
     };
-    await enqueue('ai:amendment', payload, { jobId: `ai:amendment:${next.documentId}:${Date.now()}` });
+    await enqueue('ai:amendment', payload, { jobId: amendmentKickJobId(next.documentId) });
   } catch (error) {
     console.error(`Could not queue the next amendment of bid ${bidId}`, error);
     if (payload) {

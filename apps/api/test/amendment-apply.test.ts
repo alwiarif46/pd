@@ -206,7 +206,7 @@ describe.skipIf(Boolean(unavailable))('amendment run', () => {
     const credits = await db.select({ used: schema.rfpCredits.used, reserved: schema.rfpCredits.reserved }).from(schema.rfpCredits);
     return { creditStatus: bid.creditStatus, credits };
   });
-  const kicked = (documentId: string) => enqueued.filter((item) => item.name === 'ai:amendment' && item.documentId === documentId && item.bullId?.startsWith(`ai:amendment:${documentId}:`));
+  const kicked = (documentId: string) => enqueued.filter((item) => item.name === 'ai:amendment' && item.documentId === documentId && item.bullId?.startsWith(`ai-amendment-kick-${documentId}-`));
 
   describe('apply', () => {
     it('inserts the added rows, closes rows on auto links, writes links, check_these and ai_runs, and spends no credit', async () => {
@@ -378,7 +378,7 @@ describe.skipIf(Boolean(unavailable))('amendment run', () => {
       const calls = vi.mocked(enqueueAmendment).mock.calls;
       expect(calls).toHaveLength(1);
       expect(calls[0][0]).toMatchObject({ documentId: three, kind: 'amendment' });
-      expect(calls[0][1]).toMatch(new RegExp(`^ai:amendment:${three}:\\d+$`));
+      expect(calls[0][1]).toMatch(new RegExp(`^ai-amendment-kick-${three}-\\d+$`));
       expect(await run(tenant, three)).toBe('applied');
       const rows = (await rowsOf(tenant)).filter((row) => row.documentId === three);
       expect((await as(app, tenant.token)('DELETE', `/api/documents/${three}`)).statusCode).toBe(200);
