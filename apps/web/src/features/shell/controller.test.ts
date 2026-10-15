@@ -1,15 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/api';
 import { summarizeOrg } from '@/features/shared/credits';
 import { bidDto, creditDto, docDto, jobDto, linkDto, meDto, orgPayload } from '@/test/fixtures';
 import {
   BILLING_UNAVAILABLE_MESSAGE,
+  dateOnly,
   isBillingUrl,
   jobsKey,
   loadBid,
   loadShell,
+  localDayOf,
   needsPolling,
-  noonOf,
   OWNER_ONLY_MESSAGE,
   pollDelay,
   toShellBid,
@@ -87,21 +88,54 @@ describe('needsPolling', () => {
 });
 
 describe('dates and user for AppShell', () => {
-  it('passes due dates as local noon of the calendar day', () => {
-    expect(noonOf('2026-11-03T00:00:00.000Z')).toBe('2026-11-03T12:00:00');
-    expect(noonOf('2026-11-03')).toBe('2026-11-03T12:00:00');
-    expect(noonOf(null)).toBeNull();
-    expect(noonOf('soon')).toBeNull();
-    // Local noon is the same calendar day in every time zone.
-    expect(new Date(noonOf('2026-11-03') as string).getDate()).toBe(3);
+  const realTz = process.env.TZ;
+  afterEach(() => {
+    if (realTz === undefined) delete process.env.TZ;
+    else process.env.TZ = realTz;
+  });
+
+  /** Runs in a time zone west of UTC, where midnight UTC is still the previous evening. */
+  function inZone(zone: string) {
+    process.env.TZ = zone;
+    // Guard: the zone really changed, so the assertions below can catch the previous-day bug.
+    expect(new Date('2026-11-03T00:00:00.000Z').getDate()).toBe(zone === 'America/Los_Angeles' ? 2 : 3);
+  }
+
+  it('passes a due date as the plain stored day, in any time zone', () => {
+    for (const zone of ['America/Los_Angeles', 'Pacific/Auckland', 'UTC']) {
+      process.env.TZ = zone;
+      expect(dateOnly('2026-11-03T00:00:00.000Z')).toBe('2026-11-03');
+      expect(dateOnly('2026-11-03')).toBe('2026-11-03');
+    }
+    expect(dateOnly(null)).toBeNull();
+    expect(dateOnly('soon')).toBeNull();
+  });
+
+  it('maps the bid for v0 with a date-only dueDate, in Los Angeles too', () => {
+    inZone('America/Los_Angeles');
     expect(toShellBid(bidDto())).toEqual({
       id: 'bid-1',
       name: 'VA EHR Support',
       agency: 'Department of Veterans Affairs',
-      dueDate: '2026-11-03T12:00:00',
+      dueDate: '2026-11-03',
       dueTime: '14:00',
       timeZone: 'America/New_York',
     });
+    // v0 splits the string into year, month and day: the day must survive.
+    const [year, month, day] = (toShellBid(bidDto()).dueDate as string).split('-').map(Number);
+    expect(new Date(year, month - 1, day).getDate()).toBe(3);
+  });
+
+  it('shows the credit reset as the viewer\'s calendar day of the exclusive period end', () => {
+    // 2026-11-01T00:00Z is the instant the next period starts: Oct 31 evening in Los Angeles.
+    inZone('America/Los_Angeles');
+    expect(localDayOf('2026-11-01T00:00:00.000Z')).toBe('2026-10-31');
+    process.env.TZ = 'UTC';
+    expect(localDayOf('2026-11-01T00:00:00.000Z')).toBe('2026-11-01');
+    process.env.TZ = 'Pacific/Auckland';
+    expect(localDayOf('2026-11-01T00:00:00.000Z')).toBe('2026-11-01');
+    expect(localDayOf('')).toBe('');
+    expect(localDayOf('later')).toBe('');
   });
 
   it('names the user, falling back to the email', () => {
