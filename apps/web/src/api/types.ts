@@ -329,10 +329,17 @@ export interface DocumentDto extends BidScopedDto {
   amendmentNoFound: number | null;
   /** Amendments only: the amendment's status; `needs_number` waits for the user to set the number. */
   amendmentStatus: AmendmentStatus | null;
+  /**
+   * Amendments only: step 8, the bid facts and dates (PR5). 'pending' while it runs, 'failed' with
+   * a failed step to retry, null when it never queued (amendments applied before it existed).
+   */
+  amendmentTabsStatus: TabsStatus | null;
 }
 
 export type AmendmentNoSource = 'user' | 'document' | 'sequence';
 export type AmendmentStatus = 'held' | 'needs_number' | 'processing' | 'failed' | 'needs_confirmation' | 'applied';
+/** `amendments.tabs_status` (migration 0011 CHECK; packages/core TABS_STATUSES). */
+export type TabsStatus = 'pending' | 'applied' | 'failed';
 
 /** PATCH /api/documents/:id/amendment-no. */
 export interface SetAmendmentNoDto {
@@ -459,16 +466,19 @@ export interface BidFactDto extends BidScopedDto, SourceColumnsDto {
 
 /**
  * An open amendment proposal on the overview or schedule tab (PR5): the replacement an amendment
- * proposes for a fact or activity a user added, confirmed, or edited. "Insert" is
- * confirmAmendmentLink(linkId): the row joins the tab and supersedes `oldRowId`; "Dismiss" is
- * rejectAmendmentLink(linkId). `row` is not in the tab's list until inserted.
+ * proposes on a key where a user added, confirmed, or edited a fact or activity. "Insert" is
+ * confirmAmendmentLink(linkId): the row joins the tab and supersedes every row in `oldRowIds`;
+ * "Dismiss" is rejectAmendmentLink(linkId), and the rows stay. Either decides all of `linkIds`.
+ * `row` is not in the tab's list until inserted. A later amendment on the same key replaces the
+ * proposal (it disappears and the later one is offered).
  */
 export interface TabProposalDto<T> {
   linkId: string;
+  linkIds: string[];
   amendmentId: string;
   amendmentNo: number | null;
-  /** The row it would replace; null when that row was removed (insert still works). */
-  oldRowId: string | null;
+  /** The active rows it would replace, touched or not; one removed meanwhile is left out. */
+  oldRowIds: string[];
   /** The amendment text behind the change. */
   sourcePage: number | null;
   sourceQuote: string | null;
@@ -838,9 +848,11 @@ export interface AdjustScheduleInput {
   workdaysOnly?: boolean;
   /**
    * Answers that amendment's date change (the schedule tab's `pendingDateChange`): the dates come
-   * from it, and the bid's due date is set to its nextDue. `ApiError` 404 when the amendment has no
-   * date change, 409 `date_change_resolved` when it was already answered, 400 `invalid_date` for
-   * shift or scale when the bid has no due date.
+   * from it, and the bid's due date is set to its nextDue. Send this instead of setting the due
+   * date first: once the bid's due date is nextDue (Bid settings resolve the change), the answer
+   * is refused. `ApiError` 404 when the amendment has no date change or was deleted, 409
+   * `date_change_resolved` when it was already answered or the due date already is nextDue, 400
+   * `invalid_date` for shift or scale when the bid has no due date.
    */
   amendmentId?: string;
 }

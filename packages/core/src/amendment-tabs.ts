@@ -6,11 +6,12 @@
  *
  * Supersede by key: a fact or date row carries a key (bid_facts.fact_key, schedule_activities.
  * date_key). An amendment's row on key K (not 'other') replaces the bid's active rows on K with a
- * lower amendment number: automatically when the AI wrote that row and no user touched it, as a
- * proposal (the user inserts it) when a user added, confirmed, or edited it. When an active row on
- * K has a higher number (the amendments finished out of order), the new row is inserted already
- * superseded by it, so the result does not depend on the order the jobs finish in. Rows keyed
- * 'other' are only ever added.
+ * lower amendment number: automatically when the AI wrote those rows and no user touched them, as
+ * a proposal (the user inserts it, and only then do the rows change) when a user added, confirmed,
+ * or edited one. A lower amendment's open proposal on K is outdated by it. When an active row or
+ * an open proposal on K has a higher number (the amendments finished out of order), the new row
+ * is inserted already superseded by it, so the result does not depend on the order the jobs
+ * finish in. Rows keyed 'other' are only ever added.
  */
 import { isIsoDate } from './schedule';
 
@@ -242,14 +243,32 @@ export interface TabIncoming {
 }
 
 /**
+ * An open proposal on a key: a row with supersede_status 'proposed' whose links are still
+ * 'proposed', on a document that is not deleted. A later amendment's step 8 sees it, so two
+ * amendments never leave two competing proposals on one key.
+ */
+export interface TabOpenProposal {
+  id: string;
+  key: string;
+  amendmentNo: number;
+  value: string;
+}
+
+/**
  * What to write for one incoming row:
- * - 'active': inserted active; `closes` become superseded by it (changed_by_amendment N, an
- *   auto supersede link each), and `proposes` get a proposed supersede link each;
- * - 'proposed': inserted with supersede_status 'proposed' (not in the tab until the user inserts
- *   it), with a proposed supersede link to each touched row in `proposes`; untouched rows in
- *   `closes` are still superseded by it automatically;
- * - 'superseded': inserted already superseded by `supersededBy` (a higher amendment's row);
- * - 'skip': not written; every lower row on the key already says the same (a restatement).
+ * - 'active': inserted active; `closes` (the lower active rows on the key, none touched) become
+ *   superseded by it (changed_by_amendment N, an auto supersede link each);
+ * - 'proposed': a lower active row on the key was touched by a user. Inserted with supersede_status
+ *   'proposed' (not in the tab until the user inserts it), with a proposed supersede link to every
+ *   lower active row in `proposes`, touched or not: nothing on the key changes until the insert,
+ *   which decides all the links of the row at once (a dismiss rejects them all);
+ * - 'superseded': inserted already superseded by `supersededBy`, a higher amendment's active row
+ *   or open proposal on the key (the amendments finished out of order);
+ * - 'skip': not written; the row says what is already there: the highest lower open proposal, or,
+ *   when there is none, every lower active row (a restatement).
+ * `replaces`: lower open proposals on the key this amendment outdates; their links are rejected
+ * (their rows stay 'proposed', pointing at the new row). A skip that restates the rows in force
+ * still outdates a lower proposal that would have changed them.
  * `key` is the key to store: a key the run already used becomes 'other' (only added).
  */
 export interface TabPlan {
@@ -259,6 +278,7 @@ export interface TabPlan {
   supersededBy: { id: string; amendmentNo: number } | null;
   closes: string[];
   proposes: string[];
+  replaces: string[];
 }
 
 /** Two values are the same when they differ only in case, spacing, or closing punctuation. */
@@ -267,31 +287,43 @@ export function sameTabValue(a: string, b: string): boolean {
   return norm(a) === norm(b);
 }
 
+function highest<T extends { id: string; amendmentNo: number }>(rows: T[]): T | undefined {
+  return [...rows].sort((a, b) => b.amendmentNo - a.amendmentNo || a.id.localeCompare(b.id))[0];
+}
+
 /**
- * The supersede plan of amendment N's rows against the bid's active rows of one tab (see the
- * header). Pure: the caller reads `existing` under the row locks and writes the plan in the same
- * transaction.
+ * The supersede plan of amendment N's rows against the bid's active rows and open proposals of
+ * one tab (see the header). Pure: the caller reads `existing` and `open` under the row locks and
+ * writes the plan in the same transaction.
  */
-export function planTabSupersede(existing: TabExisting[], incoming: TabIncoming[], amendmentNo: number): TabPlan[] {
+export function planTabSupersede(existing: TabExisting[], incoming: TabIncoming[], amendmentNo: number, open: TabOpenProposal[] = []): TabPlan[] {
   const used = new Set<string>();
   return incoming.map((item, index): TabPlan => {
     const key = item.key !== 'other' && used.has(item.key) ? 'other' : item.key;
-    const base = { index, key, supersededBy: null, closes: [] as string[], proposes: [] as string[] };
+    const base = { index, key, supersededBy: null, closes: [] as string[], proposes: [] as string[], replaces: [] as string[] };
     if (key === 'other') {
       return { ...base, status: 'active' };
     }
     used.add(key);
     const onKey = existing.filter((row) => row.key === key);
-    const higher = onKey.filter((row) => row.amendmentNo > amendmentNo)
-      .sort((a, b) => b.amendmentNo - a.amendmentNo || a.id.localeCompare(b.id))[0];
+    const proposals = open.filter((row) => row.key === key);
+    const higher = highest(onKey.filter((row) => row.amendmentNo > amendmentNo))
+      ?? highest(proposals.filter((row) => row.amendmentNo > amendmentNo));
     if (higher) {
       return { ...base, status: 'superseded', supersededBy: { id: higher.id, amendmentNo: higher.amendmentNo } };
     }
-    if (onKey.length > 0 && onKey.every((row) => sameTabValue(row.value, item.value))) {
+    const lowerOpen = proposals.filter((row) => row.amendmentNo <= amendmentNo);
+    const latest = highest(lowerOpen);
+    if (latest && sameTabValue(latest.value, item.value)) {
       return { ...base, status: 'skip' };
     }
-    const closes = onKey.filter((row) => !row.touched).map((row) => row.id).sort();
-    const proposes = onKey.filter((row) => row.touched).map((row) => row.id).sort();
-    return { ...base, status: proposes.length > 0 ? 'proposed' : 'active', closes, proposes };
+    const replaces = lowerOpen.map((row) => row.id).sort();
+    if (onKey.length > 0 && onKey.every((row) => sameTabValue(row.value, item.value))) {
+      return { ...base, status: 'skip', replaces };
+    }
+    const lower = onKey.map((row) => row.id).sort();
+    return onKey.some((row) => row.touched)
+      ? { ...base, status: 'proposed', proposes: lower, replaces }
+      : { ...base, status: 'active', closes: lower, replaces };
   });
 }

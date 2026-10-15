@@ -138,6 +138,7 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
         solicitationKeyFound: schema.amendments.solicitationKeyFound,
         keyOverride: schema.amendments.keyOverride,
         status: schema.amendments.status,
+        tabsStatus: schema.amendments.tabsStatus,
       }).from(schema.amendments).where(and(eq(schema.amendments.bidId, bidId), eq(schema.amendments.orgId, orgId)));
       return documents.map(({ keyStatus, keyFound, ...document }) => ({
         ...document,
@@ -150,6 +151,10 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
         amendmentNoFound: document.kind === 'amendment' ? document.amendmentNoFound : null,
         amendmentStatus: document.kind === 'amendment'
           ? amendments.find((row) => row.documentId === document.id)?.status ?? null
+          : null,
+        // Amendment step 8, the bid facts and dates: pending, applied, failed, or null (not queued).
+        amendmentTabsStatus: document.kind === 'amendment'
+          ? amendments.find((row) => row.documentId === document.id)?.tabsStatus ?? null
           : null,
         liveUntil: document.liveStatus === 'deleted' ? null : documentLiveUntil({
           plan,

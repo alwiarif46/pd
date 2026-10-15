@@ -53,6 +53,7 @@ describe('@/types matches @/api', () => {
   it('matches the amendment tab keys in @pd/core/amendment-tabs (PR5)', () => {
     expectTypeOf<api.FactKey>().toEqualTypeOf<tabs.FactKey>();
     expectTypeOf<api.DateKey>().toEqualTypeOf<tabs.DateKey>();
+    expectTypeOf<api.TabsStatus>().toEqualTypeOf<tabs.TabsStatus>();
     expectTypeOf<api.PendingDateChangeDto['previousDue']>().toEqualTypeOf<tabs.DateChange['previousDue']>();
     expectTypeOf<api.PendingDateChangeDto['nextDue']>().toEqualTypeOf<tabs.DateChange['nextDue']>();
     expectTypeOf<Extract<api.SupersedeStatus, 'proposed'>>().toEqualTypeOf<typeof tabs.PROPOSED>();

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { costOf, preScan, type DateHit } from '@pd/ai';
 import {
   factKeyOf,
@@ -10,6 +10,7 @@ import {
   toIsoDate,
   withOrg,
   type DateChange,
+  type TabOpenProposal,
   type TabPlan,
 } from '@pd/core';
 import { aiDateRow, chunks, type Db, extractBidFacts, loadPages, recordRun } from './ai-jobs.js';
@@ -97,11 +98,16 @@ function closedBy(plan: TabPlan): Pick<FactInsert, 'supersedeStatus' | 'supersed
 }
 
 /**
- * The links of one new row: an auto supersede per row it closes, a proposed supersede per touched
- * row it would replace, and an always-auto add when it replaces nothing (03 s3.3). Supersede links
- * carry the new row's quote, the amendment text behind the change.
+ * The links of one new row: an auto supersede per row it closes, a proposed supersede per lower
+ * active row it would replace (all decided together by the insert or the dismiss), and an
+ * always-auto add when it is in force and replaces nothing (03 s3.3). A row inserted already
+ * superseded gets no link: it never was in force, and its superseded_by_row_id and
+ * changed_by_amendment say what replaced it. Supersede links carry the new row's quote.
  */
 function linksOf(amendmentId: string, orgId: string, rowTable: string, plan: TabPlan, newRowId: string, source: { sourcePage: number | null; sourceQuote: string | null }): LinkInsert[] {
+  if (plan.status === 'superseded') {
+    return [];
+  }
   const supersede = (oldRowId: string, status: 'auto' | 'proposed'): LinkInsert => ({
     orgId, amendmentId, rowTable, oldRowId, newRowId, action: 'supersede', confidence: null, status,
     sourcePage: source.sourcePage, sourceQuote: source.sourceQuote,
@@ -111,6 +117,14 @@ function linksOf(amendmentId: string, orgId: string, rowTable: string, plan: Tab
     links.push({ orgId, amendmentId, rowTable, oldRowId: null, newRowId, action: 'add', confidence: null, status: 'auto', sourcePage: null, sourceQuote: null });
   }
   return links;
+}
+
+type TabTable = 'bid_facts' | 'schedule_activities';
+
+/** One planned row's writes against the rows already there. */
+interface Effects {
+  closes: { table: TabTable; rowId: string; newRowId: string }[];
+  replaces: { table: TabTable; rowId: string; newRowId: string }[];
 }
 
 export type TabsOutcome = 'applied' | 'stopped';
@@ -125,146 +139,33 @@ export type TabsOutcome = 'applied' | 'stopped';
  *    in code (classifyDateHit).
  * C. One write transaction. Lock order: the bid's schedule lock (advisory, first, as seed and
  *    adjust take it), organization (key share), document, bid, amendment, then the bid's active
- *    facts and activities on the keys found (by id, facts first). Everything in A is checked again
- *    under the locks and N is read from the locked amendment. planTabSupersede decides each row:
- *    untouched AI rows on its key are superseded (changed_by_amendment N, an auto link), a row a
- *    user touched gets a proposed replacement (supersede_status 'proposed', a proposed link: the
- *    user inserts it), a higher amendment's row makes the new row superseded on insert, 'other'
- *    rows and rows replacing nothing are added (an auto add link), and a restatement is skipped.
- *    A new proposal due date that differs from the bid's due date is recorded in dates_changed
- *    (the date-change prompt applies it; the bid's due date is never changed here). tabs_status
- *    becomes applied, and the amendment needs_confirmation when a proposal was written.
- * D. On a failure in B or C, tabs_status pending -> failed with a failed classify job row; the
+ *    rows and open proposals on the keys found (facts, then activities, each by id). Everything in
+ *    A is checked again under the locks and N is read from the locked amendment. planTabSupersede
+ *    decides each row (packages/core amendment-tabs.ts): untouched AI rows on its key are
+ *    superseded (changed_by_amendment N, an auto link); when a user touched one, the new row is a
+ *    proposal (supersede_status 'proposed', a proposed link to each lower active row, which stay
+ *    as they are until the user inserts it); a lower amendment's open proposal on the key is
+ *    outdated (its links rejected, its amendment applied when nothing else is open); a higher
+ *    amendment's row or open proposal makes the new row superseded on insert; 'other' rows and rows
+ *    replacing nothing are added (an auto add link); a restatement is skipped.
+ *    Dates: when this amendment puts a proposal due date in force (active or proposed), or restates
+ *    the one in force over a lower proposal, every lower amendment's open date change is resolved
+ *    as superseded, and its own change is recorded in dates_changed when its date differs from the
+ *    bid's due date (the date-change prompt applies it; the bid's due date is never changed here).
+ *    tabs_status becomes applied, and the amendment needs_confirmation when a proposal was written.
+ * D. On a failure in A, B or C, tabs_status pending -> failed with a failed classify job row; the
  *    retry reruns classify, whose key check queues step 8 again (key-check.ts).
  */
 export async function processAmendmentTabsJob(payload: JobPayload): Promise<TabsOutcome> {
   const started = Date.now();
-  const ready = await withOrg(payload.orgId, (db) => readGate(db, payload, false));
-  if (ready.gate === 'no_credit') {
-    await failTabs(payload, NO_CREDIT);
-    return 'stopped';
-  }
-  if (ready.gate !== 'run') {
-    return 'stopped';
-  }
   let outcome: TabsOutcome | 'no_credit';
   try {
-    const pages = await loadPages(payload.orgId, payload.documentId);
-    const summary = await extractBidFacts(pages);
-    const facts = summary.facts.filter((fact) => fact.quoteVerified);
-    const dates = uniqueHits(preScan(pages).dates).map((hit) => aiDateRow(payload, hit, 'amendment'));
-
-    outcome = await withOrg(payload.orgId, async (db): Promise<TabsOutcome | 'no_credit'> => {
-      await lockBidSchedule(db, payload.bidId);
-      await shareOrg(db, payload.orgId);
-      const { gate: current, bid, amendment } = await readGate(db, payload, true);
-      if (current !== 'run' || !bid || !amendment || amendment.amendmentNo === null) {
-        return current === 'no_credit' ? current : 'stopped';
-      }
-      const amendmentNo = amendment.amendmentNo;
-      const factKeys = facts.map((fact) => factKeyOf(fact.field));
-      const lockedFacts = await lockActiveFacts(db, payload, keysOf(factKeys));
-      const lockedDates = await lockActiveDates(db, payload, keysOf(dates.map((row) => row.dateKey)));
-
-      const factPlan = planTabSupersede(lockedFacts, facts.map((fact, index) => ({ key: factKeys[index], value: fact.value })), amendmentNo);
-      const datePlan = planTabSupersede(lockedDates, dates.map((row) => ({
-        key: row.dateKey,
-        value: row.startDate ? toIsoDate(row.startDate) : '',
-      })), amendmentNo);
-
-      const links: LinkInsert[] = [];
-      const factRows: FactInsert[] = [];
-      const dateRows: DateInsert[] = [];
-      const closes: { table: 'bid_facts' | 'schedule_activities'; rowId: string; newRowId: string }[] = [];
-      for (const plan of factPlan) {
-        if (plan.status === 'skip') continue;
-        const fact = facts[plan.index];
-        const id = randomUUID();
-        factRows.push({
-          id,
-          orgId: payload.orgId,
-          bidId: payload.bidId,
-          field: fact.field,
-          value: fact.value,
-          factKey: plan.key as FactInsert['factKey'],
-          documentId: payload.documentId,
-          sourcePage: fact.sourcePage,
-          sourceQuote: fact.sourceQuote,
-          quoteVerified: true,
-          amendmentNo,
-          origin: 'ai',
-          ...closedBy(plan),
-        });
-        links.push(...linksOf(amendment.id, payload.orgId, 'bid_facts', plan, id, fact));
-        closes.push(...plan.closes.map((rowId) => ({ table: 'bid_facts' as const, rowId, newRowId: id })));
-      }
-      let dateChange: DateChange | null = null;
-      for (const plan of datePlan) {
-        if (plan.status === 'skip') continue;
-        const row = dates[plan.index];
-        const id = randomUUID();
-        dateRows.push({ ...row, id, amendmentNo, dateKey: plan.key as DateInsert['dateKey'], ...closedBy(plan) });
-        links.push(...linksOf(amendment.id, payload.orgId, 'schedule_activities', plan, id, {
-          sourcePage: row.sourcePage ?? null,
-          sourceQuote: row.sourceQuote ?? null,
-        }));
-        closes.push(...plan.closes.map((rowId) => ({ table: 'schedule_activities' as const, rowId, newRowId: id })));
-        // The first proposal due date this amendment puts in force (not one a higher amendment
-        // already replaced) moves the bid's due date, through the prompt.
-        if (plan.key === 'proposal_due' && plan.status !== 'superseded' && row.startDate && !dateChange) {
-          const previousDue = bid.dueDate ? toIsoDate(bid.dueDate) : null;
-          const nextDue = toIsoDate(row.startDate);
-          if (previousDue !== nextDue) {
-            dateChange = { previousDue, nextDue, sourcePage: row.sourcePage ?? null, sourceQuote: row.sourceQuote ?? null, resolvedAt: null };
-          }
-        }
-      }
-
-      for (const chunk of chunks(factRows)) {
-        await db.insert(schema.bidFacts).values(chunk);
-      }
-      for (const chunk of chunks(dateRows)) {
-        await db.insert(schema.scheduleActivities).values(chunk);
-      }
-      const now = new Date();
-      for (const close of closes) {
-        const set = { supersedeStatus: 'superseded' as const, supersededByRowId: close.newRowId, changedByAmendment: amendmentNo, updatedAt: now };
-        if (close.table === 'bid_facts') {
-          const t = schema.bidFacts;
-          await db.update(t).set(set).where(and(eq(t.id, close.rowId), eq(t.bidId, payload.bidId), eq(t.orgId, payload.orgId),
-            or(isNull(t.supersedeStatus), eq(t.supersedeStatus, 'active'))));
-        } else {
-          const t = schema.scheduleActivities;
-          await db.update(t).set(set).where(and(eq(t.id, close.rowId), eq(t.bidId, payload.bidId), eq(t.orgId, payload.orgId),
-            or(isNull(t.supersedeStatus), eq(t.supersedeStatus, 'active'))));
-        }
-      }
-      for (const chunk of chunks(links)) {
-        await db.insert(schema.amendmentLinks).values(chunk);
-      }
-      await recordRun({
-        orgId: payload.orgId,
-        bidId: payload.bidId,
-        task: 'amendment-tabs',
-        provider: summary.provider,
-        model: summary.model,
-        skillName: summary.skillName,
-        skillVersion: summary.skillVersion,
-        tokens: summary.tokens,
-        costUsd: costOf(summary.provider, summary.tokens),
-        durationMs: Date.now() - started,
-        status: 'completed',
-      }, db);
-      const proposed = links.some((link) => link.status === 'proposed');
-      await db.update(schema.amendments).set({
-        tabsStatus: 'applied',
-        // Open tab proposals keep the amendment in needs_confirmation (owner decision, 16 Oct 2026).
-        status: proposed ? 'needs_confirmation' : amendment.status,
-        ...(dateChange ? { datesChanged: dateChange } : {}),
-        updatedAt: now,
-      }).where(and(eq(schema.amendments.id, amendment.id), eq(schema.amendments.orgId, payload.orgId)));
-      return 'applied';
-    });
+    const ready = await withOrg(payload.orgId, (db) => readGate(db, payload, false));
+    if (ready.gate !== 'run') {
+      outcome = ready.gate === 'no_credit' ? 'no_credit' : 'stopped';
+    } else {
+      outcome = await writeTabs(payload, started);
+    }
   } catch (error) {
     await failTabs(payload, STEP_FAILED);
     throw error;
@@ -274,6 +175,233 @@ export async function processAmendmentTabsJob(payload: JobPayload): Promise<Tabs
     return 'stopped';
   }
   return outcome;
+}
+
+async function writeTabs(payload: JobPayload, started: number): Promise<TabsOutcome | 'no_credit'> {
+  const pages = await loadPages(payload.orgId, payload.documentId);
+  const summary = await extractBidFacts(pages);
+  const facts = summary.facts.filter((fact) => fact.quoteVerified);
+  const dates = uniqueHits(preScan(pages).dates).map((hit) => aiDateRow(payload, hit, 'amendment'));
+
+  return withOrg(payload.orgId, async (db): Promise<TabsOutcome | 'no_credit'> => {
+    await lockBidSchedule(db, payload.bidId);
+    await shareOrg(db, payload.orgId);
+    const { gate: current, bid, amendment } = await readGate(db, payload, true);
+    if (current !== 'run' || !bid || !amendment || amendment.amendmentNo === null) {
+      return current === 'no_credit' ? current : 'stopped';
+    }
+    const amendmentNo = amendment.amendmentNo;
+    const factKeys = facts.map((fact) => factKeyOf(fact.field));
+    const dateKeys = keysOf(dates.map((row) => row.dateKey));
+    const lockedFacts = await lockActiveFacts(db, payload, keysOf(factKeys));
+    const openFacts = await lockOpenProposals(db, payload, 'bid_facts', keysOf(factKeys));
+    const lockedDates = await lockActiveDates(db, payload, dateKeys);
+    const openDates = await lockOpenProposals(db, payload, 'schedule_activities', dateKeys);
+
+    const factPlan = planTabSupersede(lockedFacts, facts.map((fact, index) => ({ key: factKeys[index], value: fact.value })), amendmentNo, openFacts);
+    const datePlan = planTabSupersede(lockedDates, dates.map((row) => ({
+      key: row.dateKey,
+      value: row.startDate ? toIsoDate(row.startDate) : '',
+    })), amendmentNo, openDates);
+
+    const links: LinkInsert[] = [];
+    const factRows: FactInsert[] = [];
+    const dateRows: DateInsert[] = [];
+    const effects: Effects = { closes: [], replaces: [] };
+    const record = (table: TabTable, plan: TabPlan, newRowId: string | null) => {
+      if (newRowId) {
+        effects.closes.push(...plan.closes.map((rowId) => ({ table, rowId, newRowId })));
+      }
+      // A skip that outdates a lower proposal points it at nothing new: the rows in force stay.
+      effects.replaces.push(...plan.replaces.map((rowId) => ({ table, rowId, newRowId: newRowId ?? '' })));
+    };
+    for (const plan of factPlan) {
+      if (plan.status === 'skip') {
+        record('bid_facts', plan, null);
+        continue;
+      }
+      const fact = facts[plan.index];
+      const id = randomUUID();
+      factRows.push({
+        id,
+        orgId: payload.orgId,
+        bidId: payload.bidId,
+        field: fact.field,
+        value: fact.value,
+        factKey: plan.key as FactInsert['factKey'],
+        documentId: payload.documentId,
+        sourcePage: fact.sourcePage,
+        sourceQuote: fact.sourceQuote,
+        quoteVerified: true,
+        amendmentNo,
+        origin: 'ai',
+        ...closedBy(plan),
+      });
+      links.push(...linksOf(amendment.id, payload.orgId, 'bid_facts', plan, id, fact));
+      record('bid_facts', plan, id);
+    }
+    let dateChange: DateChange | null = null;
+    let dueInForce = false;
+    for (const plan of datePlan) {
+      const row = dates[plan.index];
+      const dueKey = plan.key === 'proposal_due';
+      if (plan.status === 'skip') {
+        record('schedule_activities', plan, null);
+        // Restating the due date in force over a lower proposal outdates that proposal's change.
+        if (dueKey && plan.replaces.length > 0) dueInForce = true;
+        continue;
+      }
+      const id = randomUUID();
+      dateRows.push({ ...row, id, amendmentNo, dateKey: plan.key as DateInsert['dateKey'], ...closedBy(plan) });
+      links.push(...linksOf(amendment.id, payload.orgId, 'schedule_activities', plan, id, {
+        sourcePage: row.sourcePage ?? null,
+        sourceQuote: row.sourceQuote ?? null,
+      }));
+      record('schedule_activities', plan, id);
+      // The proposal due date this amendment puts in force (not one a higher amendment already
+      // replaced) moves the bid's due date, through the prompt.
+      if (dueKey && plan.status !== 'superseded' && row.startDate && !dueInForce) {
+        dueInForce = true;
+        const previousDue = bid.dueDate ? toIsoDate(bid.dueDate) : null;
+        const nextDue = toIsoDate(row.startDate);
+        if (previousDue !== nextDue) {
+          dateChange = { previousDue, nextDue, sourcePage: row.sourcePage ?? null, sourceQuote: row.sourceQuote ?? null, resolvedAt: null };
+        }
+      }
+    }
+
+    for (const chunk of chunks(factRows)) {
+      await db.insert(schema.bidFacts).values(chunk);
+    }
+    for (const chunk of chunks(dateRows)) {
+      await db.insert(schema.scheduleActivities).values(chunk);
+    }
+    const now = new Date();
+    await applyEffects(db, payload, effects, amendmentNo, now);
+    for (const chunk of chunks(links)) {
+      await db.insert(schema.amendmentLinks).values(chunk);
+    }
+    if (dueInForce) {
+      // Lower amendments' changes are outdated: this amendment's due date is the one in force.
+      const resolved = JSON.stringify({ resolvedAt: now.toISOString(), resolvedMode: 'superseded' });
+      await db.update(schema.amendments).set({
+        datesChanged: sql`${schema.amendments.datesChanged} || ${resolved}::jsonb`,
+        updatedAt: now,
+      }).where(and(
+        eq(schema.amendments.bidId, payload.bidId),
+        eq(schema.amendments.orgId, payload.orgId),
+        lt(schema.amendments.amendmentNo, amendmentNo),
+        sql`${schema.amendments.datesChanged} is not null`,
+        sql`${schema.amendments.datesChanged}->>'resolvedAt' is null`,
+      ));
+    }
+    await recordRun({
+      orgId: payload.orgId,
+      bidId: payload.bidId,
+      task: 'amendment-tabs',
+      provider: summary.provider,
+      model: summary.model,
+      skillName: summary.skillName,
+      skillVersion: summary.skillVersion,
+      tokens: summary.tokens,
+      costUsd: costOf(summary.provider, summary.tokens),
+      durationMs: Date.now() - started,
+      status: 'completed',
+    }, db);
+    const proposed = links.some((link) => link.status === 'proposed');
+    await db.update(schema.amendments).set({
+      tabsStatus: 'applied',
+      // Open tab proposals keep the amendment in needs_confirmation (owner decision, 16 Oct 2026).
+      status: proposed ? 'needs_confirmation' : amendment.status,
+      ...(dateChange ? { datesChanged: dateChange } : {}),
+      updatedAt: now,
+    }).where(and(eq(schema.amendments.id, amendment.id), eq(schema.amendments.orgId, payload.orgId)));
+    return 'applied';
+  });
+}
+
+/**
+ * The plan's writes on rows already there: closes (active -> superseded by the new row) and
+ * outdated lower proposals (their proposed links rejected; their rows stay 'proposed', never
+ * listed, pointing at the new row when there is one; an amendment left with no open link is
+ * applied). The caller holds the bid, so the other amendments' rows are written in no cycle.
+ */
+async function applyEffects(db: Db, payload: JobPayload, effects: Effects, amendmentNo: number, now: Date): Promise<void> {
+  for (const close of effects.closes) {
+    const set = { supersedeStatus: 'superseded' as const, supersededByRowId: close.newRowId, changedByAmendment: amendmentNo, updatedAt: now };
+    if (close.table === 'bid_facts') {
+      const t = schema.bidFacts;
+      await db.update(t).set(set).where(and(eq(t.id, close.rowId), eq(t.bidId, payload.bidId), eq(t.orgId, payload.orgId),
+        or(isNull(t.supersedeStatus), eq(t.supersedeStatus, 'active'))));
+    } else {
+      const t = schema.scheduleActivities;
+      await db.update(t).set(set).where(and(eq(t.id, close.rowId), eq(t.bidId, payload.bidId), eq(t.orgId, payload.orgId),
+        or(isNull(t.supersedeStatus), eq(t.supersedeStatus, 'active'))));
+    }
+  }
+  const touchedAmendments = new Set<string>();
+  for (const replace of effects.replaces) {
+    const rejected = await db.update(schema.amendmentLinks).set({ status: 'rejected', updatedAt: now }).where(and(
+      eq(schema.amendmentLinks.newRowId, replace.rowId),
+      eq(schema.amendmentLinks.orgId, payload.orgId),
+      eq(schema.amendmentLinks.rowTable, replace.table),
+      eq(schema.amendmentLinks.status, 'proposed'),
+    )).returning({ amendmentId: schema.amendmentLinks.amendmentId });
+    rejected.forEach((link) => touchedAmendments.add(link.amendmentId));
+    if (replace.newRowId) {
+      const set = { supersededByRowId: replace.newRowId, changedByAmendment: amendmentNo };
+      if (replace.table === 'bid_facts') {
+        await db.update(schema.bidFacts).set(set).where(and(eq(schema.bidFacts.id, replace.rowId), eq(schema.bidFacts.orgId, payload.orgId)));
+      } else {
+        await db.update(schema.scheduleActivities).set(set)
+          .where(and(eq(schema.scheduleActivities.id, replace.rowId), eq(schema.scheduleActivities.orgId, payload.orgId)));
+      }
+    }
+  }
+  for (const amendmentId of [...touchedAmendments].sort()) {
+    const [open] = await db.select({ id: schema.amendmentLinks.id }).from(schema.amendmentLinks).where(and(
+      eq(schema.amendmentLinks.amendmentId, amendmentId),
+      eq(schema.amendmentLinks.orgId, payload.orgId),
+      eq(schema.amendmentLinks.status, 'proposed'),
+    )).limit(1);
+    if (!open) {
+      await db.update(schema.amendments).set({ status: 'applied', updatedAt: now }).where(and(
+        eq(schema.amendments.id, amendmentId),
+        eq(schema.amendments.orgId, payload.orgId),
+        eq(schema.amendments.status, 'needs_confirmation'),
+      ));
+    }
+  }
+}
+
+/**
+ * The bid's open proposals on `keys` (rows 'proposed' with a link still 'proposed', on a
+ * document that is not deleted), locked by id, with the value compared for a restatement.
+ */
+async function lockOpenProposals(db: Db, payload: JobPayload, table: TabTable, keys: string[]): Promise<TabOpenProposal[]> {
+  if (keys.length === 0) {
+    return [];
+  }
+  const open = (id: typeof schema.bidFacts.id | typeof schema.scheduleActivities.id) => sql`exists (
+    select 1 from "amendment_links" l where l."new_row_id" = ${id} and l."status" = 'proposed'
+      and l."row_table" = ${table} and l."org_id" = ${payload.orgId})`;
+  const live = sql`${schema.documents.liveStatus} is distinct from 'deleted'`;
+  if (table === 'bid_facts') {
+    const t = schema.bidFacts;
+    const rows = await db.select({ id: t.id, key: t.factKey, amendmentNo: t.amendmentNo, value: t.value }).from(t)
+      .innerJoin(schema.documents, eq(schema.documents.id, t.documentId))
+      .where(and(eq(t.bidId, payload.bidId), eq(t.orgId, payload.orgId), eq(schema.documents.orgId, payload.orgId),
+        eq(t.supersedeStatus, 'proposed'), inArray(t.factKey, keys as (typeof t.factKey._.data)[]), live, open(t.id)))
+      .orderBy(asc(t.id)).for('update', { of: t });
+    return rows;
+  }
+  const t = schema.scheduleActivities;
+  const rows = await db.select({ id: t.id, key: t.dateKey, amendmentNo: t.amendmentNo, startDate: t.startDate }).from(t)
+    .innerJoin(schema.documents, eq(schema.documents.id, t.documentId))
+    .where(and(eq(t.bidId, payload.bidId), eq(t.orgId, payload.orgId), eq(schema.documents.orgId, payload.orgId),
+      eq(t.supersedeStatus, 'proposed'), inArray(t.dateKey, keys as (typeof t.dateKey._.data)[]), live, open(t.id)))
+    .orderBy(asc(t.id)).for('update', { of: t });
+  return rows.map((row) => ({ id: row.id, key: row.key, amendmentNo: row.amendmentNo, value: row.startDate ? toIsoDate(row.startDate) : '' }));
 }
 
 /**

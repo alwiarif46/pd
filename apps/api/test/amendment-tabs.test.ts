@@ -292,7 +292,7 @@ describe.skipIf(Boolean(unavailable))('amendment step 8: bid facts and dates', (
       }>();
       expect(overview.facts.map((fact) => fact.id)).not.toContain(proposedFact.id);
       expect(overview.proposals).toEqual([expect.objectContaining({
-        linkId: factLink.id, amendmentNo: 2, oldRowId: agency, row: expect.objectContaining({ id: proposedFact.id, value: 'Department of the Navy' }),
+        linkId: factLink.id, linkIds: [factLink.id], amendmentNo: 2, oldRowIds: [agency], row: expect.objectContaining({ id: proposedFact.id, value: 'Department of the Navy' }),
       })]);
       const schedule = (await call('GET', `/api/bids/${tenant.bidId}/tabs/schedule`)).json<{
         activities: { id: string }[]; proposals: { linkId: string; row: { id: string } }[];
@@ -614,15 +614,21 @@ describe.skipIf(Boolean(unavailable))('amendment step 8: bid facts and dates', (
           order.map((name) => contenders[name]),
         );
         expect(waiting).toBe(2);
-        results.forEach((item) => fulfilled(item));
-        expect(iso((await datesOf(tenant)).find((row) => row.id === draft)!.startDate), order.join()).toBe('2026-12-08');
-        expect(iso((await bidOf(tenant)).dueDate)).toBe('2026-12-22');
+        const [first, second] = results.map((item) => fulfilled(item));
+        const answer = (order[0] === 'adjust' ? first : second) as { statusCode: number };
+        // Step 8 of amendment 3 first: it puts 12/29 in force and outdates amendment 2's change,
+        // so the late answer to it is refused and nothing moves. Answer first: it applies 12/22.
+        expect(answer.statusCode, order.join()).toBe(order[0] === 'adjust' ? 200 : 409);
+        const moved = order[0] === 'adjust';
+        expect(iso((await datesOf(tenant)).find((row) => row.id === draft)!.startDate), order.join()).toBe(moved ? '2026-12-08' : '2026-12-01');
+        expect(iso((await bidOf(tenant)).dueDate)).toBe(moved ? '2026-12-22' : '2026-12-15');
         // Amendment 3's change moves from the due date in force now, whichever wrote first.
         const pending = (await call('GET', `/api/bids/${tenant.bidId}/tabs/schedule`)).json<{ pendingDateChange: unknown }>().pendingDateChange;
-        expect(pending, order.join()).toMatchObject({ amendmentNo: 3, previousDue: '2026-12-22', nextDue: '2026-12-29' });
+        expect(pending, order.join()).toMatchObject({ amendmentNo: 3, previousDue: moved ? '2026-12-22' : '2026-12-15', nextDue: '2026-12-29' });
         const threeId = (await amendmentOf(tenant, three)).id;
         const answered = await call('POST', `/api/bids/${tenant.bidId}/schedule/adjust`, { mode: 'shift', amendmentId: threeId, workdaysOnly: false });
-        expect(answered.json()).toMatchObject({ delta: 7, dueDate: '2026-12-29' });
+        expect(answered.json()).toMatchObject({ delta: moved ? 7 : 14, dueDate: '2026-12-29' });
+        // Either way the schedule moved once from 12/15 to 12/29 in total.
         expect(iso((await datesOf(tenant)).find((row) => row.id === draft)!.startDate)).toBe('2026-12-15');
       }
     });
@@ -649,6 +655,283 @@ describe.skipIf(Boolean(unavailable))('amendment step 8: bid facts and dates', (
       expect(shifted.json()).toMatchObject({ code: 'invalid_date' });
       expect((await call('POST', `/api/bids/${tenant.bidId}/schedule/adjust`, { mode: 'keep', amendmentId: record.id })).statusCode).toBe(200);
       expect(iso((await bidOf(tenant)).dueDate)).toBe('2026-12-22');
+    });
+  });
+
+  describe('review fixes', () => {
+    const touch = async (tenant: Tenant, agency: string) => {
+      const patched = await as(app, tenant.token)('PATCH', `/api/bids/${tenant.bidId}/rows/bid_facts/${agency}`, { fields: { confirmed: true } });
+      expect(patched.statusCode).toBe(200);
+    };
+    const agencyFacts = (no: number) => [{
+      field: 'agency', value: no === 2 ? 'Department of the Navy' : 'Department of the Air Force', sourceQuote: `Amendment No. ${no}`, sourcePage: 1,
+    }];
+    const overviewOf = async (tenant: Tenant) => (await as(app, tenant.token)('GET', `/api/bids/${tenant.bidId}/tabs/overview`)).json<{
+      facts: { id: string }[];
+      proposals: { linkId: string; linkIds: string[]; amendmentNo: number; oldRowIds: string[]; row: { id: string; value: string } }[];
+    }>();
+
+    it('a later amendment replaces an earlier open proposal on a touched fact, in either run order; insert ends it', async () => {
+      for (const order of [[2, 3], [3, 2]]) {
+        const { tenant, agency } = await setup(`at-f1-${order.join('')}`);
+        await touch(tenant, agency);
+        const documents = new Map<number, string>();
+        for (const no of [2, 3]) {
+          documents.set(no, await amendment(tenant, no, PAGE(no, 'No date change.')));
+        }
+        for (const no of order) {
+          ai.facts = agencyFacts(no);
+          expect(await run(tenant, documents.get(no)!)).toBe('applied');
+        }
+        const facts = await factsOf(tenant);
+        const p2 = facts.find((fact) => fact.documentId === documents.get(2) && fact.factKey === 'agency')!;
+        const p3 = facts.find((fact) => fact.documentId === documents.get(3) && fact.factKey === 'agency')!;
+        expect(p3.supersedeStatus, order.join()).toBe('proposed');
+        expect(p2, order.join()).toMatchObject(order[0] === 2
+          ? { supersedeStatus: 'proposed', supersededByRowId: p3.id, changedByAmendment: 3 }
+          : { supersedeStatus: 'superseded', supersededByRowId: p3.id, changedByAmendment: 3 });
+        const p2Links = (await linksOf(tenant, documents.get(2)!)).filter((link) => link.rowTable === 'bid_facts');
+        expect(p2Links.every((link) => link.status === 'rejected'), order.join()).toBe(true);
+        expect((await amendmentOf(tenant, documents.get(2)!)).status, order.join()).toBe('applied');
+        expect((await amendmentOf(tenant, documents.get(3)!)).status).toBe('needs_confirmation');
+        // One proposal is offered: amendment 3's.
+        const { proposals } = await overviewOf(tenant);
+        expect(proposals.map((proposal) => [proposal.amendmentNo, proposal.row.value, proposal.oldRowIds])).toEqual([[3, 'Department of the Air Force', [agency]]]);
+        const inserted = await as(app, tenant.token)('POST', `/api/amendment-links/${proposals[0].linkId}/confirm`);
+        expect(inserted.statusCode, inserted.body).toBe(200);
+        expect(inserted.json()).toMatchObject({ amendmentStatus: 'applied' });
+        expect((await factsOf(tenant)).find((fact) => fact.id === agency)).toMatchObject({ supersedeStatus: 'superseded', supersededByRowId: p3.id, changedByAmendment: 3 });
+        expect(active(await factsOf(tenant)).filter((fact) => fact.factKey === 'agency').map((fact) => fact.id)).toEqual([p3.id]);
+      }
+    });
+
+    it('one proposal over a touched and an untouched row: nothing changes until insert, which decides every link', async () => {
+      const results = new Map<string, Awaited<ReturnType<typeof setup>>>();
+      for (const decision of ['confirm', 'reject'] as const) {
+        const fixture = await setup(`at-f2-${decision}`);
+        results.set(decision, fixture);
+        const { tenant, agency } = fixture;
+        const call = as(app, tenant.token);
+        const created = await call('POST', `/api/bids/${tenant.bidId}/tabs/overview/rows`, { kind: 'fact', field: 'agency', value: 'Army Contracting Command' });
+        const mine = created.json<{ id: string }>().id;
+        ai.facts = agencyFacts(2);
+        const documentId = await amendment(tenant, 2, PAGE(2, 'No date change.'));
+        expect(await run(tenant, documentId)).toBe('applied');
+        // The untouched AI row is not superseded while the proposal is open.
+        expect((await factsOf(tenant)).find((fact) => fact.id === agency)).toMatchObject({ supersedeStatus: null });
+        const { proposals } = await overviewOf(tenant);
+        expect(proposals).toHaveLength(1);
+        expect([...proposals[0].oldRowIds].sort()).toEqual([agency, mine].sort());
+        expect(proposals[0].linkIds).toHaveLength(2);
+        const proposed = proposals[0].row.id;
+        // Decide through the second link: the whole proposal is decided.
+        const answered = await call('POST', `/api/amendment-links/${proposals[0].linkIds[1]}/${decision}`);
+        expect(answered.statusCode, answered.body).toBe(200);
+        expect(answered.json()).toMatchObject({ amendmentStatus: 'applied' });
+        const links = (await linksOf(tenant, documentId)).filter((link) => link.newRowId === proposed);
+        expect(links.map((link) => link.status)).toEqual([decision === 'confirm' ? 'confirmed' : 'rejected', decision === 'confirm' ? 'confirmed' : 'rejected']);
+        const facts = await factsOf(tenant);
+        for (const id of [agency, mine]) {
+          expect(facts.find((fact) => fact.id === id), decision).toMatchObject(decision === 'confirm'
+            ? { supersedeStatus: 'superseded', supersededByRowId: proposed, changedByAmendment: 2 }
+            : { supersedeStatus: null });
+        }
+        expect(facts.find((fact) => fact.id === proposed)?.supersedeStatus).toBe(decision === 'confirm' ? 'active' : 'proposed');
+        expect((await overviewOf(tenant)).proposals).toEqual([]);
+        if (decision === 'confirm') {
+          const history = await withOrg(tenant.orgId, (db) => db.select().from(schema.rowHistory).where(eq(schema.rowHistory.rowTable, 'bid_facts')));
+          expect(new Set(history.filter((row) => row.field === 'superseded_by_row_id').map((row) => row.rowId))).toEqual(new Set([agency, mine]));
+        }
+      }
+    });
+
+    it('a due date set in Bid settings answers the change that names it, so it never resurfaces', async () => {
+      const { tenant } = await setup('at-f3a');
+      const documentId = await amendment(tenant, 2);
+      expect(await run(tenant, documentId)).toBe('applied');
+      const call = as(app, tenant.token);
+      expect((await call('PATCH', `/api/bids/${tenant.bidId}`, { dueDate: '2026-12-22' })).statusCode).toBe(200);
+      expect((await amendmentOf(tenant, documentId)).datesChanged).toMatchObject({ resolvedMode: 'settings', resolvedAt: expect.any(String) });
+      expect((await call('PATCH', `/api/bids/${tenant.bidId}`, { dueDate: '2026-12-30' })).statusCode).toBe(200);
+      expect((await call('GET', `/api/bids/${tenant.bidId}/tabs/schedule`)).json()).toMatchObject({ pendingDateChange: null });
+      // A date no change names resolves nothing.
+      const other = await setup('at-f3a-other');
+      const otherDocument = await amendment(other.tenant, 2);
+      expect(await run(other.tenant, otherDocument)).toBe('applied');
+      expect((await as(app, other.tenant.token)('PATCH', `/api/bids/${other.tenant.bidId}`, { dueDate: '2026-12-18' })).statusCode).toBe(200);
+      expect((await as(app, other.tenant.token)('GET', `/api/bids/${other.tenant.bidId}/tabs/schedule`)).json())
+        .toMatchObject({ pendingDateChange: { amendmentNo: 2, previousDue: '2026-12-18', nextDue: '2026-12-22' } });
+    });
+
+    it('a later amendment that restores the due date resolves the earlier change it outdates', async () => {
+      const { tenant } = await setup('at-f3b');
+      const two = await amendment(tenant, 2);
+      expect(await run(tenant, two)).toBe('applied');
+      const three = await amendment(tenant, 3, PAGE(3, 'Proposals are due 2026-12-15.'));
+      expect(await run(tenant, three)).toBe('applied');
+      expect((await amendmentOf(tenant, two)).datesChanged).toMatchObject({ resolvedMode: 'superseded', resolvedAt: expect.any(String) });
+      expect((await amendmentOf(tenant, three)).datesChanged).toBeNull();
+      expect((await as(app, tenant.token)('GET', `/api/bids/${tenant.bidId}/tabs/schedule`)).json()).toMatchObject({ pendingDateChange: null });
+      expect(active(await datesOf(tenant)).filter((row) => row.dateKey === 'proposal_due').map((row) => [iso(row.startDate), row.amendmentNo]))
+        .toEqual([['2026-12-15', 3]]);
+    });
+
+    it('answering after the due date was already set to the new date is refused and changes nothing', async () => {
+      const { tenant, draft } = await setup('at-f5');
+      const documentId = await amendment(tenant, 2);
+      expect(await run(tenant, documentId)).toBe('applied');
+      const amendmentId = (await amendmentOf(tenant, documentId)).id;
+      // Set without Bid settings (no resolution): the answer still must not move nothing and close it.
+      await withOrg(tenant.orgId, (db) => db.update(schema.bids).set({ dueDate: day('2026-12-22') }).where(eq(schema.bids.id, tenant.bidId)));
+      const call = as(app, tenant.token);
+      const refused = await call('POST', `/api/bids/${tenant.bidId}/schedule/adjust`, { mode: 'shift', amendmentId });
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json()).toMatchObject({ code: 'date_change_resolved' });
+      expect((await amendmentOf(tenant, documentId)).datesChanged).toMatchObject({ resolvedAt: null });
+      expect(iso((await datesOf(tenant)).find((row) => row.id === draft)!.startDate)).toBe('2026-12-01');
+      // The path without an amendmentId is unchanged.
+      const plain = await call('POST', `/api/bids/${tenant.bidId}/schedule/adjust`, { mode: 'shift', previousDue: '2026-12-15', nextDue: '2026-12-22', workdaysOnly: false });
+      expect(plain.json()).toMatchObject({ delta: 7 });
+      expect(plain.json()).not.toHaveProperty('dueDate');
+    });
+
+    it('a step 8 pending past the stale limit is queued again by the key check; a fresh one is not', async () => {
+      const { tenant } = await setup('at-f6');
+      const stale = await amendment(tenant, 2);
+      const fresh = await amendment(tenant, 3);
+      await withOrg(tenant.orgId, (db) => db.update(schema.amendments).set({ updatedAt: new Date(Date.now() - 60 * 60_000) })
+        .where(eq(schema.amendments.documentId, stale)));
+      await classify.processClassify(payload(tenant, stale));
+      await classify.processClassify(payload(tenant, fresh));
+      expect(enqueued.filter((item) => item.name === 'ai:amendment-tabs').map((item) => item.documentId)).toEqual([stale]);
+      expect(enqueued.filter((item) => item.name === 'ai:amendment')).toEqual([]);
+      expect((await amendmentOf(tenant, stale)).updatedAt.getTime()).toBeGreaterThan(Date.now() - 60_000);
+      // The documents list shows step 8's state.
+      const documents = (await as(app, tenant.token)('GET', `/api/bids/${tenant.bidId}/documents`)).json<{ id: string; amendmentTabsStatus: string | null }[]>();
+      expect(documents.find((document) => document.id === stale)?.amendmentTabsStatus).toBe('pending');
+      expect(await run(tenant, stale)).toBe('applied');
+      const after = (await as(app, tenant.token)('GET', `/api/bids/${tenant.bidId}/documents`)).json<{ id: string; amendmentTabsStatus: string | null }[]>();
+      expect(after.find((document) => document.id === stale)?.amendmentTabsStatus).toBe('applied');
+    });
+
+    it('a deleted amendment offers no proposal and its date change cannot be answered', async () => {
+      const { tenant, agency } = await setup('at-f8');
+      await touch(tenant, agency);
+      const documentId = await amendment(tenant, 2);
+      expect(await run(tenant, documentId)).toBe('applied');
+      expect((await overviewOf(tenant)).proposals).toHaveLength(1);
+      const call = as(app, tenant.token);
+      expect((await call('DELETE', `/api/documents/${documentId}`)).statusCode).toBe(200);
+      expect((await overviewOf(tenant)).proposals).toEqual([]);
+      const amendmentId = (await amendmentOf(tenant, documentId)).id;
+      expect((await call('POST', `/api/bids/${tenant.bidId}/schedule/adjust`, { mode: 'keep', amendmentId })).statusCode).toBe(404);
+      expect(iso((await bidOf(tenant)).dueDate)).toBe('2026-12-15');
+      // A later amendment does not treat the deleted one's proposal as open.
+      ai.facts = agencyFacts(3);
+      const three = await amendment(tenant, 3, PAGE(3, 'No date change.'));
+      expect(await run(tenant, three)).toBe('applied');
+      expect((await overviewOf(tenant)).proposals.map((proposal) => proposal.amendmentNo)).toEqual([3]);
+    });
+  });
+
+  describe('races with step 8', () => {
+    const holdThen = async (orgId: string, lock: string, params: unknown[], contenders: (() => Promise<unknown>)[]) => {
+      const { waiting, results } = await raceInOrder(orgId, lock, params, contenders);
+      expect(waiting).toBe(contenders.length);
+      return results.map((item) => fulfilled(item));
+    };
+
+    it('a row PATCH: the edit is kept either way; first wins the supersede decision', async () => {
+      for (const first of ['step8', 'patch'] as const) {
+        const { tenant, agency } = await setup(`at-race-patch-${first}`);
+        const documentId = await amendment(tenant, 2);
+        const contenders = {
+          step8: () => run(tenant, documentId),
+          patch: () => as(app, tenant.token)('PATCH', `/api/bids/${tenant.bidId}/rows/bid_facts/${agency}`, { fields: { confirmed: true } }),
+        };
+        await holdThen(tenant.orgId, 'select id from bid_facts where id = $1 for update', [agency],
+          (first === 'step8' ? ['step8', 'patch'] as const : ['patch', 'step8'] as const).map((name) => contenders[name]));
+        const facts = await factsOf(tenant);
+        expect(facts.find((fact) => fact.id === agency)?.confirmed, first).toBe(true);
+        const navy = facts.find((fact) => fact.documentId === documentId && fact.factKey === 'agency')!;
+        expect(navy.supersedeStatus, first).toBe(first === 'step8' ? 'active' : 'proposed');
+        expect(facts.find((fact) => fact.id === agency)?.supersedeStatus, first).toBe(first === 'step8' ? 'superseded' : null);
+      }
+    });
+
+    it('a number PATCH: the rows end with the new number either way', async () => {
+      for (const first of ['step8', 'number'] as const) {
+        const { tenant, agency } = await setup(`at-race-no-${first}`);
+        const documentId = await amendment(tenant, 2);
+        const contenders = {
+          step8: () => run(tenant, documentId),
+          number: () => as(app, tenant.token)('PATCH', `/api/documents/${documentId}/amendment-no`, { amendmentNo: 5 }),
+        };
+        const results = await holdThen(tenant.orgId, 'select id from documents where id = $1 for update', [documentId],
+          (first === 'step8' ? ['step8', 'number'] as const : ['number', 'step8'] as const).map((name) => contenders[name]));
+        expect(results).toContain('applied');
+        const facts = await factsOf(tenant);
+        expect(facts.find((fact) => fact.documentId === documentId && fact.factKey === 'agency'), first).toMatchObject({ amendmentNo: 5 });
+        expect(facts.find((fact) => fact.id === agency), first).toMatchObject({ changedByAmendment: 5 });
+      }
+    });
+
+    it('a document delete: step 8 writes before it or not at all', async () => {
+      for (const first of ['step8', 'delete'] as const) {
+        const { tenant } = await setup(`at-race-del-${first}`);
+        const documentId = await amendment(tenant, 2);
+        const contenders = {
+          step8: () => run(tenant, documentId),
+          delete: () => as(app, tenant.token)('DELETE', `/api/documents/${documentId}`),
+        };
+        const results = await holdThen(tenant.orgId, 'select id from documents where id = $1 for update', [documentId],
+          (first === 'step8' ? ['step8', 'delete'] as const : ['delete', 'step8'] as const).map((name) => contenders[name]));
+        const written = (await factsOf(tenant)).filter((fact) => fact.documentId === documentId);
+        expect(results.includes('applied'), first).toBe(first === 'step8');
+        expect(written.length > 0, first).toBe(first === 'step8');
+        // Either way no prompt is offered for the deleted amendment.
+        expect((await as(app, tenant.token)('GET', `/api/bids/${tenant.bidId}/tabs/schedule`)).json()).toMatchObject({ pendingDateChange: null });
+      }
+    });
+
+    it('a credit release: step 8 writes before it, or fails visibly after it', async () => {
+      for (const first of ['step8', 'release'] as const) {
+        const { tenant } = await setup(`at-race-credit-${first}`);
+        const documentId = await amendment(tenant, 2);
+        const contenders = {
+          step8: () => run(tenant, documentId),
+          release: () => withOrg(tenant.orgId, (db) => db.update(schema.bids).set({ creditStatus: 'released' }).where(eq(schema.bids.id, tenant.bidId))),
+        };
+        await holdThen(tenant.orgId, 'select id from bids where id = $1 for update', [tenant.bidId],
+          (first === 'step8' ? ['step8', 'release'] as const : ['release', 'step8'] as const).map((name) => contenders[name]));
+        expect((await amendmentOf(tenant, documentId)).tabsStatus, first).toBe(first === 'step8' ? 'applied' : 'failed');
+      }
+    });
+
+    it('a link confirm racing an adjust with the amendmentId: both apply, in either order', async () => {
+      for (const first of ['confirm', 'adjust'] as const) {
+        const { tenant, due, draft } = await setup(`at-race-confirm-${first}`);
+        const call = as(app, tenant.token);
+        // The user touched the due date row (an owner), so the new due date is a proposal.
+        expect((await call('PATCH', `/api/bids/${tenant.bidId}/rows/schedule_activities/${due}`, { fields: { owner: 'Sam' } })).statusCode).toBe(200);
+        const documentId = await amendment(tenant, 2);
+        expect(await run(tenant, documentId)).toBe('applied');
+        const record = await amendmentOf(tenant, documentId);
+        const dueLink = (await linksOf(tenant, documentId)).find((link) => link.rowTable === 'schedule_activities' && link.status === 'proposed')!;
+        const contenders = {
+          confirm: () => call('POST', `/api/amendment-links/${dueLink.id}/confirm`),
+          adjust: () => call('POST', `/api/bids/${tenant.bidId}/schedule/adjust`, { mode: 'shift', amendmentId: record.id, workdaysOnly: false }),
+        };
+        const replies = await holdThen(tenant.orgId, 'select id from bids where id = $1 for update', [tenant.bidId],
+          (first === 'confirm' ? ['confirm', 'adjust'] as const : ['adjust', 'confirm'] as const).map((name) => contenders[name])) as { statusCode: number; body: string }[];
+        replies.forEach((reply) => expect(reply.statusCode, reply.body).toBe(200));
+        expect(iso((await bidOf(tenant)).dueDate), first).toBe('2026-12-22');
+        expect((await amendmentOf(tenant, documentId)).datesChanged).toMatchObject({ resolvedAt: expect.any(String) });
+        const dates = await datesOf(tenant);
+        expect(iso(dates.find((row) => row.id === draft)!.startDate), first).toBe('2026-12-08');
+        expect(dates.find((row) => row.id === dueLink.newRowId), first).toMatchObject({ supersedeStatus: 'active' });
+        expect(dates.find((row) => row.id === due), first).toMatchObject({ supersedeStatus: 'superseded' });
+      }
     });
   });
 });

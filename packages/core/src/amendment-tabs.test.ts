@@ -116,17 +116,17 @@ const row = (id: string, key: string, amendmentNo: number, overrides: Partial<Ta
 describe('planTabSupersede', () => {
   it('supersedes untouched lower rows automatically', () => {
     const plan = planTabSupersede([row('o1', 'agency', 0), row('o2', 'agency', 1)], [{ key: 'agency', value: 'Navy' }], 2);
-    expect(plan).toEqual([{ index: 0, key: 'agency', status: 'active', supersededBy: null, closes: ['o1', 'o2'], proposes: [] }]);
+    expect(plan).toEqual([{ index: 0, key: 'agency', status: 'active', supersededBy: null, closes: ['o1', 'o2'], proposes: [], replaces: [] }]);
   });
 
-  it('proposes the replacement of a row a user touched, and still closes the untouched ones', () => {
+  it('proposes the replacement of a row a user touched; the untouched ones wait for the insert', () => {
     const plan = planTabSupersede([row('o1', 'agency', 0, { touched: true }), row('o2', 'agency', 0)], [{ key: 'agency', value: 'Navy' }], 2);
-    expect(plan).toEqual([{ index: 0, key: 'agency', status: 'proposed', supersededBy: null, closes: ['o2'], proposes: ['o1'] }]);
+    expect(plan).toEqual([{ index: 0, key: 'agency', status: 'proposed', supersededBy: null, closes: [], proposes: ['o1', 'o2'], replaces: [] }]);
   });
 
   it('inserts a row already superseded when a higher amendment wrote the key', () => {
     const plan = planTabSupersede([row('o1', 'agency', 0), row('h3', 'agency', 3), row('h4', 'agency', 4)], [{ key: 'agency', value: 'Navy' }], 2);
-    expect(plan).toEqual([{ index: 0, key: 'agency', status: 'superseded', supersededBy: { id: 'h4', amendmentNo: 4 }, closes: [], proposes: [] }]);
+    expect(plan).toEqual([{ index: 0, key: 'agency', status: 'superseded', supersededBy: { id: 'h4', amendmentNo: 4 }, closes: [], proposes: [], replaces: [] }]);
   });
 
   it('only ever adds rows keyed other, and rows of a key the run already used', () => {
@@ -136,21 +136,21 @@ describe('planTabSupersede', () => {
       { key: 'naics', value: '541511' },
     ], 2);
     expect(plan).toEqual([
-      { index: 0, key: 'other', status: 'active', supersededBy: null, closes: [], proposes: [] },
-      { index: 1, key: 'naics', status: 'active', supersededBy: null, closes: ['o2'], proposes: [] },
-      { index: 2, key: 'other', status: 'active', supersededBy: null, closes: [], proposes: [] },
+      { index: 0, key: 'other', status: 'active', supersededBy: null, closes: [], proposes: [], replaces: [] },
+      { index: 1, key: 'naics', status: 'active', supersededBy: null, closes: ['o2'], proposes: [], replaces: [] },
+      { index: 2, key: 'other', status: 'active', supersededBy: null, closes: [], proposes: [], replaces: [] },
     ]);
   });
 
   it('adds a row whose key nothing holds yet', () => {
     expect(planTabSupersede([], [{ key: 'pop', value: '12 months' }], 1)).toEqual([
-      { index: 0, key: 'pop', status: 'active', supersededBy: null, closes: [], proposes: [] },
+      { index: 0, key: 'pop', status: 'active', supersededBy: null, closes: [], proposes: [], replaces: [] },
     ]);
   });
 
   it('skips a restatement: every lower row on the key already has the value', () => {
     const plan = planTabSupersede([row('o1', 'agency', 0, { value: 'Department of the Army', touched: true })], [{ key: 'agency', value: 'department of the army' }], 2);
-    expect(plan).toEqual([{ index: 0, key: 'agency', status: 'skip', supersededBy: null, closes: [], proposes: [] }]);
+    expect(plan).toEqual([{ index: 0, key: 'agency', status: 'skip', supersededBy: null, closes: [], proposes: [], replaces: [] }]);
   });
 
   it('gives the same active rows whichever amendment finishes first', () => {
@@ -165,5 +165,46 @@ describe('planTabSupersede', () => {
     expect(threeFirst[0]).toMatchObject({ status: 'active', closes: ['o'] });
     const twoLate = planTabSupersede([row('r3', 'agency', 3, { value: 'C' })], [{ key: 'agency', value: 'B' }], 2);
     expect(twoLate[0]).toMatchObject({ status: 'superseded', supersededBy: { id: 'r3', amendmentNo: 3 } });
+  });
+
+  describe('open proposals (a lower or higher amendment proposed on the key)', () => {
+    const touched = row('b', 'agency', 0, { touched: true, value: 'Army' });
+    const open = (id: string, amendmentNo: number, value: string) => ({ id, key: 'agency', amendmentNo, value });
+
+    it('a higher amendment replaces a lower open proposal and proposes against the touched row', () => {
+      expect(planTabSupersede([touched], [{ key: 'agency', value: 'Air Force' }], 3, [open('p2', 2, 'Navy')])).toEqual([
+        { index: 0, key: 'agency', status: 'proposed', supersededBy: null, closes: [], proposes: ['b'], replaces: ['p2'] },
+      ]);
+    });
+
+    it('a lower amendment goes in already superseded by a higher open proposal', () => {
+      expect(planTabSupersede([touched], [{ key: 'agency', value: 'Navy' }], 2, [open('p3', 3, 'Air Force')])).toEqual([
+        { index: 0, key: 'agency', status: 'superseded', supersededBy: { id: 'p3', amendmentNo: 3 }, closes: [], proposes: [], replaces: [] },
+      ]);
+    });
+
+    it('restating the open proposal is skipped; restating the row in force withdraws the proposal', () => {
+      expect(planTabSupersede([touched], [{ key: 'agency', value: 'navy' }], 3, [open('p2', 2, 'Navy')])[0])
+        .toMatchObject({ status: 'skip', replaces: [] });
+      expect(planTabSupersede([touched], [{ key: 'agency', value: 'Army' }], 3, [open('p2', 2, 'Navy')])[0])
+        .toMatchObject({ status: 'skip', replaces: ['p2'] });
+    });
+
+    it('with the touched row gone, the new row is in force and the open proposal is replaced', () => {
+      expect(planTabSupersede([row('u', 'agency', 0)], [{ key: 'agency', value: 'Air Force' }], 3, [open('p2', 2, 'Navy')])).toEqual([
+        { index: 0, key: 'agency', status: 'active', supersededBy: null, closes: ['u'], proposes: [], replaces: ['p2'] },
+      ]);
+    });
+
+    it('ends with the highest amendment proposed, whichever runs first', () => {
+      // In order: 2 proposes, then 3 replaces it.
+      expect(planTabSupersede([touched], [{ key: 'agency', value: 'Navy' }], 2)[0]).toMatchObject({ status: 'proposed', proposes: ['b'] });
+      expect(planTabSupersede([touched], [{ key: 'agency', value: 'Air Force' }], 3, [open('p2', 2, 'Navy')])[0])
+        .toMatchObject({ status: 'proposed', replaces: ['p2'] });
+      // Out of order: 3 proposes, then 2 goes in superseded by it.
+      expect(planTabSupersede([touched], [{ key: 'agency', value: 'Air Force' }], 3)[0]).toMatchObject({ status: 'proposed', proposes: ['b'] });
+      expect(planTabSupersede([touched], [{ key: 'agency', value: 'Navy' }], 2, [open('p3', 3, 'Air Force')])[0])
+        .toMatchObject({ status: 'superseded', supersededBy: { id: 'p3', amendmentNo: 3 } });
+    });
   });
 });

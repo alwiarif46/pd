@@ -21,22 +21,28 @@ type FactRow = typeof schema.bidFacts.$inferSelect;
 type ActivityRow = typeof schema.scheduleActivities.$inferSelect;
 
 /**
- * An open proposal: the replacement an amendment proposes for a row a user touched. `row` is the
- * proposed row (not in the tab's list until inserted); "Insert" confirms the link
- * (POST /api/amendment-links/:linkId/confirm), "Dismiss" rejects it.
+ * An open proposal: the replacement an amendment proposes on a key where a user touched a row.
+ * `row` is the proposed row (not in the tab's list until inserted). It has one proposed link per
+ * row it would replace; "Insert" (POST /api/amendment-links/:linkId/confirm, any of `linkIds`)
+ * and "Dismiss" (/reject) decide them all at once.
  */
 export interface TabProposal<T> {
+  /** The link to confirm or reject (the first of `linkIds`). */
   linkId: string;
+  linkIds: string[];
   amendmentId: string;
   amendmentNo: number | null;
-  /** The row it would replace (null when that row was removed meanwhile). */
-  oldRowId: string | null;
+  /** The active rows it would replace, touched or not (one removed meanwhile is left out). */
+  oldRowIds: string[];
   sourcePage: number | null;
   sourceQuote: string | null;
   row: T;
 }
 
-/** The open proposals on one of the bid's tab tables, oldest amendment first. */
+/**
+ * The open proposals on one of the bid's tab tables, oldest amendment first: one per proposed row,
+ * leaving out rows whose amendment's document was deleted (as pendingDateChange does).
+ */
 export async function tabProposals(db: Db, orgId: string, bidId: string, table: 'bid_facts'): Promise<TabProposal<FactRow>[]>;
 export async function tabProposals(db: Db, orgId: string, bidId: string, table: 'schedule_activities'): Promise<TabProposal<ActivityRow>[]>;
 export async function tabProposals(db: Db, orgId: string, bidId: string, table: TabRowTable): Promise<TabProposal<FactRow | ActivityRow>[]> {
@@ -50,13 +56,16 @@ export async function tabProposals(db: Db, orgId: string, bidId: string, table: 
     sourceQuote: schema.amendmentLinks.sourceQuote,
   }).from(schema.amendmentLinks)
     .innerJoin(schema.amendments, eq(schema.amendments.id, schema.amendmentLinks.amendmentId))
+    .innerJoin(schema.documents, eq(schema.documents.id, schema.amendments.documentId))
     .where(and(
       eq(schema.amendmentLinks.orgId, orgId),
       eq(schema.amendments.orgId, orgId),
+      eq(schema.documents.orgId, orgId),
       eq(schema.amendments.bidId, bidId),
       eq(schema.amendmentLinks.rowTable, table),
       eq(schema.amendmentLinks.status, 'proposed'),
       isNotNull(schema.amendmentLinks.newRowId),
+      sql`${schema.documents.liveStatus} is distinct from 'deleted'`,
     ))
     .orderBy(asc(schema.amendments.amendmentNo), asc(schema.amendmentLinks.createdAt), asc(schema.amendmentLinks.id));
   const ids = [...new Set(links.map((link) => link.newRowId!))];
@@ -70,23 +79,35 @@ export async function tabProposals(db: Db, orgId: string, bidId: string, table: 
     : await db.select().from(schema.scheduleActivities).where(and(
       inArray(schema.scheduleActivities.id, ids), eq(schema.scheduleActivities.bidId, bidId), eq(schema.scheduleActivities.orgId, orgId),
     ));
+  const oldIds = [...new Set(links.flatMap((link) => (link.oldRowId ? [link.oldRowId] : [])))];
+  const present = new Set(oldIds.length === 0 ? [] : (table === 'bid_facts'
+    ? await db.select({ id: schema.bidFacts.id }).from(schema.bidFacts).where(and(inArray(schema.bidFacts.id, oldIds), eq(schema.bidFacts.orgId, orgId)))
+    : await db.select({ id: schema.scheduleActivities.id }).from(schema.scheduleActivities)
+      .where(and(inArray(schema.scheduleActivities.id, oldIds), eq(schema.scheduleActivities.orgId, orgId)))).map((row) => row.id));
   const byId = new Map(rows.map((row) => [row.id, row]));
-  return links.flatMap((link) => {
+  const proposals = new Map<string, TabProposal<FactRow | ActivityRow>>();
+  for (const link of links) {
     const row = byId.get(link.newRowId!);
-    // A row inserted by a sibling link's confirm is in the tab already; only proposed rows are offered.
     if (!row || row.supersedeStatus !== PROPOSED) {
-      return [];
+      continue;
     }
-    return [{
+    const proposal = proposals.get(row.id) ?? {
       linkId: link.linkId,
+      linkIds: [],
       amendmentId: link.amendmentId,
       amendmentNo: link.amendmentNo,
-      oldRowId: link.oldRowId,
+      oldRowIds: [],
       sourcePage: link.sourcePage,
       sourceQuote: link.sourceQuote,
       row,
-    }];
-  });
+    };
+    proposal.linkIds.push(link.linkId);
+    if (link.oldRowId && present.has(link.oldRowId)) {
+      proposal.oldRowIds.push(link.oldRowId);
+    }
+    proposals.set(row.id, proposal);
+  }
+  return [...proposals.values()];
 }
 
 /** The schedule tab's pending date change (09 s5.11): an amendment moved the proposal due date. */
@@ -225,56 +246,77 @@ async function setSupersede(db: Db, orgId: string, table: TabRowTable, id: strin
 }
 
 /**
- * Confirm ("Insert") of a proposed supersede link on a tab table, under the caller's locks
- * (organization key share, bid, amendment, link). The proposed row joins the tab (active) and the
- * row it replaces becomes superseded by it (changed_by_amendment N); both changes go to row
- * history. 'new_row_missing' when the proposed row is gone; 'row_already_closed' when the old row
- * is still there but no longer active (another change replaced it first). An old row the user
- * removed meanwhile does not block the insert.
+ * The decision on a proposed supersede link of a tab table, under the caller's locks
+ * (organization key share, bid, amendment, the clicked link). A proposed row is one proposal with
+ * a link per row it would replace, so the decision covers all of them: the row's other proposed
+ * links are locked (by id) and decided the same way.
+ * - Confirm ("Insert"): the proposed row joins the tab (active) and every row it replaces that is
+ *   still there becomes superseded by it (changed_by_amendment N), with row history.
+ *   'new_row_missing' when the proposed row is gone; 'row_already_closed' when one of the old rows
+ *   is still there but no longer active (another change replaced it first); nothing changes then.
+ *   An old row the user removed meanwhile does not block the insert.
+ * - Reject ("Dismiss"): the links are rejected; the rows stay as they are (the proposed row stays
+ *   'proposed' and is never listed).
+ * The caller updates the clicked link and the amendment's status.
  */
-export async function confirmTabLink(
+export async function decideTabLink(
   db: Db,
   orgId: string,
   userId: string,
   bidId: string,
   table: TabRowTable,
-  link: { oldRowId: string | null; newRowId: string | null },
+  link: { id: string; newRowId: string | null },
+  status: 'confirmed' | 'rejected',
   amendmentNo: number | null,
 ): Promise<'ok' | 'new_row_missing' | 'row_already_closed'> {
   if (!link.newRowId) {
-    return 'new_row_missing';
+    return status === 'rejected' ? 'ok' : 'new_row_missing';
   }
-  const ids = [link.newRowId, ...(link.oldRowId ? [link.oldRowId] : [])];
-  const rows = await lockRows(db, orgId, bidId, table, ids);
-  const fresh = rows.find((row) => row.id === link.newRowId);
-  const old = link.oldRowId ? rows.find((row) => row.id === link.oldRowId) : undefined;
-  if (!fresh || (fresh.supersedeStatus !== PROPOSED && fresh.supersedeStatus !== 'active' && fresh.supersedeStatus !== null)) {
-    return 'new_row_missing';
-  }
-  if (old && old.supersedeStatus !== null && old.supersedeStatus !== 'active') {
-    return 'row_already_closed';
-  }
+  const siblings = await db.select({ id: schema.amendmentLinks.id, oldRowId: schema.amendmentLinks.oldRowId })
+    .from(schema.amendmentLinks).where(and(
+      eq(schema.amendmentLinks.newRowId, link.newRowId),
+      eq(schema.amendmentLinks.orgId, orgId),
+      eq(schema.amendmentLinks.rowTable, table),
+      eq(schema.amendmentLinks.status, 'proposed'),
+    )).orderBy(asc(schema.amendmentLinks.id)).for('update');
   const now = new Date();
-  const changes: { rowId: string; field: string; oldValue: string | null; newValue: string | null }[] = [];
-  if (fresh.supersedeStatus === PROPOSED) {
-    await setSupersede(db, orgId, table, fresh.id, { supersedeStatus: 'active', supersededByRowId: null, changedByAmendment: null }, now);
-    changes.push({ rowId: fresh.id, field: 'supersede_status', oldValue: PROPOSED, newValue: 'active' });
+  if (status === 'confirmed') {
+    const oldIds = [...new Set(siblings.flatMap((sibling) => (sibling.oldRowId ? [sibling.oldRowId] : [])))];
+    const rows = await lockRows(db, orgId, bidId, table, [link.newRowId, ...oldIds]);
+    const fresh = rows.find((row) => row.id === link.newRowId);
+    if (!fresh || (fresh.supersedeStatus !== PROPOSED && fresh.supersedeStatus !== 'active' && fresh.supersedeStatus !== null)) {
+      return 'new_row_missing';
+    }
+    const olds = rows.filter((row) => row.id !== fresh.id);
+    if (olds.some((old) => old.supersedeStatus !== null && old.supersedeStatus !== 'active')) {
+      return 'row_already_closed';
+    }
+    const changes: { rowId: string; field: string; oldValue: string | null; newValue: string | null }[] = [];
+    if (fresh.supersedeStatus === PROPOSED) {
+      await setSupersede(db, orgId, table, fresh.id, { supersedeStatus: 'active', supersededByRowId: null, changedByAmendment: null }, now);
+      changes.push({ rowId: fresh.id, field: 'supersede_status', oldValue: PROPOSED, newValue: 'active' });
+    }
+    for (const old of olds) {
+      const next = { supersedeStatus: 'superseded', supersededByRowId: fresh.id, changedByAmendment: amendmentNo };
+      await setSupersede(db, orgId, table, old.id, next, now);
+      const history = ([
+        ['supersede_status', old.supersedeStatus ?? 'active', next.supersedeStatus],
+        ['superseded_by_row_id', old.supersededByRowId, next.supersededByRowId],
+        ['changed_by_amendment', old.changedByAmendment === null ? null : String(old.changedByAmendment),
+          next.changedByAmendment === null ? null : String(next.changedByAmendment)],
+      ] as const).filter(([, before, after]) => before !== after);
+      changes.push(...history.map(([field, oldValue, newValue]) => ({ rowId: old.id, field, oldValue, newValue })));
+    }
+    if (changes.length > 0) {
+      await db.insert(schema.rowHistory).values(changes.map((change) => ({
+        orgId, rowTable: table, userId, changedAt: now, ...change,
+      })));
+    }
   }
-  if (old) {
-    const next = { supersedeStatus: 'superseded', supersededByRowId: fresh.id, changedByAmendment: amendmentNo };
-    await setSupersede(db, orgId, table, old.id, next, now);
-    const history = ([
-      ['supersede_status', old.supersedeStatus ?? 'active', next.supersedeStatus],
-      ['superseded_by_row_id', old.supersededByRowId, next.supersededByRowId],
-      ['changed_by_amendment', old.changedByAmendment === null ? null : String(old.changedByAmendment),
-        next.changedByAmendment === null ? null : String(next.changedByAmendment)],
-    ] as const).filter(([, before, after]) => before !== after);
-    changes.push(...history.map(([field, oldValue, newValue]) => ({ rowId: old.id, field, oldValue, newValue })));
-  }
-  if (changes.length > 0) {
-    await db.insert(schema.rowHistory).values(changes.map((change) => ({
-      orgId, rowTable: table, userId, changedAt: now, ...change,
-    })));
+  const others = siblings.filter((sibling) => sibling.id !== link.id).map((sibling) => sibling.id);
+  if (others.length > 0) {
+    await db.update(schema.amendmentLinks).set({ status, decidedBy: userId, updatedAt: now })
+      .where(and(inArray(schema.amendmentLinks.id, others), eq(schema.amendmentLinks.orgId, orgId)));
   }
   return 'ok';
 }
@@ -349,4 +391,31 @@ export async function renumberTabRows(
       await db.insert(schema.rowHistory).values(history);
     }
   }
+}
+
+/**
+ * Bid settings set the due date to `due` (PATCH /api/bids/:id, under its bid lock): an open
+ * amendment date change whose nextDue is that date is answered by it, and so is every lower
+ * amendment's open change (outdated by it), so none of them resurfaces later and moves the due
+ * date back. resolvedMode 'settings'. A date no change names resolves nothing.
+ */
+export async function resolveDateChangesForDue(db: Db, orgId: string, bidId: string, due: string, now: Date): Promise<void> {
+  const open = await db.select({ id: schema.amendments.id, amendmentNo: schema.amendments.amendmentNo, datesChanged: schema.amendments.datesChanged })
+    .from(schema.amendments).where(and(
+      eq(schema.amendments.bidId, bidId),
+      eq(schema.amendments.orgId, orgId),
+      isNotNull(schema.amendments.datesChanged),
+      sql`${schema.amendments.datesChanged}->>'resolvedAt' is null`,
+    ));
+  const matching = open.filter((row) => readDateChange(row.datesChanged)?.nextDue === due);
+  if (matching.length === 0) {
+    return;
+  }
+  const top = Math.max(...matching.map((row) => row.amendmentNo ?? 0));
+  const ids = open.filter((row) => matching.includes(row) || (row.amendmentNo ?? 0) < top).map((row) => row.id);
+  const resolved = JSON.stringify({ resolvedAt: now.toISOString(), resolvedMode: 'settings' });
+  await db.update(schema.amendments).set({
+    datesChanged: sql`${schema.amendments.datesChanged} || ${resolved}::jsonb`,
+    updatedAt: now,
+  }).where(and(inArray(schema.amendments.id, ids), eq(schema.amendments.orgId, orgId)));
 }

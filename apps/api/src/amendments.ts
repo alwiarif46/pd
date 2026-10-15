@@ -2,7 +2,7 @@ import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { isUuid, schema } from '@pd/core';
 import { requireAuth } from './context.js';
-import { confirmTabLink, isTabRowTable } from './amendment-tabs.js';
+import { decideTabLink, isTabRowTable } from './amendment-tabs.js';
 import { lockBid, shareOrg } from './credits.js';
 import { apiError } from './errors.js';
 import { findBid, inOrg } from './scope.js';
@@ -156,11 +156,12 @@ async function decide(
       return respond(409, apiError('link_already_decided'));
     }
     const now = new Date();
-    if (status === 'confirmed' && isTabRowTable(link.rowTable) && link.action === 'supersede') {
-      // Insert of an amendment's proposed fact or date (step 8): the proposed row joins the tab.
-      const confirmed = await confirmTabLink(db, orgId, userId, bid.id, link.rowTable, link, amendment.amendmentNo);
-      if (confirmed !== 'ok') {
-        return respond(409, apiError(confirmed));
+    if (isTabRowTable(link.rowTable) && link.action === 'supersede') {
+      // Insert or dismiss of an amendment's proposed fact or date (step 8): every link of the
+      // proposed row is decided with this one.
+      const decided = await decideTabLink(db, orgId, userId, bid.id, link.rowTable, link, status, amendment.amendmentNo);
+      if (decided !== 'ok') {
+        return respond(409, apiError(decided));
       }
     } else if (status === 'confirmed' && link.rowTable === 'compliance_rows' && link.oldRowId && (link.action === 'supersede' || link.action === 'withdraw')) {
       const ids = [link.oldRowId, ...(link.action === 'supersede' && link.newRowId ? [link.newRowId] : [])];

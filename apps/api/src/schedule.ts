@@ -342,7 +342,9 @@ export async function registerSchedule(app: FastifyInstance): Promise<void> {
    * (the amendment's previousDue when the bid has none; any sent are ignored), the bid's due date
    * is set to nextDue (the worker never changes it), and the change, and any
    * lower-numbered amendment's change still open, are resolved. 404 when the amendment is not on
-   * this bid or has no date change; 409 `date_change_resolved` when it was already answered; 400
+   * this bid, has no date change, or its document was deleted; 409 `date_change_resolved` when it
+   * was already answered or the bid's due date already is nextDue (the prompt must not set the due
+   * date before it answers); 400
    * `invalid_date` for shift or scale when the bid had no due date to move from (keep applies).
    */
   app.post('/api/bids/:id/schedule/adjust', { preHandler: requireAuth }, async (request, reply) => {
@@ -386,8 +388,11 @@ export async function registerSchedule(app: FastifyInstance): Promise<void> {
           eq(schema.amendments.bidId, bid.id),
           eq(schema.amendments.orgId, orgId),
         )).for('update');
+        const [source] = amendment ? await db.select({ liveStatus: schema.documents.liveStatus }).from(schema.documents)
+          .where(and(eq(schema.documents.id, amendment.documentId), eq(schema.documents.orgId, orgId))) : [];
         const change = amendment ? readDateChange(amendment.datesChanged) : null;
-        if (!amendment || !change) {
+        // A deleted amendment's change is not offered (pendingDateChange), so it is not answered.
+        if (!amendment || !change || !source || source.liveStatus === 'deleted') {
           return respond(404, { error: 'This amendment has no date change' });
         }
         if (change.resolvedAt !== null) {
@@ -396,6 +401,12 @@ export async function registerSchedule(app: FastifyInstance): Promise<void> {
         // The schedule moves from the due date in force now: the one the amendment saw may have
         // moved since (another amendment's change answered, or Bid settings).
         const currentDue = lockedBid?.dueDate ? toIsoDate(lockedBid.dueDate) : change.previousDue;
+        // The due date is already the new one (set some other way): moving from it would move
+        // nothing and still close the prompt, so the answer is refused and nothing changes. The
+        // prompt answers with the amendmentId alone; it never sets the due date first.
+        if (currentDue === change.nextDue) {
+          return respond(409, apiError('date_change_resolved'));
+        }
         if (mode !== 'keep' && currentDue === null) {
           return respond(400, apiError('invalid_date', 'The bid had no due date to move from. Keep the dates instead.'));
         }

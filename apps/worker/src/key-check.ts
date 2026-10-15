@@ -25,6 +25,13 @@ export type KeyCheckOutcome = 'proceed' | 'held' | 'needs_number' | 'tabs' | 'st
 const PENDING = 'PENDING';
 
 /**
+ * How long step 8 may stay pending before a rerun of the key check (a classify retry, a recheck)
+ * queues it again. Well above a step 8 run (one model call). amendments.updated_at is written by
+ * the app clock only, so it is compared with the app clock.
+ */
+export const TABS_STALE_MS = 15 * 60_000;
+
+/**
  * The amendment solicitation-number check (04 s3.1 step 1, 06 s4), run after text extraction and
  * classify and before any AI step. Decision table:
  * - document missing or deleted: no write, stop;
@@ -124,11 +131,15 @@ async function decide(
     eq(schema.amendments.documentId, document.id),
     eq(schema.amendments.orgId, payload.orgId),
   )).for('update');
-  if (existing && (existing.status === 'applied' || existing.status === 'needs_confirmation') && existing.tabsStatus === 'failed') {
+  // A step 8 that failed, or that has been pending longer than TABS_STALE_MS (its job lost to a
+  // crash or a Redis flush), is queued again. A duplicate of a job still running is harmless: the
+  // tabs_status gate lets one write.
+  const stale = existing?.tabsStatus === 'pending' && existing.updatedAt.getTime() < Date.now() - TABS_STALE_MS;
+  if (existing && (existing.status === 'applied' || existing.status === 'needs_confirmation')
+    && (existing.tabsStatus === 'failed' || stale)) {
     await db.update(schema.amendments).set({ tabsStatus: 'pending', updatedAt: new Date() }).where(and(
       eq(schema.amendments.id, existing.id),
       eq(schema.amendments.orgId, payload.orgId),
-      eq(schema.amendments.tabsStatus, 'failed'),
     ));
     return 'tabs';
   }
