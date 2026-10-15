@@ -10,7 +10,7 @@ import {
   checkPassword,
   useAuthForm,
 } from './AuthLayout';
-import type { ResetPasswordProps } from '@/types';
+import type { ResetPasswordProps } from './types';
 
 const CHECKS = {
   password: checkPassword,
