@@ -46,7 +46,14 @@ export async function runKeyCheck(payload: JobPayload): Promise<KeyCheckOutcome>
     return decided;
   });
   if (outcome === 'proceed') {
-    await enqueue('ai:amendment', payload);
+    try {
+      await enqueue('ai:amendment', payload);
+    } catch (error) {
+      // The classify row (if any) is already closed: record a failed classify step the user can
+      // retry from the Processing panel (the retry queues classify, and the rerun is idempotent).
+      await recordQueueFailure(payload);
+      throw error;
+    }
   }
   return outcome;
 }
@@ -135,6 +142,25 @@ async function setDocumentKey(db: Db, payload: JobPayload, keyStatus: NonNullabl
     eq(schema.documents.id, payload.documentId),
     eq(schema.documents.orgId, payload.orgId),
   ));
+}
+
+/** Inserts a failed classify job row for the document; logged, never thrown (the caller throws). */
+async function recordQueueFailure(payload: JobPayload): Promise<void> {
+  try {
+    await withOrg(payload.orgId, async (db) => {
+      await db.insert(schema.jobs).values({
+        orgId: payload.orgId,
+        bidId: payload.bidId,
+        documentId: payload.documentId,
+        type: 'classify',
+        status: 'failed',
+        error: 'The amendment step could not be queued. Retry it.',
+        finishedAt: new Date(),
+      });
+    });
+  } catch (error) {
+    console.error(`Could not record the failed amendment queue for document ${payload.documentId}`, error);
+  }
 }
 
 /**

@@ -21,8 +21,12 @@ vi.mock('../src/queue.js', () => ({
 }));
 
 const enqueued = vi.hoisted(() => [] as { name: string; documentId: string; jobId: string }[]);
+const queueDown = vi.hoisted(() => ({ value: false }));
 vi.mock('../../worker/src/enqueue.js', () => ({
   enqueue: vi.fn(async (name: string, payload: { documentId: string; jobId: string }) => {
+    if (queueDown.value) {
+      throw new Error('redis down');
+    }
     enqueued.push({ name, documentId: payload.documentId, jobId: payload.jobId });
   }),
 }));
@@ -218,6 +222,12 @@ describe.skipIf(Boolean(unavailable))('amendment solicitation key check', () => 
     expect((await amendmentRows(tenant, documentId))[0]).toMatchObject({ status: 'held', solicitationKeyFound: false });
     expect(await dto(tenant, documentId)).toEqual({ keyCheck: 'mismatch', keyReason: 'bid_key_pending', keyFound: BID_NUMBER });
     expect(queuedFor(documentId)).toHaveLength(0);
+    // An override is refused: setting the bid's number is free and rechecks the amendment.
+    const override = await as(app, tenant.token)('POST', `/api/documents/${documentId}/key-override`, { reason: 'x' });
+    expect(override.statusCode).toBe(409);
+    expect(override.json<{ code: string }>().code).toBe('set_bid_number_first');
+    expect((await bidRow(tenant)).keyOverridesUsed).toBe(0);
+    expect(enqueueClassify).not.toHaveBeenCalled();
 
     const patched = await as(app, tenant.token)('PATCH', `/api/bids/${tenant.bidId}`, { solicitationNumber: BID_NUMBER });
     expect(patched.statusCode, patched.body).toBe(200);
@@ -231,7 +241,7 @@ describe.skipIf(Boolean(unavailable))('amendment solicitation key check', () => 
       eq(schema.auditLog.targetId, tenant.bidId),
     )));
     expect(audits).toHaveLength(1);
-    expect(audits[0].detail).toMatchObject({ previousKey: 'PENDING', solicitationKey: BID_KEY, rechecked: 1 });
+    expect(audits[0].detail).toEqual({ previousKey: 'PENDING', solicitationKey: BID_KEY });
 
     await classify.processClassify(payload(tenant, documentId, calls[0].jobId));
     expect((await amendmentRows(tenant, documentId))[0]).toMatchObject({ status: 'processing', solicitationKeyFound: true, matchedKey: BID_KEY });
@@ -243,6 +253,26 @@ describe.skipIf(Boolean(unavailable))('amendment solicitation key check', () => 
     vi.mocked(enqueueClassify).mockClear();
     expect((await as(app, tenant.token)('PATCH', `/api/bids/${tenant.bidId}`, { name: 'Renamed' })).statusCode).toBe(200);
     expect(enqueueClassify).not.toHaveBeenCalled();
+  });
+
+  it('a failed ai:amendment queue after a match leaves a failed classify job to retry', async () => {
+    const tenant = await setup('ak-queue-down');
+    const documentId = await amendmentDoc(tenant, `Solicitation No. ${BID_NUMBER}`);
+    queueDown.value = true;
+    try {
+      await expect(classify.processClassify(payload(tenant, documentId))).rejects.toThrow('redis down');
+    } finally {
+      queueDown.value = false;
+    }
+    const jobs = await withOrg(tenant.orgId, (db) => db.select().from(schema.jobs).where(eq(schema.jobs.documentId, documentId)));
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ type: 'classify', status: 'failed' });
+    // The retry route needs the file on the server; the seeded document has a storage path.
+    const retried = await as(app, tenant.token)('POST', `/api/jobs/${jobs[0].id}/retry`);
+    expect(retried.statusCode, retried.body).toBe(200);
+    await classify.processClassify(payload(tenant, documentId, retried.json<{ id: string }>().id));
+    expect(queuedFor(documentId)).toHaveLength(1);
+    expect((await amendmentRows(tenant, documentId))).toHaveLength(1);
   });
 
   it('an override spends one, audits it, queues classify, and the rerun applies the amendment', async () => {
@@ -497,32 +527,100 @@ describe.skipIf(Boolean(unavailable))('amendment solicitation key check', () => 
     }
   });
 
-  it('an override or a key check and an upload start on the same bid that collide do not deadlock', async () => {
+  /**
+   * Like `race`, but starts the contenders one at a time, each only once the one before it is
+   * blocked on a lock, so they queue (and are granted the lock) in the order given.
+   */
+  async function raceInOrder(orgId: string, sql: string, params: unknown[], contenders: (() => Promise<unknown>)[]) {
+    const holder = new pg.Client({ connectionString: inject('appUrl') });
+    await holder.connect();
+    await holder.query('begin');
+    await holder.query("select set_config('app.org_id', $1, true)", [orgId]);
+    await holder.query(sql, params);
+    const started: Promise<unknown>[] = [];
+    let waiting = 0;
+    for (const contender of contenders) {
+      started.push(contender());
+      const deadline = Date.now() + 10_000;
+      do {
+        await holder.query('select pg_stat_clear_snapshot()');
+        const result = await holder.query<{ n: number }>(
+          "select count(*)::int as n from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid() and wait_event_type = 'Lock'",
+        );
+        waiting = result.rows[0].n;
+      } while (waiting < started.length && Date.now() < deadline);
+    }
+    await holder.query('commit');
+    await holder.end();
+    return { waiting, results: await Promise.allSettled(started) };
+  }
+
+  it('an upload start colliding with an override, a key check, a document delete or a bid delete never deadlocks, in either order', async () => {
+    type Case = { name: string; ok: number[]; run: (tenant: Tenant, held: string, fresh: string) => Promise<Reply> };
+    const cases: Case[] = [
+      { name: 'override', ok: [200], run: (tenant, held) => as(app, tenant.token)('POST', `/api/documents/${held}/key-override`, { reason: 'race' }) as Promise<Reply> },
+      { name: 'key check', ok: [200], run: (tenant, _held, fresh) => classify.processClassify(payload(tenant, fresh)).then(() => ({ statusCode: 200, body: '' }) as Reply) },
+      // The solicitation: deleting it locks the bid.
+      { name: 'document delete', ok: [200], run: (tenant) => as(app, tenant.token)('DELETE', `/api/documents/${tenant.documentId}`) as Promise<Reply> },
+      { name: 'bid delete', ok: [200], run: (tenant) => as(app, tenant.token)('DELETE', `/api/bids/${tenant.bidId}`) as Promise<Reply> },
+    ];
     for (let round = 0; round < 3; round += 1) {
-      const tenant = await setup(`ak-race-upload-${round}`);
-      const held = await heldAmendment(tenant);
-      const fresh = await amendmentDoc(tenant, `Solicitation No. ${BID_NUMBER}`);
-      const call = as(app, tenant.token);
-      const start = () => call('POST', `/api/bids/${tenant.bidId}/uploads`, {
-        fileName: 'amd.pdf', kind: 'amendment', declaredSize: 10, sha256: randomUUID().replace(/-/g, '').padEnd(64, '0'), chunkCount: 1,
-      });
-      // The upload start holds the organization row, then waits on the bid; the override and the
-      // key check share the organization row before they wait on the bid.
-      for (const contender of [
-        () => call('POST', `/api/documents/${held}/key-override`, { reason: 'race' }),
-        () => classify.processClassify(payload(tenant, fresh)).then(() => ({ statusCode: 200, body: '' })),
-      ]) {
-        const { waiting, results } = await race(tenant.orgId, 'select id from bids where id = $1 for update', [tenant.bidId], 2, () => [
-          contender(),
-          start(),
-        ]);
-        expect(waiting).toBe(2);
-        const [first, uploaded] = results.map((result) => fulfilled(result) as Reply);
-        expect(first.statusCode, first.body).toBe(200);
-        expect(uploaded.statusCode, uploaded.body).toBe(201);
+      for (const item of cases) {
+        for (const uploadFirst of [false, true]) {
+          const tenant = await setup(`ak-race-upload-${round}`);
+          const held = await heldAmendment(tenant);
+          const fresh = await amendmentDoc(tenant, `Solicitation No. ${BID_NUMBER}`);
+          const start = () => as(app, tenant.token)('POST', `/api/bids/${tenant.bidId}/uploads`, {
+            fileName: 'amd.pdf', kind: 'amendment', declaredSize: 10, sha256: randomUUID().replace(/-/g, '').padEnd(64, '0'), chunkCount: 1,
+          }) as Promise<Reply>;
+          const contender = () => item.run(tenant, held, fresh);
+          // The upload start holds the organization row FOR UPDATE, then waits on the bid; the
+          // others share the organization row before they wait on the bid.
+          const { waiting, results } = await raceInOrder(tenant.orgId, 'select id from bids where id = $1 for update', [tenant.bidId],
+            uploadFirst ? [start, contender] : [contender, start]);
+          const label = `${item.name}, upload ${uploadFirst ? 'first' : 'second'}`;
+          expect(waiting, label).toBe(2);
+          const [uploaded, other] = (uploadFirst ? results : [results[1], results[0]]).map((result) => fulfilled(result) as Reply);
+          expect(item.ok, `${label}: ${other.body}`).toContain(other.statusCode);
+          // A delete that went first leaves no solicitation (409 solicitation_first) or no bid (404).
+          expect([201, 404, 409], `${label}: ${uploaded.body}`).toContain(uploaded.statusCode);
+          if (item.name === 'override' || item.name === 'key check') {
+            expect(uploaded.statusCode, label).toBe(201);
+          }
+        }
       }
-      expect((await amendmentRows(tenant, held))[0]).toMatchObject({ keyOverride: true, status: 'processing' });
-      expect((await amendmentRows(tenant, fresh))[0]).toMatchObject({ solicitationKeyFound: true, status: 'processing' });
+    }
+  });
+
+  it('a PATCH that sets the key and a key check that holds on PENDING: the amendment is rechecked in either order', async () => {
+    for (let round = 0; round < 3; round += 1) {
+      for (const checkFirst of [true, false]) {
+        vi.mocked(enqueueClassify).mockClear();
+        enqueued.length = 0;
+        const tenant = await setup(`ak-race-pending-${round}`, { key: 'PENDING' });
+        const documentId = await amendmentDoc(tenant, `Amendment of Solicitation No. ${BID_NUMBER}`);
+        const check = () => classify.processClassify(payload(tenant, documentId));
+        const patch = () => as(app, tenant.token)('PATCH', `/api/bids/${tenant.bidId}`, { solicitationNumber: BID_NUMBER });
+        const { waiting, results } = await raceInOrder(tenant.orgId, 'select id from bids where id = $1 for update', [tenant.bidId],
+          checkFirst ? [check, patch] : [patch, check]);
+        expect(waiting).toBe(2);
+        const patched = fulfilled(results[checkFirst ? 1 : 0]) as Reply;
+        fulfilled(results[checkFirst ? 0 : 1]);
+        expect(patched.statusCode, patched.body).toBe(200);
+        const [row] = await amendmentRows(tenant, documentId);
+        const calls = vi.mocked(enqueueClassify).mock.calls.map(([job]) => job).filter((job) => job.documentId === documentId);
+        if (checkFirst) {
+          // The check held on PENDING, then PATCH rechecked it after COMMIT.
+          expect(row.status).toBe('held');
+          expect(calls).toHaveLength(1);
+          await classify.processClassify(payload(tenant, documentId, calls[0].jobId));
+        } else {
+          // The check ran after the key was set and matched at once; nothing to recheck.
+          expect(calls).toHaveLength(0);
+        }
+        expect((await amendmentRows(tenant, documentId))[0]).toMatchObject({ status: 'processing', solicitationKeyFound: true });
+        expect(queuedFor(documentId)).toHaveLength(1);
+      }
     }
   });
 

@@ -257,6 +257,11 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       if (document.kind !== 'amendment') {
         return { code: 409, body: apiError('not_an_amendment') };
       }
+      // Held only because the bid has no number yet: setting it is free and rechecks the
+      // amendment, so an override (which is never refunded) is not spent on it.
+      if (document.keyStatus === 'bid_key_pending') {
+        return { code: 409, body: apiError('set_bid_number_first') };
+      }
       const [locked] = await lockBid(db, orgId, document.bidId);
       if (!locked) {
         return { code: 404, body: { error: 'Bid not found' } };
@@ -300,7 +305,9 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       }).where(and(eq(schema.amendments.id, amendment.id), eq(schema.amendments.orgId, orgId)));
       await db.update(schema.documents).set({ keyStatus: 'overridden', updatedAt: new Date() })
         .where(and(eq(schema.documents.id, documentId), eq(schema.documents.orgId, orgId)));
-      // Identifiers and the user's reason only, never document text.
+      // Identifiers, the user's reason, the bid key, and `foundNumber`: documents.key_found, a
+      // short slice of the amendment's page text (a labelled number of at most 44 characters, or
+      // the matched run of the bid key). No other document text.
       await db.insert(schema.auditLog).values({
         orgId,
         userId: auth.userId,
@@ -514,6 +521,9 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
     const documentId = (request.params as { id: string }).id;
     const files: string[] = [];
     const result = await inOrg(reply, orgId, async (db, respond) => {
+      // The audit row inserted at the end takes FOR KEY SHARE on the organization; take it before
+      // the document and the bid (lock order, credits.ts shareOrg).
+      await shareOrg(db, orgId);
       const document = await findDocument(db, orgId, documentId);
       if (!document) {
         return respond(404, { error: 'Document not found' });

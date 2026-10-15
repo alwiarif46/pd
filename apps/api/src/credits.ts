@@ -26,7 +26,13 @@ import type { Db } from './scope.js';
  *   or locked after the bid). Key override, the worker's amendment key check and its
  *   amendment write each lock the document, then the bid, then the amendment. Document
  *   delete and the worker's matrix write lock the document before the bid. PATCH of a bid
- *   locks only the bid; moving its key off PENDING inserts recheck jobs, without row locks.
+ *   key-shares the organization, then locks the bid; when its key moves off PENDING it inserts
+ *   recheck jobs after COMMIT, in a second transaction that holds no bid lock.
+ *   Every transaction that inserts rows (audit_log, jobs, amendments, links) after locking a
+ *   bid takes `shareOrg` before the bid: PATCH of a bid, document delete, key override, the
+ *   worker's key check and amendment write take it first; bid delete takes it after its
+ *   document and session locks (so it never holds the organization while waiting on a session
+ *   that upload complete holds before its organization lock).
  * - A bid's reservation changes state only through a conditional UPDATE on
  *   `bids.credit_status = 'reserved'`. Whoever wins that row settles the counter; everyone else
  *   sees no row and does nothing, so a reservation is released or consumed at most once.
