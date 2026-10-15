@@ -1,6 +1,11 @@
 import { type AnyPgColumn, index, pgTable, uniqueIndex, uuid, text, timestamp, boolean, integer, jsonb, decimal } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
+/** documents.key_status values (migration 0008). */
+export type KeyStatus = 'match' | 'mismatch' | 'not_found' | 'bid_key_pending' | 'overridden';
+/** amendments.status values (migration 0008). */
+export type AmendmentStatus = 'held' | 'processing' | 'needs_confirmation' | 'applied';
+
 // Base columns for all tables
 const baseColumns = {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -173,6 +178,11 @@ export const documents = pgTable('documents', {
   // the retention job will store it here.
   liveUntil: timestamp('live_until'),
   liveStatus: text('live_status').$type<'live' | 'archived' | 'restore_requested' | 'restoring' | 'restored' | 'deleted'>(),
+  // Amendments only: the solicitation-number check (04 s3.1 step 1); null until it runs and on
+  // every other kind. CHECK documents_key_status_check (migration 0008, hand-written).
+  keyStatus: text('key_status').$type<KeyStatus>(),
+  // The number the check found: the matched text on a match, else the top labelled candidate.
+  keyFound: text('key_found'),
 });
 
 export const uploadSessions = pgTable('upload_sessions', {
@@ -202,9 +212,16 @@ export const amendments = pgTable('amendments', {
   solicitationKeyFound: boolean('solicitation_key_found').notNull(),
   keyOverride: boolean('key_override').notNull().default(false),
   overrideReason: text('override_reason'),
-  status: text('status').notNull().$type<'processing' | 'needs_confirmation' | 'applied'>(),
+  // CHECK amendments_status_check (migration 0008, hand-written). 'held': the key check did not
+  // match and there is no override, so no AI step runs.
+  status: text('status').notNull().$type<AmendmentStatus>(),
   datesChanged: jsonb('dates_changed'),
-});
+  // The bid key the check compared against; the AI write goes ahead only while the bid has it.
+  matchedKey: text('matched_key'),
+}, (table) => ({
+  // One amendments row per document (migration 0008 dedupes first); the key check upserts on it.
+  document: uniqueIndex('amendments_document_uq').on(table.documentId),
+}));
 
 export const amendmentLinks = pgTable('amendment_links', {
   ...baseColumns,
