@@ -1,8 +1,10 @@
 import { checkDocumentForMarkings } from './marking-checker';
 import {
   chunkPages,
+  type ClassifiedPage,
   classifyPages,
   preScan,
+  type PageRole,
   type PageText,
   type PreScanHit,
   type TextChunk,
@@ -201,14 +203,42 @@ async function completeJson(provider: ModelProvider, system: string, user: strin
   return { json: response.json, tokens: response.usage.totalTokens };
 }
 
-export async function extractComplianceMatrix(input: {
+/** Passes 1 to 4: what extractRows returns. */
+export interface ExtractedRows {
+  /** Quote-checked rows with req ids assigned by section prefix from 01 (C.3.1-01 style). */
+  requirements: ComplianceRequirement[];
+  /** The pre-scan hits of the pages (pass 6 input). */
+  hits: PreScanHit[];
+  /** The pages, classified by role (pass 5 input on the solicitation path). */
+  classified: ClassifiedPage[];
+  dueDate?: string;
+  dueTime?: string;
+  timeZone?: string;
+  tokensUsed: number;
+  chunksProcessed: number;
+  quoteCheckFailures: number;
+  quoteCheckFailureRate: number;
+  droppedRows: number;
+  skillName: string;
+  skillVersion: string;
+}
+
+function complianceSystem(): { system: string; skill: ReturnType<typeof loadSkill> } {
+  const skill = loadSkill('compliance-matrix');
+  return { skill, system: buildSystemPrompt(skill, 'Follow the compliance-matrix instructions.') };
+}
+
+/**
+ * Passes 1 to 4 (04 s3): extract per chunk, merge and dedupe, verify per chunk (missed rows added,
+ * doubtful rows flagged, never dropped), quote check (rules 1 and 2: a row whose quote is on no
+ * page is dropped and counted). Rows get `amendmentNo` (0 unless given).
+ */
+export async function extractRows(input: {
   pages: PageText[];
   provider: ModelProvider;
   config: PipelineConfig;
   amendmentNo?: number;
-  stopAfterQuoteCheck?: boolean;
-}): Promise<PipelineResult> {
-  const started = Date.now();
+}): Promise<ExtractedRows> {
   const amendmentNo = input.amendmentNo ?? 0;
   const marking = checkDocumentForMarkings(input.pages.map((page) => ({ text: page.text, pageNo: page.pageNo })));
   if (marking.shouldReject) {
@@ -218,8 +248,7 @@ export async function extractComplianceMatrix(input: {
     throw new Error(`Marking confirmation required: ${marking.markings.map((item) => item.marking).join(', ')}`);
   }
 
-  const skill = loadSkill('compliance-matrix');
-  const system = buildSystemPrompt(skill, 'Follow the compliance-matrix instructions.');
+  const { skill, system } = complianceSystem();
   const classified = classifyPages(input.pages);
   const chunks = chunkPages(classified, input.config.chunkTokens ?? 30_000);
   const scan = preScan(input.pages);
@@ -301,87 +330,120 @@ export async function extractComplianceMatrix(input: {
       sourcePageEnd: location.pageEnd,
     });
   }
-  const quoteCheckFailureRate = merged.length === 0 ? 0 : quoteCheckFailures / merged.length;
   assignIds(quoted);
-
-  if (input.stopAfterQuoteCheck) {
-    const ratesEarly = pricePerMillion(input.config.providerName);
-    return {
-      requirements: quoted,
-      checkThese: [],
-      dueDate,
-      dueTime,
-      timeZone,
-      metadata: {
-        processingTimeMs: Date.now() - started,
-        tokensUsed,
-        costUsd: (tokensUsed / 1_000_000) * ratesEarly.input,
-        chunksProcessed: chunks.length,
-        quoteCheckFailures,
-        quoteCheckFailureRate,
-        droppedRows,
-        skillName: skill.name,
-        skillVersion: skill.version,
-      },
-    };
-  }
-
-  const instructionPages = classified.filter((page) => page.role === 'instructions' || page.role === 'evaluation');
-  if (instructionPages.length > 0 && quoted.length > 0) {
-    const mapped = await completeJson(
-      input.provider,
-      system,
-      `Pass 5 map. For each row id set instrRef, evalRef, and responseSection, or null. JSON shape: {"rows":[{"id":"","instrRef":null,"evalRef":null,"responseSection":null}]}\nRows:\n${JSON.stringify(quoted)}\nPages:\n${instructionPages.map((page) => `[page ${page.pageNo}]\n${page.text}`).join('\n\n')}`,
-      { type: 'object', properties: { rows: { type: 'array' } }, required: ['rows'] },
-      input.config.maxOutputTokens,
-    );
-    tokensUsed += mapped.tokens;
-    if (!isRecord(mapped.json) || !Array.isArray(mapped.json.rows)) {
-      throw new Error('Map JSON is missing rows');
-    }
-    for (const item of mapped.json.rows) {
-      if (!isRecord(item) || typeof item.id !== 'string') {
-        throw new Error('Map row is missing id');
-      }
-      const row = quoted.find((candidate) => candidate.id === item.id);
-      if (!row) {
-        continue;
-      }
-      const instrRef = readNullableString(item.instrRef);
-      const evalRef = readNullableString(item.evalRef);
-      const responseSection = readNullableString(item.responseSection);
-      if (instrRef) row.instrRef = instrRef;
-      if (evalRef) row.evalRef = evalRef;
-      if (responseSection) row.responseSection = responseSection;
-    }
-  }
-
-  const checkThese = scan.requirements.filter((hit) => {
-    if (hit.kind === 'informational') {
-      return false;
-    }
-    return !quoted.some((row) => quoteCoverage(hit.text, row.sourceQuote) >= 0.8 || quoteCoverage(row.sourceQuote, hit.text) >= 0.8);
-  });
-
-  const rates = pricePerMillion(input.config.providerName);
   return {
     requirements: quoted,
-    checkThese,
+    hits: scan.requirements,
+    classified,
     dueDate,
     dueTime,
     timeZone,
+    tokensUsed,
+    chunksProcessed: chunks.length,
+    quoteCheckFailures,
+    quoteCheckFailureRate: merged.length === 0 ? 0 : quoteCheckFailures / merged.length,
+    droppedRows,
+    skillName: skill.name,
+    skillVersion: skill.version,
+  };
+}
+
+/**
+ * Pass 5 (04 s3): instruction reference, evaluation factor and response section per row, from
+ * the `instructions` and `evaluation` pages among `pages` (a page with no role is classified).
+ * Sets the fields the model names on `rows` in place, by row id; leaves the others unset. No
+ * model call when there are no such pages or no rows. Returns the tokens used.
+ */
+export async function mapRows(input: {
+  rows: ComplianceRequirement[];
+  pages: (PageText & { role?: PageRole | null })[];
+  provider: ModelProvider;
+  config: PipelineConfig;
+}): Promise<{ tokensUsed: number }> {
+  const instructionPages = input.pages
+    .map((page) => (page.role ? page as ClassifiedPage : classifyPages([page])[0]))
+    .filter((page) => page.role === 'instructions' || page.role === 'evaluation');
+  if (instructionPages.length === 0 || input.rows.length === 0) {
+    return { tokensUsed: 0 };
+  }
+  const { system } = complianceSystem();
+  const mapped = await completeJson(
+    input.provider,
+    system,
+    `Pass 5 map. For each row id set instrRef, evalRef, and responseSection, or null. JSON shape: {"rows":[{"id":"","instrRef":null,"evalRef":null,"responseSection":null}]}\nRows:\n${JSON.stringify(input.rows)}\nPages:\n${instructionPages.map((page) => `[page ${page.pageNo}]\n${page.text}`).join('\n\n')}`,
+    { type: 'object', properties: { rows: { type: 'array' } }, required: ['rows'] },
+    input.config.maxOutputTokens,
+  );
+  if (!isRecord(mapped.json) || !Array.isArray(mapped.json.rows)) {
+    throw new Error('Map JSON is missing rows');
+  }
+  for (const item of mapped.json.rows) {
+    if (!isRecord(item) || typeof item.id !== 'string') {
+      throw new Error('Map row is missing id');
+    }
+    const row = input.rows.find((candidate) => candidate.id === item.id);
+    if (!row) {
+      continue;
+    }
+    const instrRef = readNullableString(item.instrRef);
+    const evalRef = readNullableString(item.evalRef);
+    const responseSection = readNullableString(item.responseSection);
+    if (instrRef) row.instrRef = instrRef;
+    if (evalRef) row.evalRef = evalRef;
+    if (responseSection) row.responseSection = responseSection;
+  }
+  return { tokensUsed: mapped.tokens };
+}
+
+/**
+ * Pass 6 (04 s3): the pre-scan hits no row covers (80% quote overlap either way), shown as
+ * "check these". Informational hits are never listed.
+ */
+export function coverage(hits: PreScanHit[], rows: ComplianceRequirement[]): PreScanHit[] {
+  return hits.filter((hit) => {
+    if (hit.kind === 'informational') {
+      return false;
+    }
+    return !rows.some((row) => quoteCoverage(hit.text, row.sourceQuote) >= 0.8 || quoteCoverage(row.sourceQuote, hit.text) >= 0.8);
+  });
+}
+
+/** The solicitation path: passes 1 to 4 (extractRows), 5 (mapRows) and 6 (coverage) in order. */
+export async function extractComplianceMatrix(input: {
+  pages: PageText[];
+  provider: ModelProvider;
+  config: PipelineConfig;
+  amendmentNo?: number;
+}): Promise<PipelineResult> {
+  const started = Date.now();
+  const extracted = await extractRows(input);
+  const quoted = extracted.requirements;
+  const map = await mapRows({ rows: quoted, pages: extracted.classified, provider: input.provider, config: input.config });
+  const tokensUsed = extracted.tokensUsed + map.tokensUsed;
+  const rates = pricePerMillion(input.config.providerName);
+  return {
+    requirements: quoted,
+    checkThese: coverage(extracted.hits, quoted),
+    dueDate: extracted.dueDate,
+    dueTime: extracted.dueTime,
+    timeZone: extracted.timeZone,
     metadata: {
       processingTimeMs: Date.now() - started,
       tokensUsed,
       costUsd: (tokensUsed / 1_000_000) * rates.input,
-      chunksProcessed: chunks.length,
-      quoteCheckFailures,
-      quoteCheckFailureRate,
-      droppedRows,
-      skillName: skill.name,
-      skillVersion: skill.version,
+      chunksProcessed: extracted.chunksProcessed,
+      quoteCheckFailures: extracted.quoteCheckFailures,
+      quoteCheckFailureRate: extracted.quoteCheckFailureRate,
+      droppedRows: extracted.droppedRows,
+      skillName: extracted.skillName,
+      skillVersion: extracted.skillVersion,
     },
   };
+}
+
+/** Cost of `tokens` input tokens at the provider's list price (provisional, 04 s7). */
+export function costOf(providerName: string, tokens: number): number {
+  return (tokens / 1_000_000) * pricePerMillion(providerName).input;
 }
 
 function dedupeRows(rows: ComplianceRequirement[]): ComplianceRequirement[] {
