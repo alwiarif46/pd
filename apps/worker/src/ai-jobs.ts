@@ -10,7 +10,8 @@ import {
   type PageText,
   type PreScanHit,
 } from '@pd/ai';
-import { schema, withOrg } from '@pd/core';
+import { normalizeSolicitationKey, schema, withOrg } from '@pd/core';
+import { shareOrg } from './key-check.js';
 import type { JobPayload } from './redis.js';
 
 function isUuid(value: string): boolean {
@@ -326,11 +327,49 @@ export async function processDates(payload: JobPayload): Promise<void> {
   });
 }
 
+/** True when an amendments row may run its AI step: processing, and matched or overridden. */
+function amendmentMayRun(row: { status: string; solicitationKeyFound: boolean; keyOverride: boolean } | undefined): boolean {
+  return Boolean(row && row.status === 'processing' && (row.solicitationKeyFound || row.keyOverride));
+}
+
+/**
+ * The amendment diff (04 s3.1 steps 3 to 5) for an amendment the key check let through. Only the
+ * key check queues this step; it still re-checks everything, because a held or stale job must
+ * neither spend tokens nor write rows:
+ * - before the AI call (no lock): the amendments row is processing and matched or overridden, and
+ *   the document is not deleted;
+ * - in the write transaction, lock order documents -> bids -> amendments (credits.ts): the
+ *   document is still live, the bid's credit is still reserved or consumed, the bid key is still
+ *   the one the check matched (unless overridden), and the row is still processing. The existing
+ *   row's status is updated (never a second row), so a second run finds it past processing and
+ *   writes nothing. Two runs can both pay for the AI call (an original job and an override's);
+ *   only one writes.
+ */
 export async function processAmendmentJob(payload: JobPayload): Promise<void> {
+  const ready = await withOrg(payload.orgId, async (db) => {
+    const [document] = await db.select({ liveStatus: schema.documents.liveStatus }).from(schema.documents).where(and(
+      eq(schema.documents.id, payload.documentId),
+      eq(schema.documents.orgId, payload.orgId),
+    ));
+    const [amendment] = await db.select().from(schema.amendments).where(and(
+      eq(schema.amendments.documentId, payload.documentId),
+      eq(schema.amendments.orgId, payload.orgId),
+    ));
+    if (!document || document.liveStatus === 'deleted' || !amendmentMayRun(amendment)) {
+      return null;
+    }
+    return amendment;
+  });
+  if (!ready) {
+    return;
+  }
   const { provider, config } = providerForJob();
   const amendmentPages = await loadPages(payload.orgId, payload.documentId);
   const original = await withOrg(payload.orgId, async (db) => {
-    const rows = await db.select().from(schema.complianceRows).where(eq(schema.complianceRows.bidId, payload.bidId));
+    const rows = await db.select().from(schema.complianceRows).where(and(
+      eq(schema.complianceRows.bidId, payload.bidId),
+      eq(schema.complianceRows.orgId, payload.orgId),
+    ));
     return rows.map((row): ComplianceRequirement => ({
       id: row.id,
       sectionRef: row.sectionRef ?? undefined,
@@ -350,10 +389,7 @@ export async function processAmendmentJob(payload: JobPayload): Promise<void> {
       supersededByRowId: row.supersededByRowId ?? undefined,
     }));
   });
-  const [document] = await withOrg(payload.orgId, async (db) => {
-    return db.select().from(schema.documents).where(eq(schema.documents.id, payload.documentId));
-  });
-  const amendmentNo = document?.amendmentNo ?? 1;
+  const amendmentNo = ready.amendmentNo;
   const diff = await processAmendment({
     original,
     amendmentPages,
@@ -362,20 +398,42 @@ export async function processAmendmentJob(payload: JobPayload): Promise<void> {
     amendmentNo,
   });
   await withOrg(payload.orgId, async (db) => {
+    // The links inserted below take FOR KEY SHARE on the organization: take it before the bid.
+    await shareOrg(db, payload.orgId);
+    const [document] = await db.select({ liveStatus: schema.documents.liveStatus, bidId: schema.documents.bidId }).from(schema.documents).where(and(
+      eq(schema.documents.id, payload.documentId),
+      eq(schema.documents.orgId, payload.orgId),
+    )).for('update');
+    if (!document || document.liveStatus === 'deleted') {
+      return;
+    }
+    const [bid] = await db.select().from(schema.bids).where(and(
+      eq(schema.bids.id, document.bidId),
+      eq(schema.bids.orgId, payload.orgId),
+    )).for('update');
+    if (!bid || (bid.creditStatus !== 'reserved' && bid.creditStatus !== 'consumed')) {
+      return;
+    }
+    const [amendment] = await db.select().from(schema.amendments).where(and(
+      eq(schema.amendments.documentId, payload.documentId),
+      eq(schema.amendments.orgId, payload.orgId),
+    )).for('update');
+    if (!amendment || !amendmentMayRun(amendment)) {
+      return;
+    }
+    if (!amendment.keyOverride && normalizeSolicitationKey(bid.solicitationKey) !== amendment.matchedKey) {
+      return;
+    }
     // Row ids from the model are trusted only when they name a compliance row of this bid.
     const bidRows = new Set((await db.select({ id: schema.complianceRows.id }).from(schema.complianceRows).where(and(
-      eq(schema.complianceRows.bidId, payload.bidId),
+      eq(schema.complianceRows.bidId, document.bidId),
       eq(schema.complianceRows.orgId, payload.orgId),
     ))).map((row) => row.id));
     const onBid = (id: string | null | undefined): id is string => typeof id === 'string' && isUuid(id) && bidRows.has(id);
-    const [amendment] = await db.insert(schema.amendments).values({
-      orgId: payload.orgId,
-      bidId: payload.bidId,
-      documentId: payload.documentId,
-      amendmentNo,
-      solicitationKeyFound: true,
+    await db.update(schema.amendments).set({
       status: diff.links.some((link) => link.status === 'proposed') ? 'needs_confirmation' : 'applied',
-    }).returning();
+      updatedAt: new Date(),
+    }).where(and(eq(schema.amendments.id, amendment.id), eq(schema.amendments.orgId, payload.orgId)));
     const uuidLinks = diff.links.filter((link) => link.oldRowId === null || onBid(link.oldRowId));
     if (uuidLinks.length > 0) {
       await db.insert(schema.amendmentLinks).values(uuidLinks.map((link) => ({
@@ -400,7 +458,7 @@ export async function processAmendmentJob(payload: JobPayload): Promise<void> {
           updatedAt: new Date(),
         }).where(and(
           eq(schema.complianceRows.id, row.id),
-          eq(schema.complianceRows.bidId, payload.bidId),
+          eq(schema.complianceRows.bidId, document.bidId),
           eq(schema.complianceRows.orgId, payload.orgId),
         ));
       }

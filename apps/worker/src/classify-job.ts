@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import { classifyPages } from '@pd/ai';
 import { schema, withOrg } from '@pd/core';
 import { enqueue } from './enqueue.js';
+import { runKeyCheck } from './key-check.js';
 import type { JobPayload } from './redis.js';
 
 /** True when the bid's solicitation holds a reserved or consumed credit. */
@@ -38,7 +39,9 @@ export async function processClassify(payload: JobPayload): Promise<void> {
     return;
   }
   if (payload.kind === 'amendment') {
-    await enqueue('ai:amendment', payload);
+    // The solicitation-number check decides, under the bid lock, whether ai:amendment runs
+    // (04 s3.1 step 1); it re-checks the credit there too.
+    await runKeyCheck(payload);
     return;
   }
   // The free tabs read the solicitation set: the solicitation and its attachments (00 s3).

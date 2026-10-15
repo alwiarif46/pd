@@ -56,30 +56,37 @@ export async function findBid(db: Db, orgId: string, bidId: string) {
 export interface Outcome {
   code: number;
   body: unknown;
-  /** A job row created in the transaction, and the call that queues it. */
-  queue?: { jobId: string; enqueue: () => Promise<void> };
+  /** Job rows created in the transaction, each with the call that queues it. */
+  queue?: QueuedJob[];
+}
+
+export interface QueuedJob {
+  jobId: string;
+  enqueue: () => Promise<void>;
 }
 
 /**
- * Runs the queue call of a committed outcome. If queueing fails, the job row is marked
- * failed so the user can retry it, and the error propagates (500).
+ * Runs the queue calls of a committed outcome. Every call is tried; a job whose call fails is
+ * marked failed so the user can retry it, and the first error then propagates (500).
  */
 export async function queueAfterCommit(orgId: string, outcome: Outcome): Promise<void> {
-  if (!outcome.queue) {
-    return;
+  let failure: { error: unknown } | null = null;
+  for (const { jobId, enqueue } of outcome.queue ?? []) {
+    try {
+      await enqueue();
+    } catch (error) {
+      failure ??= { error };
+      await withOrg(orgId, async (db) => {
+        await db.update(schema.jobs).set({
+          status: 'failed',
+          error: 'The step could not be queued. Retry it.',
+          updatedAt: new Date(),
+        }).where(and(eq(schema.jobs.id, jobId), eq(schema.jobs.orgId, orgId)));
+      });
+    }
   }
-  const { jobId, enqueue } = outcome.queue;
-  try {
-    await enqueue();
-  } catch (error) {
-    await withOrg(orgId, async (db) => {
-      await db.update(schema.jobs).set({
-        status: 'failed',
-        error: 'The step could not be queued. Retry it.',
-        updatedAt: new Date(),
-      }).where(and(eq(schema.jobs.id, jobId), eq(schema.jobs.orgId, orgId)));
-    });
-    throw error;
+  if (failure) {
+    throw failure.error;
   }
 }
 

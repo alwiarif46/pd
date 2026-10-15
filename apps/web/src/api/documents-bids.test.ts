@@ -58,6 +58,8 @@ const doc: DocumentDto = {
   liveStatus: 'restored',
   restoredUntil: '2026-10-22T00:00:00.000Z',
   keyCheck: 'mismatch',
+  keyReason: 'mismatch',
+  keyFound: 'W912-24-R-0002',
 };
 
 describe('bid status', () => {
