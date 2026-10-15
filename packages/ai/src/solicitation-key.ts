@@ -40,6 +40,8 @@ export interface SolicitationKeyResult {
 
 const MAX_CANDIDATES = 5;
 const MIN_STRONG_KEY = 6;
+/** An all-digit key is strong only with at least this many digits. */
+const MIN_STRONG_DIGIT_KEY = 8;
 const MIN_CANDIDATE_KEY = 4;
 
 /** OCR confusions folded on OCR'd pages only, on both sides of the comparison. */
@@ -49,8 +51,15 @@ function fold(value: string): string {
   return value.replace(/[OILSBZ]/g, (char) => OCR_FOLD[char] ?? char);
 }
 
-/** A key needs a label to match when it is short or has no digit (a word like "SERVICES"). */
+/**
+ * A key needs a label (or, all digits, a single whole token) to match when it is under 6
+ * characters, has no digit (a word like "SERVICES"), or is all digits with fewer than 8.
+ */
 export function isWeakKey(key: string): boolean {
+  if (/^\d+$/.test(key)) {
+    // A short run of digits is too easy to assemble from amounts, phone numbers and ZIP codes.
+    return key.length < MIN_STRONG_DIGIT_KEY;
+  }
   return key.length < MIN_STRONG_KEY || !/\d/.test(key);
 }
 
@@ -65,12 +74,13 @@ function tokens(line: string): Token[] {
 }
 
 /** The text of a run of whole tokens in `line` that concatenates to `target`, or null. */
-function findRun(line: string, target: string, ocr: boolean): string | null {
+function findRun(line: string, target: string, ocr: boolean, singleToken = false): string | null {
   const want = ocr ? fold(target) : target;
   const parts = tokens(line);
   for (let start = 0; start < parts.length; start += 1) {
     let joined = '';
-    for (let end = start; end < parts.length; end += 1) {
+    const last = singleToken ? Math.min(start + 1, parts.length) : parts.length;
+    for (let end = start; end < last; end += 1) {
       joined += ocr ? fold(parts[end].text) : parts[end].text;
       if (joined.length > want.length) {
         break;
@@ -197,8 +207,10 @@ export function extractSolicitationNumbers(pages: PageText[]): KeyCandidate[] {
 
 /**
  * Where the amendment names the bid key, or null. A strong key matches as a token run anywhere
- * on any page (header or body). A weak key matches only inside a labelled value. OCR'd pages also
- * compare after folding O/0, I/L/1, S/5, B/8, Z/2.
+ * on any page (header or body). A weak key (isWeakKey) matches inside a labelled value; a weak
+ * all-digit key also matches as a single whole token anywhere. A key with no digit never matches:
+ * labelled values must hold a digit. OCR'd pages also compare after folding O/0, I/L/1, S/5,
+ * B/8, Z/2.
  */
 export function matchBidKey(pages: PageText[], bidKey: string): KeyMatch | null {
   const target = normalizeSolicitationKey(bidKey);
@@ -212,6 +224,19 @@ export function matchBidKey(pages: PageText[], bidKey: string): KeyMatch | null 
       const run = findRun(candidate.raw, target, false) ?? (ocrPages.has(candidate.page) ? findRun(candidate.raw, target, true) : null);
       if (run) {
         return { raw: run, page: candidate.page };
+      }
+    }
+    if (!/^\d+$/.test(target)) {
+      return null;
+    }
+    // A short all-digit key also matches as one whole token anywhere, never as a run of several
+    // (so key 202415 does not match "$2,024.15", nor 1234567 a phone number "555-123-4567").
+    for (const page of ordered) {
+      for (const line of lines(page.text)) {
+        const run = findRun(line, target, false, true) ?? (page.ocrUsed ? findRun(line, target, true, true) : null);
+        if (run) {
+          return { raw: run, page: page.pageNo };
+        }
       }
     }
     return null;

@@ -31,6 +31,20 @@ describe('matchBidKey', () => {
     expect(matchBidKey([page('Addendum 2 to RFP 24-017')], '24017')?.raw).toBe('24-017');
     expect(matchBidKey([page('RFP No. 24-017-A2')], '24017')?.raw).toBe('24-017');
     expect(matchBidKey([page('The SERVICES are')], 'SERVICES')).toBeNull();
+    expect(matchBidKey([page('Solicitation No. SERVICES')], 'SERVICES')).toBeNull();
+  });
+
+  it('a short all-digit key matches a single token or a labelled value, never a run built from an amount, a phone number or a ZIP+4', () => {
+    expect(matchBidKey([page('Total price $2,024.15 for the base year')], '2024-15')).toBeNull();
+    expect(matchBidKey([page('RFP 2024-15')], '2024-15')?.raw).toBe('2024-15');
+    expect(matchBidKey([page('Call (555) 123-4567 with questions')], '123-4567')).toBeNull();
+    expect(matchBidKey([page('Mail to Chicago, IL 60601-1234')], '601-1234')).toBeNull();
+    expect(matchBidKey([page('Mail to Chicago, IL 60601-1234')], '06011234')).toBeNull();
+    expect(matchBidKey([page('This addendum modifies 202415 as follows')], '2024-15')?.raw).toBe('202415');
+  });
+
+  it('an all-digit key of 8 or more digits is strong', () => {
+    expect(matchBidKey([page('Amendment 2 to 2024-0015-77')], '20240015-77')?.raw).toBe('2024-0015-77');
   });
 });
 
