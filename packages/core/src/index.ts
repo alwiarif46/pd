@@ -30,6 +30,8 @@ export interface Bid {
   creditStatus: 'reserved' | 'consumed' | 'released' | null;
   keyOverridesUsed: number;
   retentionExtendedUntil: Date | null;
+  /** The schedule's "Workdays only" setting (migration 0010). */
+  scheduleWorkdaysOnly: boolean;
 }
 
 export interface Document {
