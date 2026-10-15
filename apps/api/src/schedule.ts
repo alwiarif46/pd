@@ -234,7 +234,8 @@ const LEGACY_TEMPLATES: Record<string, string> = { standard: 'federal-standard',
  * Applies a template (packages/core SCHEDULE_TEMPLATES), counted back from the bid's due date
  * with the bid's setting. Body: `template` (default 'federal-standard'), `replace` (true: delete
  * the unlocked activities of origin 'template' or 'user' first, keeping AI rows and locked rows;
- * default false: add).
+ * default false: add, and 409 `schedule_template_exists` when unlocked template rows are already
+ * there, so a retry or second press never adds a second template).
  * Rows are origin 'template'. 409 `due_date_required` when the bid has no due date.
  */
 export async function seedSchedule(
@@ -255,6 +256,18 @@ export async function seedSchedule(
     return fail(409, ERROR_MESSAGES.due_date_required, 'due_date_required');
   }
   await lockSchedule(db, bid.id);
+  if (body.replace !== true) {
+    // A double click, a retry, or a second press must not add a second template.
+    const [existing] = await db.select({ id: schema.scheduleActivities.id }).from(schema.scheduleActivities).where(and(
+      eq(schema.scheduleActivities.bidId, bid.id),
+      eq(schema.scheduleActivities.orgId, orgId),
+      eq(schema.scheduleActivities.locked, false),
+      eq(schema.scheduleActivities.origin, 'template'),
+    )).limit(1);
+    if (existing) {
+      return fail(409, ERROR_MESSAGES.schedule_template_exists, 'schedule_template_exists');
+    }
+  }
   let replaced = 0;
   if (body.replace === true) {
     replaced = (await db.delete(schema.scheduleActivities).where(and(

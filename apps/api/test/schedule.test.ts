@@ -325,6 +325,25 @@ describe.skipIf(Boolean(unavailable))('schedule', () => {
       expect(after.filter((row) => row.origin === 'template')).toHaveLength(6);
     });
 
+    it('refuses a second template without replace, so a retry adds nothing', async () => {
+      const id = await bid({ dueDate: '2026-11-25' });
+      expect((await seed(id, { template: 'task-order' })).statusCode).toBe(200);
+      for (const body of [{ template: 'task-order' }, { template: 'standard' }, { template: 'federal-fast', replace: false }]) {
+        const again = await seed(id, body);
+        expect(again.statusCode).toBe(409);
+        expect(again.json()).toEqual({
+          error: 'This schedule already has template activities. Replace them to apply a template again.',
+          code: 'schedule_template_exists',
+        });
+      }
+      expect((await tab(id)).activities).toHaveLength(4);
+      // Locked template rows do not count: replace would keep them anyway.
+      for (const row of (await tab(id)).activities) {
+        expect((await patch(id, row.id, { locked: true })).statusCode).toBe(200);
+      }
+      expect((await seed(id, { template: 'task-order' })).json()).toMatchObject({ added: 4 });
+    });
+
     it('keeps AI rows when replacing', async () => {
       const id = await bid({ dueDate: '2026-11-25' });
       const ai = await withOrg(a.orgId, async (db) => (await db.insert(schema.scheduleActivities).values({
@@ -349,8 +368,8 @@ describe.skipIf(Boolean(unavailable))('schedule', () => {
 
       const legacy = await bid({ dueDate: '2026-11-25' });
       expect((await seed(legacy, { template: 'standard' })).json()).toMatchObject({ template: 'federal-standard', added: 10 });
-      expect((await seed(legacy, { template: 'color-reviews' })).json()).toMatchObject({ template: 'federal-fast', added: 6 });
-      expect((await seed(legacy, {})).json()).toMatchObject({ template: 'federal-standard' });
+      expect((await seed(legacy, { template: 'color-reviews', replace: true })).json()).toMatchObject({ template: 'federal-fast', added: 6 });
+      expect((await seed(legacy, { replace: true })).json()).toMatchObject({ template: 'federal-standard' });
       expect((await seed(legacy, { template: 'nope' })).statusCode).toBe(400);
       expect((await seed(legacy, { template: 'task-order', replace: 'yes' })).statusCode).toBe(400);
     });

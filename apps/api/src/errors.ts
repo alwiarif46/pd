@@ -26,6 +26,7 @@ export const ERROR_MESSAGES = {
   new_row_missing: 'The replacing row was removed, so this change cannot be confirmed. Reject it instead.',
   activity_locked: 'This activity is locked. Unlock it before you move its dates.',
   due_date_required: 'Set the due date in Bid settings first. Templates count back from it.',
+  schedule_template_exists: 'This schedule already has template activities. Replace them to apply a template again.',
 } as const;
 
 export type ErrorCode = keyof typeof ERROR_MESSAGES;
