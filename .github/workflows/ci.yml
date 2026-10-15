@@ -5,6 +5,18 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  # Manual runs: image push (push-images) and the production deploy (deploy). Both are inert without the repository
+  # variable / secrets described in infra/README.md.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'git ref the server deploys'
+        default: master
+        type: string
+      image_tag:
+        description: 'pre-built image tag (a commit sha) to pull instead of building on the server; empty = build'
+        default: ''
+        type: string
 
 jobs:
   typecheck:
@@ -96,22 +108,139 @@ jobs:
       - run: pnpm install
       - run: pnpm --filter @pd/api test
 
+  test-infra:
+    # Offline tests of the infrastructure scripts (fakes only: no provider, Cloudflare, Backblaze or GHCR call).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y nftables python3-yaml
+      - run: bash ops/ci/set-exec-bits.sh --check
+      - run: python3 .githooks/secret_scan.py --all
+      - run: bash infra/tests/run-tests.sh
+      - run: bash ops/tests/run-tests.sh
+      # needs root: real container files, loop devices (never a format or mount), nft in a network namespace
+      - run: sudo bash infra/tests/test-root-container.sh
+
   build-docker:
-    # Build only, no push. The build context is the repo root; each Dockerfile installs the
+    # Build only, no push (pull requests, every push). The build context is the repo root; each Dockerfile installs the
     # workspace with the frozen lockfile, builds its app, and ships production deps only.
     runs-on: ubuntu-latest
-    needs: [typecheck, lint, build]
+    needs: [typecheck, lint, build, test-web, test-api, test-infra]
     strategy:
       fail-fast: false
       matrix:
-        app: [web, api, worker, sandbox]
+        include:
+          - { app: web, file: apps/web/Dockerfile, target: '' }
+          - { app: api, file: apps/api/Dockerfile, target: runtime }
+          - { app: migrate, file: apps/api/Dockerfile, target: migrate }
+          - { app: worker, file: apps/worker/Dockerfile, target: '' }
+          - { app: sandbox, file: apps/sandbox/Dockerfile, target: '' }
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v5
         with:
           context: .
-          file: apps/${{ matrix.app }}/Dockerfile
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
           push: false
           cache-from: type=gha,scope=${{ matrix.app }}
           cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+
+  push-images:
+    # OFF by default. Runs only on a manual dispatch, or on a push to master when the repository variable
+    # PD_PUSH_IMAGES is 'true' (Settings > Secrets and variables > Actions > Variables). Pull requests never push.
+    # Images: ghcr.io/<owner>/pd-<app>:<commit sha> and :master (infra/scripts/deploy.sh --pull-tag <sha>).
+    # *verify* the owner is lowercase in GHCR and check the package visibility (HUMAN-TODO H-07).
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && vars.PD_PUSH_IMAGES == 'true')
+    runs-on: ubuntu-latest
+    needs: [build-docker]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { app: web, file: apps/web/Dockerfile, target: '' }
+          - { app: api, file: apps/api/Dockerfile, target: runtime }
+          - { app: migrate, file: apps/api/Dockerfile, target: migrate }
+          - { app: worker, file: apps/worker/Dockerfile, target: '' }
+          - { app: sandbox, file: apps/sandbox/Dockerfile, target: '' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/pd-${{ matrix.app }}:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/pd-${{ matrix.app }}:master
+          cache-from: type=gha,scope=${{ matrix.app }}
+
+  deploy:
+    # Manual only (workflow_dispatch), behind the 'production' environment (a required reviewer: HUMAN-TODO H-07).
+    # Inert without its secrets: the gate step skips everything and the job ends green with a notice. Never runs on push.
+    if: github.event_name == 'workflow_dispatch'
+    needs: [typecheck, lint, build, test-web, test-api, test-infra]
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency: deploy-production
+    steps:
+      - name: gate
+        id: gate
+        env:
+          PD_DEPLOY_HOST: ${{ secrets.PD_DEPLOY_HOST }}
+          PD_DEPLOY_SSH_KEY: ${{ secrets.PD_DEPLOY_SSH_KEY }}
+          PD_DEPLOY_KNOWN_HOSTS: ${{ secrets.PD_DEPLOY_KNOWN_HOSTS }}
+          PD_TS_AUTHKEY: ${{ secrets.PD_TS_AUTHKEY }}
+          PD_TS_LOGIN_SERVER: ${{ secrets.PD_TS_LOGIN_SERVER }}
+        run: |
+          if [ -n "$PD_DEPLOY_HOST" ] && [ -n "$PD_DEPLOY_SSH_KEY" ] && [ -n "$PD_DEPLOY_KNOWN_HOSTS" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::deploy skipped: secrets not set"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$PD_TS_AUTHKEY" ] && [ -n "$PD_TS_LOGIN_SERVER" ]; then
+            echo "ts=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ts=false" >> "$GITHUB_OUTPUT"
+          fi
+      # *verify* tailscale/github-action@v3 with a Headscale control server (--login-server in args)
+      - if: steps.gate.outputs.ts == 'true'
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.PD_TS_AUTHKEY }}
+          args: --login-server=${{ secrets.PD_TS_LOGIN_SERVER }}
+      - if: steps.gate.outputs.enabled == 'true'
+        name: deploy over the admin network (forced command deploy.sh --ci)
+        env:
+          PD_DEPLOY_HOST: ${{ secrets.PD_DEPLOY_HOST }}
+          PD_DEPLOY_SSH_KEY: ${{ secrets.PD_DEPLOY_SSH_KEY }}
+          PD_DEPLOY_KNOWN_HOSTS: ${{ secrets.PD_DEPLOY_KNOWN_HOSTS }}
+          REF: ${{ inputs.ref }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          # the inputs are data: check their shape before they go into the request
+          printf '%s' "$REF" | grep -Eq '^[A-Za-z0-9._/-]{1,100}$' || { echo "bad ref input"; exit 1; }
+          if [ -n "$IMAGE_TAG" ]; then printf '%s' "$IMAGE_TAG" | grep -Eq '^[0-9a-f]{7,40}$' || { echo "bad image_tag input"; exit 1; }; fi
+          umask 077
+          printf '%s\n' "$PD_DEPLOY_SSH_KEY" > "$RUNNER_TEMP/deploy_key"
+          printf '%s\n' "$PD_DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/known_hosts"
+          REQUEST="ref=$REF"
+          if [ -n "$IMAGE_TAG" ]; then REQUEST="$REQUEST tag=$IMAGE_TAG"; fi
+          ssh -i "$RUNNER_TEMP/deploy_key" -o IdentitiesOnly=yes -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
+            -o StrictHostKeyChecking=yes "pddeploy@$PD_DEPLOY_HOST" "$REQUEST"
+      - if: always()
+        name: delete the key
+        run: rm -f "$RUNNER_TEMP/deploy_key" "$RUNNER_TEMP/known_hosts"

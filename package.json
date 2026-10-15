@@ -14,6 +14,7 @@
     "dev:api": "tsx apps/api/scripts/dev-api.ts",
     "build": "turbo run build",
     "test": "turbo run test",
+    "test:infra": "bash infra/tests/run-tests.sh && bash ops/tests/run-tests.sh",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean && rm -rf node_modules",
