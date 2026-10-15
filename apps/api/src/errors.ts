@@ -19,6 +19,8 @@ export const ERROR_MESSAGES = {
   override_not_needed: 'This amendment is not waiting for a solicitation key override.',
   not_an_amendment: 'Only an amendment can be accepted by key override.',
   set_bid_number_first: 'This bid has no solicitation number yet. Set it in Bid settings instead of overriding: that is free, and the amendment is checked again automatically.',
+  amendment_no_taken: 'Another amendment on this bid already has that number. Choose a different number.',
+  invalid_amendment_no: 'The amendment number must be a whole number from 1 to 999.',
 } as const;
 
 export type ErrorCode = keyof typeof ERROR_MESSAGES;

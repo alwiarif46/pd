@@ -15,7 +15,13 @@ import type { Db } from './scope.js';
  *   back values read earlier, so concurrent requests and the worker cannot lose an update.
  * - Row locks are always taken in this order, by the api and the worker alike, so no two
  *   transactions wait on each other in a cycle:
- *     organizations -> documents -> check_these -> upload_sessions -> bids -> amendments -> rfp_credits.
+ *     organizations -> documents -> check_these -> upload_sessions -> bids -> amendments
+ *       -> amendment_links -> compliance_rows -> rfp_credits.
+ *   compliance_rows are locked FOR UPDATE ordered by id, after the amendment (and its link).
+ *   Amendment numbers (packages/core amendment-numbers.ts) are checked and written only under the
+ *   bid lock: upload start (organization, bid), upload complete of an amendment (its session,
+ *   organization, bid, as the solicitation branch), the worker's key check (document, bid,
+ *   amendment) and PATCH of the number (organization key share, document, bid, amendment, rows).
  *   check_these: the worker's matrix write replaces a document's hits under the document lock,
  *   and promote locks the document (FOR SHARE) before the hit (check-these.ts).
  *   One exception: upload complete claims its own unexpired session before the org lock (so
