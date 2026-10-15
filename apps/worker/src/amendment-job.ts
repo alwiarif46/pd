@@ -28,7 +28,10 @@ import { allocateReqIds } from './req-ids.js';
 type DocumentRow = Pick<typeof schema.documents.$inferSelect, 'liveStatus'>;
 type BidRow = Pick<typeof schema.bids.$inferSelect, 'creditStatus' | 'solicitationKey'>;
 type AmendmentRow = typeof schema.amendments.$inferSelect;
-type Gate = 'run' | 'deferred' | 'stopped';
+type Gate = 'run' | 'deferred' | 'no_credit' | 'stopped';
+
+/** Pass 5 page count above which the amendment run logs a warning. */
+const MAP_PAGES_WARN = 200;
 
 /** Rows of the bid that are not superseded or withdrawn (null counts as active). */
 function activeRow() {
@@ -39,9 +42,12 @@ function activeRow() {
  * Whether the amendment step may run now (04 s3.1):
  * - stopped: the document is deleted; the amendment is not processing, not matched or overridden,
  *   or has no number; or the bid key moved off the key it matched (unless overridden);
- * - deferred: the solicitation's matrix has not consumed the bid's credit yet (matrix first), or
- *   an amendment of the bid with a lower number is still processing (number order). A kick queues
- *   the step again once that changes.
+ * - deferred: the solicitation's matrix has not consumed the bid's credit yet (credit
+ *   `reserved`, matrix first), or an amendment of the bid with a lower number is still
+ *   processing (number order). A kick queues the step again once that changes;
+ * - no_credit: the bid's credit was released, or it has none. Nothing would ever kick the step,
+ *   so the caller fails the amendment visibly (a failed step the user retries once the
+ *   solicitation is processed again) instead of leaving it in processing.
  */
 function gate(document: DocumentRow | undefined, bid: BidRow | undefined, amendment: AmendmentRow | undefined, lowerRunning: boolean): Gate {
   if (!document || document.liveStatus === 'deleted' || !bid || !amendment) {
@@ -53,8 +59,11 @@ function gate(document: DocumentRow | undefined, bid: BidRow | undefined, amendm
   if (!amendment.keyOverride && normalizeSolicitationKey(bid.solicitationKey) !== amendment.matchedKey) {
     return 'stopped';
   }
-  if (bid.creditStatus !== 'consumed' || lowerRunning) {
+  if (bid.creditStatus === 'reserved' || lowerRunning) {
     return 'deferred';
+  }
+  if (bid.creditStatus !== 'consumed') {
+    return 'no_credit';
   }
   return 'run';
 }
@@ -160,6 +169,10 @@ async function setPages(payload: JobPayload): Promise<(PageText & { role: PageRo
       ),
     ))
     .orderBy(asc(schema.documents.createdAt), asc(schema.pages.pageNo)));
+  if (rows.length > MAP_PAGES_WARN) {
+    // Pass 5 sends these pages in one prompt; a very large set is logged so the cost shows up.
+    console.warn(`Amendment ${payload.documentId}: pass 5 reads ${rows.length} pages of the solicitation set`);
+  }
   return rows.map((row) => ({ pageNo: row.pageNo, text: row.text, ocrUsed: row.ocrUsed, role: row.role }));
 }
 
@@ -208,10 +221,14 @@ export type AmendmentOutcome = 'applied' | 'needs_confirmation' | 'deferred' | '
 export async function processAmendmentJob(payload: JobPayload): Promise<AmendmentOutcome> {
   const started = Date.now();
   const ready = await withOrg(payload.orgId, (db) => readGate(db, payload, false));
+  if (ready.gate === 'no_credit') {
+    await failAmendment(payload, NO_CREDIT);
+    return 'stopped';
+  }
   if (ready.gate !== 'run' || !ready.amendment) {
     return ready.gate === 'run' ? 'stopped' : ready.gate;
   }
-  let outcome: AmendmentOutcome;
+  let outcome: AmendmentOutcome | 'no_credit';
   try {
     const threshold = await readLinkConfidence(payload.orgId);
     const { provider, config } = providerForJob();
@@ -227,7 +244,7 @@ export async function processAmendmentJob(payload: JobPayload): Promise<Amendmen
     const checkThese = coverage(extracted.hits, extracted.requirements);
     const tokens = extracted.tokensUsed + diff.tokensUsed + map.tokensUsed;
 
-    outcome = await withOrg(payload.orgId, async (db): Promise<AmendmentOutcome> => {
+    outcome = await withOrg(payload.orgId, async (db): Promise<AmendmentOutcome | 'no_credit'> => {
       // The rows, links, hits and run inserted below take FOR KEY SHARE on the organization.
       await shareOrg(db, payload.orgId);
       const { gate: now, amendment } = await readGate(db, payload, true);
@@ -322,9 +339,13 @@ export async function processAmendmentJob(payload: JobPayload): Promise<Amendmen
       return status;
     });
   } catch (error) {
-    await failAmendment(payload);
+    await failAmendment(payload, STEP_FAILED);
     await kickAmendments(payload.orgId, payload.bidId);
     throw error;
+  }
+  if (outcome === 'no_credit') {
+    await failAmendment(payload, NO_CREDIT);
+    return 'stopped';
   }
   if (outcome === 'applied' || outcome === 'needs_confirmation') {
     await kickAmendments(payload.orgId, payload.bidId);
@@ -332,13 +353,17 @@ export async function processAmendmentJob(payload: JobPayload): Promise<Amendmen
   return outcome;
 }
 
+const STEP_FAILED = 'The amendment step failed. Retry it.';
+const NO_CREDIT = 'The solicitation has no RFP credit, so the amendment cannot run. Process the solicitation again, then retry.';
+
 /**
- * The amendment step failed: processing -> failed (only from processing, so a run that already
- * applied is never marked failed), with a failed classify job row the user can retry (the retry
- * queues classify; the key check returns a failed amendment to processing). Lock order document,
- * bid, amendment. Logged, never thrown: the caller rethrows the original error.
+ * The amendment step failed (an error, or the bid's credit is gone): processing -> failed (only
+ * from processing, so a run that already applied is never marked failed), with a failed classify
+ * job row carrying `error` that the user can retry (the retry queues classify; the key check
+ * returns a failed amendment to processing). Lock order document, bid, amendment. Logged, never
+ * thrown: the caller rethrows the original error, if any.
  */
-async function failAmendment(payload: JobPayload): Promise<void> {
+async function failAmendment(payload: JobPayload, error: string): Promise<void> {
   try {
     await withOrg(payload.orgId, async (db) => {
       await shareOrg(db, payload.orgId);
@@ -364,7 +389,7 @@ async function failAmendment(payload: JobPayload): Promise<void> {
         documentId: payload.documentId,
         type: 'classify',
         status: 'failed',
-        error: 'The amendment step failed. Retry it.',
+        error,
         finishedAt: new Date(),
       });
     });
