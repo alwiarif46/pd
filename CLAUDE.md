@@ -7,6 +7,7 @@
   so a later re-integration is a clean diff. Do not restyle.
 - `apps/web/src/features/**`, `schedule/**`, `api/**`, and everything under `apps/api` and `apps/worker` is yours.
 - UI components take data as props and report user actions through callbacks. They never fetch, route, or store.
+- `apps/web/src/features/*/ui/` holds hand-built presentational components (shadcn/ui + Tailwind, props and callbacks, rendered outside `.app-shell`). v0 never writes there, and they are not integrated from `design/v0/`. Today: `features/membership/ui` (accept invite, seat locked).
 - `apps/web/src/components/ui/**` is shadcn/ui, added with the shadcn CLI (`apps/web/components.json`). Do not hand-edit it, except that `sonner.tsx` has `next-themes` removed and its colors mapped to the `--color-*` tokens. The CLI wrote `from "cn"` imports; they were changed to `@/lib/utils`, so check this after each CLI run.
 
 ## Integration task, when asked
@@ -24,7 +25,7 @@
 - Dark variants apply only under a `.dark` class, which the app does not set.
 - `@/` maps to `apps/web/src`.
 - Commands: `pnpm --filter @pd/web dev | typecheck | build`.
-- Local stack: `pnpm dev:db` (embedded Postgres in `.dev/pg`, or `PD_DEV_DB_ROOT`), then `pnpm dev:api` (port 3001; sign-up, reset and invite codes print to its console).
+- Local stack: `pnpm dev:db` (embedded Postgres in `.dev/pg`, or `PD_DEV_DB_ROOT`), then `pnpm dev:api` (port 3001; sign-up, reset and invite codes print to its console; an invite code is `<orgId>.<token>`: open `http://localhost:3000/#/invite?token=<code>` or paste the code on `#/invite`).
 
 ## Conventions
 - TypeScript strict. Shared types live in `apps/web/src/types` and `packages/core`.

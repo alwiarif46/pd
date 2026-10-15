@@ -116,7 +116,7 @@ The reserve and settle code lives in these places:
 - In `requireAuth` (`apps/api/src/context.ts`), for `role === 'member'`, call it inside `withOrg(orgId)`. A member outside the set gets 403 `{ code: 'seat_locked' }`.
 - `GET /api/org/members` returns `seatLocked` for each member.
 - Invite creation (`org.ts` ~L194) should count pending, unexpired invites toward the limit.
-- Gap to flag: there is no invite-accept route. When one is built, it must check seats too.
+- Gap closed (16 Oct 2026): `POST /api/invites/accept` exists and checks seats under the organization lock (`apps/api/src/invites.ts`).
 - Tests:
   - New `seats.test.ts`: three members on Starter, then the move to free → the third member is refused on `/api/bids` while the owner and the earliest member get in. Removing a member or upgrading restores access. An owner who joined later is never locked out.
   - `worker-credits.test.ts`:

@@ -101,3 +101,4 @@
 | 13 Oct 2026 | Live file retention and archive per plan; prices provisional until Phase 6 |
 | 13 Oct 2026 | Admin tooling post-v1; Amaan edits plans, credits, and caps in the database |
 | 16 Oct 2026 | Seats: owners first, then members by join date; pending invites count toward the limit. Failed processing (scan, file, marking reject, classify, matrix) releases the reservation and leaves a retryable failed step; a file paused at the marking check keeps it until the user confirms or removes the file |
+| 16 Oct 2026 | Invite accept (`POST /api/invites/accept`) checks the seat under the organization lock, reading memberships after the lock, so two accepts cannot take the last seat. Pending invites do not block an accept: the first to accept wins after a downgrade. A full organization answers 409 `seats_full` and the invite stays pending. One organization per account (409 `already_in_org`) |

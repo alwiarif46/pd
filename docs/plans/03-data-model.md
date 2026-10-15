@@ -11,7 +11,7 @@ All tables have `id` (UUID), `created_at`, `updated_at`. Tables marked **T** car
 | `users` | | email (unique), email_verified_at, phone_e164 (unique), phone_verified_at, password_hash (Argon2id), name, last_login_at |
 | `organizations` | | name, email_domain, plan (`free` \| `starter` \| `growth`), stripe_customer_id, stripe_subscription_id, plan_status (copied from the Stripe subscription status, or `free`), cycle_start, cycle_end (a cache of the current `rfp_credits` period), free_first_month_ends |
 | `memberships` | T | user_id, role (`owner` \| `member`) |
-| `invites` | T | email, role, token_hash, expires_at, accepted_at. Token lookup before sign-in goes through a `pd_system` function |
+| `invites` | T | email, role, token_hash, expires_at, accepted_at. The invite code is `<org id>.<token>`, so the token lookup runs under `app.org_id`. No `pd_system` function is needed |
 | `sessions` | | user_id, token_hash, expires_at, revoked_at, last_seen_at, ip, user_agent |
 | `auth_tokens` | | user_id, purpose (`verify_email` \| `reset_password`), token_hash, expires_at, used_at |
 | `rfp_credits` | T | period_start, period_end, allowed, used, reserved. One row per period. The single source of truth for credits (06 s3) |
