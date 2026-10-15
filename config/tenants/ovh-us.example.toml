@@ -2,10 +2,6 @@
 # keep it in step with config/tenant.toml (switch-provider.sh checks tenant.id, tenant.domain,
 # tenant.hostname, backup.bucket and backup.crypt_prefix are equal in both files).
 # Use:  infra/switch-provider.sh plan --to config/tenants/ovh-us.toml
-# PD tenant config. Operator-specific values only. No secrets.
-# Scripts read this file (infra/lib/tenant.sh); nothing tenant-specific is hard-coded elsewhere.
-# Mirrors Drive's config/tenant.toml layout (Drive PR #3, D-146): [infra] provider selects the adapter in
-# infra/providers/<provider>/ and the provider's key goes in the secrets file (config/secrets.env.example).
 
 [tenant]
 id            = "shaavir-pd"

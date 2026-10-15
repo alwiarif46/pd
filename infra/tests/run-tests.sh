@@ -21,6 +21,8 @@ harness_init "$(cd "$HERE/../.." && pwd)"
 FAKES="$REPO/ops/tests/fakes"
 guard_fakes
 guard_no_luksformat
+CF_PID=""
+trap 'kill "${CF_PID:-}" 2>/dev/null; cleanup_tmp' EXIT
 
 APPSECRET="appcred-SECRET-value-9f8e7d6c"
 HOST="$("$PY" infra/lib/tenant.py get tenant.hostname)"
@@ -77,7 +79,159 @@ sys.exit(1 if missing else 0)
 PYEOF
 if [[ $? == 0 ]]; then ok "every tenant key read without a default exists in config/tenant.toml and the example tenants"; else bad "tenant keys missing" "$(cat "$TMP/keys.txt")"; fi
 
-# @@SECTION provider-ovh (commit 4)
+# ------------------------------------------------------------------ ovh-us adapter (Drive D-132..D-146)
+# The ovh-us tests run against config/tenants/ovh-us.example.toml; the production tenant is the ssh adapter.
+setup_ovh() { setup "$1"; export PD_TENANT="$REPO/config/tenants/ovh-us.example.toml"; }
+
+# ------------------------------------------------------------------ provision
+setup_ovh prov-dry
+out="$(bash infra/provision.sh --dry-run 2>&1)"; rc=$?
+[[ $rc == 0 && ! -s "$FAKE_CALLS" ]] && ok "provision --dry-run: exit 0, no openstack call" || bad "provision dry-run" "rc=$rc $(head -3 "$FAKE_CALLS")"
+grep -q 'security group rule create --ingress --ethertype IPv6 --protocol ipv6-icmp' <<<"$out" && grep -q -- '--flavor b3-16' <<<"$out" \
+  && grep -q -- '--type high-speed-gen2' <<<"$out" && grep -q 'server lock' <<<"$out" && ok "provision plan shows rules, flavor, volume types, lock" || bad "provision plan content" "$(tail -20 <<<"$out")"
+! grep -q 'dst-port 22 ' <<<"$out" && ok "provision plan has no TCP 22 rule" || bad "plan opens SSH"
+out="$(bash infra/provision.sh 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q 'confirm-purchase' <<<"$out" && [[ ! -s "$FAKE_CALLS" ]] && ok "provision refuses without --confirm-purchase" || bad "provision without confirm" "rc=$rc"
+
+setup_ovh prov-real
+out="$(bash infra/provision.sh --confirm-purchase 2>&1)"; rc=$?
+if [[ $rc == 0 ]]; then ok "provision real run (fake project) exit 0"; else bad "provision real run rc=$rc" "$(tail -15 <<<"$out")"; fi
+[[ "$(state 'len(d["servers"])')" == 1 && "$(state 'd["servers"][0]["security_groups"]')" == "['sg-pd']" ]] && ok "server created with only sg-pd" || bad "server/security groups" "$(state 'd["servers"]')"
+[[ "$(state 'sorted((r["ethertype"],r["protocol"],r["port_range_min"]) for g in d["security_groups"] for r in g["rules"] if r["direction"]=="ingress")' )" == "[('IPv4', 'icmp', None), ('IPv4', 'tcp', 443), ('IPv4', 'udp', 41641), ('IPv6', 'ipv6-icmp', None), ('IPv6', 'tcp', 443), ('IPv6', 'udp', 41641)]" ]] \
+  && ok "security group: exactly the 6 ingress rules (443, ICMP, 41641 over IPv4 and IPv6; no 22, no 80)" || bad "security group rules" "$(state 'd["security_groups"]')"
+[[ "$(state 'sorted((v["name"],v["size"],v["type"],v["properties"].get("pd-protected"),len(v["attachments"])) for v in d["volumes"])')" == "[('pd-backup', 40, 'classic', '1', 1), ('pd-data', 40, 'high-speed-gen2', '1', 1)]" ]] \
+  && ok "volumes: sizes, classes, protected, attached" || bad "volumes" "$(state 'd["volumes"]')"
+[[ "$(state 'd["servers"][0]["locked"]')" == True ]] && ok "server locked" || bad "server not locked"
+grep -q -- '--user-data' "$FAKE_CALLS" && ! ls "$S"/tmp.* >/dev/null 2>&1 && ok "user-data passed and the rendered file removed" || bad "user-data handling" "$(ls "$S")"
+state '"table inet pd_fw" in d["servers"][0].get("user_data","") and "bootstrap_ssh4, \"{ 93.184.216.34 timeout 6h }\"" in d["servers"][0]["user_data"]' | grep -q True \
+  && ok "server user-data carries the host firewall + ADMIN_IP bootstrap element" || bad "server user-data content"
+! grep -qF -- "$APPSECRET" "$FAKE_CALLS" && ! grep -qF -- "$APPSECRET" <<<"$out" && ok "application credential secret never in argv or output" || bad "secret leaked"
+grep -q 'STATE.md line' <<<"$out" && grep -q '203.0.113.50 / 2001:db8::50' <<<"$out" && ok "summary prints IPv4 + IPv6 from Ext-Net" || bad "summary addresses" "$(tail -5 <<<"$out")"
+: >"$FAKE_CALLS"
+out="$(bash infra/provision.sh --confirm-purchase 2>&1)"; rc=$?
+[[ $rc == 0 ]] && ! grep -qE ' (create|add|lock|set) ' "$FAKE_CALLS" && ok "second run creates/changes nothing (idempotent)" || bad "second run not idempotent" "$(grep -E ' (create|add|lock|set) ' "$FAKE_CALLS" | head -3)"
+grep -q 'rules match' <<<"$out" && ok "second run: security group drift check passes" || bad "drift check" "$out"
+
+setup_ovh prov-guards
+printf '{"project_id":"p-other","servers":[],"volumes":[],"security_groups":[],"keypairs":[],"ports":[]}' >"$FAKE_OS_STATE"
+cp config/tenants/ovh-us.example.toml "$S/tenant.toml"; sed -i 's/^project_id     = ""/project_id     = "p-drive"/' "$S/tenant.toml"
+out="$(bash infra/provision.sh --confirm-purchase --tenant "$S/tenant.toml" 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q 'not \[infra\] project_id p-drive' <<<"$out" && ! grep -q ' create ' "$FAKE_CALLS" && ok "wrong project id refused before any create" || bad "project id guard" "rc=$rc $out"
+printf '{"project_id":"p0","servers":[{"id":"x1","name":"other-app-01","security_groups":["default"]}],"volumes":[],"security_groups":[],"keypairs":[],"ports":[]}' >"$FAKE_OS_STATE"
+out="$(bash infra/provision.sh --confirm-purchase 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q 'needs its own Public Cloud project' <<<"$out" && ok "shared project (other server) refused" || bad "shared project guard" "rc=$rc $out"
+printf '{"project_id":"p0","servers":[{"id":"s1","name":"%s","security_groups":["default","sg-pd"],"locked":true,"addresses":{"Ext-Net":["203.0.113.50"]}}],"volumes":[],"security_groups":[],"keypairs":[{"name":"%s","fingerprint":"aa:bb"}],"ports":[{"id":"pt1","server":"s1","port_security_enabled":"False"}]}' "$HOST" "$KEYNAME" >"$FAKE_OS_STATE"
+out="$(bash infra/provision.sh --confirm-purchase 2>&1)"; rc=$?
+grep -q "server remove security group $HOST default" "$FAKE_CALLS" && ok "permissive default group removed from an existing server" || bad "default group not removed" "$out"
+grep -q 'port security DISABLED' <<<"$out" && ok "disabled port security is reported" || bad "port security warning missing"
+grep -q "server unlock $HOST" "$FAKE_CALLS" && [[ "$(state 'd["servers"][0]["locked"]')" == True && "$(state 'd["servers"][0]["security_groups"]')" == "['sg-pd']" ]] \
+  && ok "locked server: unlocked for the change, default group removed, locked again" || bad "unlock/relock" "$(state 'd["servers"][0]')"
+"$PY" - "$FAKE_OS_STATE" <<'PY'
+import json, sys; p = sys.argv[1]; d = json.load(open(p))
+for v in d["volumes"]: v["attachments"] = []; v["status"] = "available"
+json.dump(d, open(p, "w"))
+PY
+out="$(FAKE_OS_FAIL='server add volume' bash infra/provision.sh --confirm-purchase 2>&1)"; rc=$?
+[[ $rc != 0 && "$(state 'd["servers"][0]["locked"]')" == True ]] && grep -q 're-locked' <<<"$out" && ok "a change that fails after the unlock leaves the server locked (EXIT trap)" || bad "relock on failure" "rc=$rc $(tail -3 <<<"$out")"
+printf '{"project_id":"p0","servers":[],"volumes":[],"security_groups":[],"keypairs":[],"ports":[]}' >"$FAKE_OS_STATE"
+: >"$FAKE_CALLS"; cp config/tenants/ovh-us.example.toml "$S/eu.toml"; sed -i 's#^auth_url .*#auth_url       = "https://keystone.example.net/v3"#' "$S/eu.toml"
+out="$(bash infra/provision.sh --confirm-purchase --tenant "$S/eu.toml" 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q 'residency guard' <<<"$out" && ! grep -q '^openstack' "$FAKE_CALLS" && ok "auth_url on a non-US Keystone host refused before any call" || bad "auth host guard" "$out"
+
+# ------------------------------------------------------------------ temporary SSH
+setup_ovh ssh
+bash infra/provision.sh --confirm-purchase >/dev/null 2>&1
+out="$(bash infra/firewall-temp-ssh.sh add 2>&1)"; rc=$?
+[[ $rc == 0 && "$(state 'sum(1 for g in d["security_groups"] for r in g["rules"] if r["port_range_min"]==22 and r["remote_ip_prefix"]=="93.184.216.34/32")')" == 1 ]] && ok "temp SSH add: one TCP 22 rule from ADMIN_IP/32" || bad "temp ssh add" "$out"
+state '[r["description"] for g in d["security_groups"] for r in g["rules"] if r["port_range_min"]==22][0]' | grep -qE 'created=[0-9]{10}' && ok "temp SSH rule carries its creation time" || bad "no created= stamp"
+o="$(openstack security group show sg-pd -f json | "$PY" infra/providers/ovh-us/ostool.py sg-drift)"; rc=$?
+[[ $rc == 0 ]] && grep -q '^WARN temporary SSH rule still present: .*93.184.216.34/32, age 0.0 h' <<<"$o" && ok "sg-drift warns about the temporary rule with its age (exit 0)" || bad "drift WARN" "rc=$rc $o"
+mkdir -p "$S/bin"; printf '#!/usr/bin/env bash\necho "ssh: connect to host x port 22: Connection timed out" >&2; exit 255\n' >"$S/bin/ssh"; chmod +x "$S/bin/ssh"
+bash infra/firewall-temp-ssh.sh add >/dev/null 2>&1
+[[ "$(state 'sum(1 for g in d["security_groups"] for r in g["rules"] if r["port_range_min"]==22)')" == 1 ]] && ok "temp SSH add twice: no duplicate" || bad "duplicate ssh rule"
+out="$(bash infra/firewall-temp-ssh.sh add --ip 10.0.0.5 2>&1)"; rc=$?
+[[ $rc != 0 ]] && ok "temp SSH refuses a private source IP" || bad "private IP accepted"
+out="$(bash infra/firewall-temp-ssh.sh remove 2>&1)"; rc=$?
+[[ $rc != 0 && "$(state 'sum(1 for g in d["security_groups"] for r in g["rules"] if r["port_range_min"]==22)')" == 1 ]] && ok "remove without --check-host refused, rule kept" || bad "remove guard"
+out="$(bash infra/firewall-temp-ssh.sh remove --check-host 203.0.113.50 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q 'admin network' <<<"$out" && ok "remove refuses a public --check-host" || bad "public check-host accepted" "$out"
+out="$(bash infra/firewall-temp-ssh.sh remove --check-host 100.64.0.5 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q 'VERIFIED' <<<"$out" && grep -q '^ssh .*pdadmin@100.64.0.5 true' "$FAKE_CALLS" \
+  && [[ "$(state 'sum(1 for g in d["security_groups"] for r in g["rules"] if r["port_range_min"]==22)')" == 0 ]] && ok "remove: admin-network SSH checked, rule deleted, verified" || bad "temp ssh remove" "rc=$rc $out"
+ing="$(state 'sum(1 for g in d["security_groups"] for r in g["rules"] if r["direction"]=="ingress")')"
+[[ "$ing" == 6 ]] && ok "remove keeps the 6 public rules" || bad "remove touched other rules ($ing left)"
+
+# ------------------------------------------------------------------ ostool drift
+desired_json="$("$PY" - <<'PY'
+import json, subprocess, sys
+rows = []
+for n, l in enumerate(subprocess.run([sys.executable, "infra/providers/ovh-us/ostool.py", "sg-desired"], capture_output=True, text=True).stdout.splitlines()):
+    eth, proto, port, remote, _ = l.split("\t")
+    rows.append({"ID": f"r{n}", "IP Protocol": proto, "Ethertype": eth, "IP Range": remote, "Port Range": "" if port == "-" else f"{port}:{port}", "Direction": "ingress"})
+rows += [{"ID": "e4", "IP Protocol": None, "Ethertype": "IPv4", "IP Range": None, "Port Range": "", "Direction": "egress"},
+         {"ID": "e6", "IP Protocol": None, "Ethertype": "IPv6", "IP Range": None, "Port Range": "", "Direction": "egress"}]
+print(json.dumps(rows))
+PY
+)"
+"$PY" infra/providers/ovh-us/ostool.py sg-drift <<<"$desired_json" >/dev/null && ok "ostool sg-drift: desired set = no drift" || bad "drift on desired set"
+wide="$("$PY" -c 'import json,sys; r=json.loads(sys.argv[1]); r.append({"ID":"w","IP Protocol":"tcp","Ethertype":"IPv4","IP Range":"0.0.0.0/0","Port Range":"1:1024","Direction":"ingress"}); print(json.dumps(r))' "$desired_json")"
+o="$("$PY" infra/providers/ovh-us/ostool.py sg-drift <<<"$wide")"; rc=$?
+[[ $rc == 1 ]] && grep -q 'port 22 rule that is not a single-IP' <<<"$o" && ok "ostool sg-drift flags a wide range covering 22" || bad "wide 22 not flagged" "$o"
+anyp="$("$PY" -c 'import json,sys; r=json.loads(sys.argv[1]); r.append({"ID":"a","IP Protocol":None,"Ethertype":"IPv4","IP Range":None,"Port Range":"","Direction":"ingress"}); print(json.dumps(r))' "$desired_json")"
+"$PY" infra/providers/ovh-us/ostool.py sg-ssh-rules <<<"$anyp" | grep -q '^a' && ok "ostool: an any-protocol ingress rule counts as SSH" || bad "any-protocol rule missed"
+[[ "$("$PY" infra/providers/ovh-us/ostool.py addresses Ext-Net <<<'{"addresses":"Ext-Net=198.51.100.4, 2001:db8::4"}')" == "198.51.100.4 2001:db8::4" ]] && ok "ostool addresses: old string format" || bad "addresses string format"
+
+# ------------------------------------------------------------------ volume extend + break-glass
+setup_ovh extend
+bash infra/provision.sh --confirm-purchase >/dev/null 2>&1; : >"$FAKE_CALLS"
+out="$(bash infra/volume-extend.sh --volume data --size 200 2>&1)"; rc=$?
+[[ $rc != 0 && ! -s "$FAKE_CALLS" ]] && ok "volume-extend refuses without --confirm-purchase" || bad "extend guard"
+out="$(bash infra/volume-extend.sh --volume data --size 20 --confirm-purchase 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q 'never shrink' <<<"$out" && ! grep -q 'volume set' "$FAKE_CALLS" && ok "volume-extend never shrinks" || bad "shrink" "$out"
+out="$(bash infra/volume-extend.sh --volume data --size 100 --confirm-purchase 2>&1)"; rc=$?
+[[ $rc == 0 && "$(state '[v["size"] for v in d["volumes"] if v["name"]=="pd-data"][0]')" == 100 ]] && grep -q 'os-volume-api-version 3.42 volume set --size 100 pd-data' "$FAKE_CALLS" && ok "volume-extend grows online (API 3.42)" || bad "extend" "$out"
+export FAKE_OS_FAIL='volume set --size'
+out="$(bash infra/volume-extend.sh --volume backup --size 300 --confirm-purchase 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q 'Offline procedure' <<<"$out" && ! grep -q 'remove volume' "$FAKE_CALLS" && ok "refused online extend: offline steps printed, nothing detached" || bad "offline fallback" "$out"
+unset FAKE_OS_FAIL
+grep -q 'openstack server unlock <hostname>' <<<"$out" && grep -q 'openstack server lock <hostname>' <<<"$out" && ok "offline extend steps unlock and re-lock the server" || bad "offline steps lock"
+out="$(bash infra/break-glass.sh rescue 2>&1)"; rc=$?
+[[ $rc != 0 ]] && ! grep -q 'rescue' "$FAKE_CALLS" && ok "break-glass rescue needs --confirm-reboot" || bad "rescue guard"
+"$PY" - "$FAKE_OS_STATE" <<'PY'
+import json, sys; p = sys.argv[1]; d = json.load(open(p)); d["ports"][0]["port_security_enabled"] = "False"; json.dump(d, open(p, "w"))
+PY
+out="$(bash infra/break-glass.sh rescue --confirm-reboot 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q 'port security disabled' <<<"$out" && ! grep -qE 'server (unlock|rescue)' "$FAKE_CALLS" && ok "rescue refused when port security is off" || bad "rescue port security" "$out"
+"$PY" - "$FAKE_OS_STATE" <<'PY'
+import json, sys; p = sys.argv[1]; d = json.load(open(p)); d["ports"][0]["port_security_enabled"] = "True"
+g = [g for g in d["security_groups"] if g["name"] == "sg-pd"][0]
+g["rules"].append({"id": "wide22", "direction": "ingress", "ethertype": "IPv4", "protocol": "tcp", "port_range_min": 22, "port_range_max": 22, "remote_ip_prefix": "0.0.0.0/0"})
+json.dump(d, open(p, "w"))
+PY
+out="$(bash infra/break-glass.sh rescue --confirm-reboot 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q 'TCP 22 rules other than' <<<"$out" && ! grep -q 'server rescue' "$FAKE_CALLS" && ok "rescue refused while a wide TCP 22 rule exists" || bad "rescue wide rule" "$out"
+"$PY" - "$FAKE_OS_STATE" <<'PY'
+import json, sys; p = sys.argv[1]; d = json.load(open(p))
+g = [g for g in d["security_groups"] if g["name"] == "sg-pd"][0]
+g["rules"] = [r for r in g["rules"] if r["id"] != "wide22"] + [{"id": "adm22", "direction": "ingress", "ethertype": "IPv4", "protocol": "tcp", "port_range_min": 22, "port_range_max": 22, "remote_ip_prefix": "93.184.216.34/32"}]
+json.dump(d, open(p, "w"))
+PY
+out="$(bash infra/break-glass.sh rescue --confirm-reboot 2>&1)"; rc=$?
+[[ $rc == 0 && "$(state 'd["servers"][0]["status"]')" == RESCUE && "$(state 'd["servers"][0]["locked"]')" == True ]] && grep -q 'DO NOT LEAVE RESCUE RUNNING' <<<"$out" \
+  && ok "rescue with only the admin-IP rule: in RESCUE and locked again, warning printed" || bad "rescue ok case" "rc=$rc $out"
+out="$(bash infra/break-glass.sh status 2>&1)"
+grep -q 'is in RESCUE mode' <<<"$out" && ok "status warns while rescue runs" || bad "status rescue warning" "$out"
+out="$(bash infra/break-glass.sh unrescue 2>&1)"; rc=$?
+[[ $rc == 0 && "$(state 'd["servers"][0]["status"]')" == ACTIVE && "$(state 'd["servers"][0]["locked"]')" == True ]] && ok "unrescue: ACTIVE and locked" || bad "unrescue" "$out"
+"$PY" - "$FAKE_OS_STATE" <<'PY'
+import json, sys; p = sys.argv[1]; d = json.load(open(p)); d["servers"][0]["locked"] = False; json.dump(d, open(p, "w"))
+PY
+out="$(bash infra/break-glass.sh console 2>&1)"
+grep -q 'is UNLOCKED' <<<"$out" && ok "console warns about an unlocked server" || bad "unlocked warning" "$out"
+out="$(bash infra/break-glass.sh console 2>&1)"
+grep -q "console url show --novnc $HOST" "$FAKE_CALLS" && ok "break-glass console prints the noVNC URL" || bad "console"
+
+
 
 # ------------------------------------------------------------------ cloud-init + host firewall
 setup render
@@ -136,11 +290,9 @@ else
   skip "nft load tests (needs Linux with nft and unshare -rn; CI runs them)"
 fi
 
-# @@SECTION luks-byid (commit 5)
-# @@SECTION dns (commit 6)
-
 # ------------------------------------------------------------------ provider layer
-# @@SECTION test-providers (commit 4)
+o="$(bash infra/tests/test-providers.sh </dev/null 2>&1)"; rc=$?
+[[ $rc == 0 ]] && ok "provider layer suite: $(tail -1 <<<"$o")" || bad "provider layer suite (bash infra/tests/test-providers.sh)" "$(grep -A1 '^FAIL' <<<"$o" | head -20)"
 
 # ------------------------------------------------------------------ static
 mapfile -t SH < <(find infra ops -name '*.sh' -not -path '*/node_modules/*')
