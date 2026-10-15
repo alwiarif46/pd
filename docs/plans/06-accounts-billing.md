@@ -18,6 +18,8 @@
 
 🟨 **OPEN:** one free organization per company email domain. Proposed: yes. A second person from the same domain joins the existing organization by invite, or upgrades.
 
+**With Shaavir Drive.** PD and Shaavir Drive are separate products, and a client can buy either or both (01 s1.1). The sign-up above is PD's own. When a client's PD and Drive are integrated, one login covers both: single sign-on through the Drive's identity, with 2FA. Not built; the design comes with the integration.
+
 ## 2. Organizations and roles
 
 | Role | Can |

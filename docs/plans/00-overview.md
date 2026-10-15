@@ -32,7 +32,9 @@ The app serves two goals:
 | Area | Decision |
 |---|---|
 | Product shape | Web app: front end plus server with uploads and AI |
-| Hosting | OVHcloud US VPS. The OVHcloud US account is in place. File processing runs in a sandbox container with no network and no secrets (01 s2.1) |
+| Hosting | Lives on the Shaavir Drive server: Contabo Cloud VPS 8, US East, shared with the Drive stack (01 s1). File processing runs in a sandbox container with no network and no secrets (01 s2.1) |
+| PD and Shaavir Drive | Two separate products; a client can buy either or both. Integration is optional. When integrated, one login for both through the Drive's identity with 2FA (01 s1.1). Nothing built yet |
+| Admin access | SSH only over the Drive's Headscale tailnet (`vpn.shaavir.com`). Public ports 80 and 443 only, through the Drive's reverse proxy (01 s3) |
 | AI | Provider-agnostic. First test: DeepInfra Qwen3.5-397B with Shaavir skills loaded by the app. AI concurrency is a per-provider setting (starting value 3) plus a per-bid cap, set from the Phase 1 benchmark |
 | Model gate | A model goes live only if it passes every mark on the 2 held-out golden documents (3 others are for tuning): 98% recall, 95% precision (a row matches at 80% quote overlap), correct due dates, no row citing text missing from the solicitation, under 10 minutes per 200-page text-layer PDF on an idle worker. The quote-check failure rate before drops and the dropped-row count are reported (04 s5) |
 | Signup | Work email plus phone verification (+1 US numbers at launch) |
@@ -93,25 +95,30 @@ Clicking a row in tabs 1 to 8 opens the row detail slider with the exact quote, 
 1. 🟨 **OPEN:** product name and subdomain. Plans use the working subdomain `pd.shaavir.com` (01 s3).
 2. 🟨 **OPEN:** prices for Starter and Growth. Provisional until Phase 6 sets them from measured cost (06 s3).
 3. 🟨 **OPEN:** whether a free email domain block plus one free organization per company domain applies (proposed in 06 s1).
-4. 🟨 **OPEN:** exact OVH US VPS plan with 8 GB RAM and 4 vCores, and its price (01 s1).
+4. 🟨 **OPEN:** the Contabo Cloud VPS 8's vCPU count and RAM, and whether PD fits next to the Drive stack on it or needs a second VPS (01 s1, 01 s1.2).
 5. 🟨 **OPEN:** transactional email provider (02 s1), off-site backup target (01 s4), and error tracking service, which must scrub request bodies (01 s5).
 6. 🟨 **OPEN:** whether the offline Proposal Schedule Builder stays as a free download beside the web app.
 7. 🟨 **OPEN:** legal review of Terms, Privacy Policy, and data processing terms (US users, India's DPDP Act) (07 s4).
-8. 🟨 **OPEN:** which OVH US location offers the chosen VPS (01 s1).
-9. 🟨 **OPEN:** whether to run a separate small staging VPS. The 8 GB server has no room for a staging copy; cost a few dollars a month (01 s6, 01 s7, 08 Phase 0).
+8. 🟨 **OPEN:** PD's share of the shared server's memory, disk and cost, and the trigger for moving PD to a second VPS (01 s1.2, 01 s7).
+9. 🟨 **OPEN:** whether to run a separate small staging VPS. The shared Drive server has no room for a staging copy; cost a few dollars a month (01 s6, 01 s7, 08 Phase 0).
 10. 🟨 **OPEN:** Telnyx US SMS rate and 10DLC fee (01 s7).
 11. 🟨 **OPEN:** file encryption method on the server: disk encryption or per-file (03 s5).
 12. 🟨 **OPEN:** whether to turn on Stripe Tax, from launch or once a nexus threshold is reached. A quarterly nexus check is decided (06 s5).
 13. 🟨 **OPEN:** Telnyx 10DLC campaign registration or a verified toll-free number for SMS codes (06 s1).
 14. 🟨 **OPEN:** who besides Amaan gets root and SSH access to the server (01 s1, 07 s1).
 15. 🟨 **OPEN:** archive lifetime. Proposed: paid plans until the bid or organization is deleted; free plans 12 months, then deleted (06 s3, 07 s2).
-16. 🟨 **OPEN:** archive provider, for example OVH Object Storage in another region or Backblaze B2 (01 s4, 02 s1, 07 s4).
+16. 🟨 **OPEN:** archive provider, for example Backblaze B2 or Contabo Object Storage (01 s4, 02 s1, 07 s4).
 17. 🟨 **OPEN:** restore window length, any restore fee or limit, and whether free users can restore (05 s3.10, 07 s2).
 18. 🟨 **OPEN:** backup method and recovery targets. Proposed: WAL archiving, RPO 1 hour, RTO 4 hours (01 s4).
 19. 🟨 **OPEN:** AI cost figures per RFP and per month are provisional. Re-derive from providers' current price lists and Phase 1 measurements, with no caching assumed (01 s7, 04 s7).
 20. 🟨 **OPEN:** amendment key overrides allowed per bid. Proposed: 2 (06 s4).
 21. 🟨 **OPEN:** daily SMS send caps. Proposed: 10 per IP address and 5 per account (06 s1).
 22. 🟨 **OPEN:** live storage quota per organization. Proposed: Free 200 MB, Starter 9 GB, Growth 18 GB (06 s3).
+23. 🟨 **OPEN:** the repository `alwiarif46/pd` is public, but 01 s6 says private, and it exposes the internal plans. It went public because CI failed on the private repository with a GitHub billing error. Fix billing and make it private, or accept public (01 s6).
+24. 🟨 **OPEN:** whether `pd.shaavir.com` stays proxied through Cloudflare or uses the Drive reverse proxy's own certificates; the Cloudflare rate limits depend on it (01 s3).
+25. 🟨 **OPEN:** how deploys reach the server with no public SSH: a tailnet key for CI, or deploys by hand from a tailnet machine (01 s6).
+26. 🟨 **OPEN:** whether the compromise risk shared with the Drive is accepted for launch, or PD runs on a second VPS (01 s1).
+27. 🟨 **OPEN:** whether PD uses the Drive's ClamAV or keeps its own (01 s1.2).
 
 ## Decision log
 
@@ -121,7 +128,7 @@ Clicking a row in tabs 1 to 8 opens the row detail slider with the exact quote, 
 | 13 Oct 2026 | Pipeline generalised to federal and SLED bids; chunked uploads; 10DLC added to Phase 0 | Fable review |
 | 13 Oct 2026 | Plans v2: MB cap per bid (50 MB Free, 300 MB paid), no page cap; solicitation set defined | Amaan |
 | 13 Oct 2026 | Amendments processed as changes only; superseded rows kept and linked; row detail slider | Amaan |
-| 13 Oct 2026 | Stripe account and OVHcloud US account confirmed | Amaan |
+| 13 Oct 2026 | Stripe account and OVHcloud US account confirmed (hosting superseded 16 Oct 2026) | Amaan |
 | 13 Oct 2026 | Model test protocol: 80% overlap match, 3 tuning and 2 held-out documents, pre-drop quote metric, text-layer time gate, Phase 1 benchmark | Amaan |
 | 13 Oct 2026 | Archive approach for retention; page text kept until bid deletion except resumes (closes open item on page text) | Amaan |
 | 13 Oct 2026 | India staff access and China-origin model disclosed; app names the model (closes open item on naming the model); DeepInfra terms moved into Phase 0 "done when" (closes open item on DeepInfra retention) | Amaan |
@@ -129,3 +136,4 @@ Clicking a row in tabs 1 to 8 opens the row detail slider with the exact quote, 
 | 13 Oct 2026 | Row-level security hardening, source columns, sandbox, ClamAV limits, quote normalization, cost arithmetic, CUI marking check, credit reservation, free-period rules, Stripe status rules, new tables, upload sessions, backups RPO and RTO, SMS controls, honest admin access statement, viewing tokens | Independent review |
 | 13 Oct 2026 | Open items renumbered: 3 closed, 9 added | Plans v2 |
 | 14 Oct 2026 | PostgreSQL confirmed; v0 / Claude Code / Cursor split added as 09-ui-workflow.md | Chat with Amaan |
+| 16 Oct 2026 | Hosting follows Shaavir Drive to Contabo Cloud VPS 8, US East; PD lives on the Drive server. PD and the Drive are separate products with optional integration and one login when integrated. Admin SSH over the Drive's tailnet only; public 80 and 443 through its reverse proxy. Open items 4, 8 and 16 rewritten; 23 to 27 added | Drive hosting handoff |

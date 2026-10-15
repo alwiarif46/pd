@@ -1,6 +1,6 @@
 # Phase 0 Status
 
-**Updated:** 14 Oct 2026
+**Updated:** 16 Oct 2026 (hosting moved to the Shaavir Drive server)
 **Status:** Backend through the AI pipeline is in the repo. The plan 05 screens are in `apps/web`. Production is not live. Stripe, archive, and paid-tab AI jobs are not started.
 
 ## Code now in the repo
@@ -14,7 +14,7 @@
 
 ## Still external
 
-- OVH VPS, Cloudflare, and `https://pd.shaavir.com/health`
+- The Shaavir Drive server (Contabo Cloud VPS 8, US East; paid, not provisioned), Cloudflare, and `https://pd.shaavir.com/health`
 - Telnyx 10DLC or toll-free verification
 - Written zero-retention terms from DeepInfra
 - The real golden set of 5 solicitations
@@ -29,7 +29,7 @@
 
 From the plan, Phase 0 requires:
 
-- [x] OVH US VPS (the account is in place), Ubuntu, firewall, Docker, nginx, Cloudflare DNS for the subdomain. Root and SSH: Amaan only until decided (01 s1).
+- [ ] The Shaavir Drive server (Contabo Cloud VPS 8, US East, Ubuntu 24.04): PD's compose stack next to the Drive's, routed by the Drive's reverse proxy, Cloudflare DNS for the subdomain. Admin SSH only over the Drive's Headscale tailnet; public ports 80 and 443 only. Check PD fits the shared server first (01 s1.2). (Was ticked for the OVH VPS, which was never provisioned.)
 - [x] Compose layout with the `sandbox` service and its host runner (01 s2.1). clamd limits at 300 MB or more and `ConcurrentDatabaseReload no`.
 - [x] Database roles `pd_owner`, `pd_app`, and `pd_system` (02 s4).
 - [x] GitHub repository, CI, container registry, staging environment (a separate small VPS if chosen; 🟨 **OPEN** in 01 s6).
@@ -93,14 +93,14 @@ From the plan, Phase 0 requires:
 
 ## Pending Tasks (External/Manual) ⏳
 
-### 1. OVH US VPS Provisioning
-- [ ] Provision OVH US VPS (8 GB RAM, 4 vCores)
-- [ ] Choose US location (Vint Hill, Virginia or Hillsboro, Oregon)
-- [ ] Run setup-server.sh on the server
-- [ ] Configure Cloudflare DNS for pd.shaavir.com
-- [ ] Install Cloudflare Origin certificate in nginx
-- [ ] Configure firewall to allow Cloudflare IPs only
-- [ ] Set up SSH access (Amaan only until decided)
+### 1. Hosting on the Shaavir Drive server
+- [x] Contabo Cloud VPS 8, US East, ordered and paid by the Drive (16 Oct 2026); not provisioned yet
+- [ ] Confirm its vCPU count and RAM, and set PD's share of memory and disk (01 s1.2)
+- [ ] Change setup-server.sh to the Drive's model: no public port 22, no firewall or nginx setup that fights the Drive's reverse proxy (01 s3). It opens 22 and 443 to everyone today
+- [ ] Route pd.shaavir.com through the Drive's reverse proxy; Cloudflare DNS for the subdomain
+- [ ] Decide whether Cloudflare stays in front (Origin certificate) or the proxy's own certificates are used (01 s3)
+- [ ] Admin SSH over the Drive's Headscale tailnet (`vpn.shaavir.com`); decide who gets root
+- [ ] Decide how deploys reach the server without public SSH (01 s6)
 - [ ] Decision: Staging VPS (separate small VPS or skip for now)
 
 ### 2. Telnyx 10DLC Registration
@@ -147,7 +147,8 @@ From 00-overview.md, these are still open:
 - 🟨 Product name and subdomain (working: pd.shaavir.com)
 - 🟨 Prices for Starter and Growth (provisional until Phase 6)
 - 🟨 Free email domain block plus one free organization per company domain
-- 🟨 Exact OVH US VPS plan name and price
+- 🟨 The Contabo server's vCPU and RAM, and whether PD fits next to the Drive or needs a second VPS
+- 🟨 Repository is public; make it private (needs the GitHub billing fix)
 - 🟨 Transactional email provider
 - 🟨 Off-site backup target
 - 🟨 Error tracking service (must scrub request bodies)
@@ -171,7 +172,7 @@ The plan 05 screens live in `apps/web`: sign-up, bids, the bid workspace, and th
 
 ### Before Production
 1. Complete the pending external tasks above
-2. Run deployment on the OVH VPS
+2. Run deployment on the Shaavir Drive server
 3. Verify the health endpoint through Cloudflare
 4. Confirm DeepInfra terms or limit the golden set
 5. Assemble the golden set documents and run the live benchmark
@@ -179,6 +180,6 @@ The plan 05 screens live in `apps/web`: sign-up, bids, the bid workspace, and th
 ### Decision Points
 1. Staging VPS: separate small VPS or skip?
 2. Product name and subdomain: finalize?
-3. Archive provider: OVH Object Storage or Backblaze B2?
+3. Archive provider: Backblaze B2 or Contabo Object Storage?
 4. Email provider: choose one
 5. Error tracking: choose one that scrubs request bodies

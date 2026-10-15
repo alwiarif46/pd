@@ -6,7 +6,7 @@ The model test comes before the app UI because its result sets the model, the co
 
 ## Phase 0 — Setup
 
-- OVH US VPS (the account is in place), Ubuntu, firewall, Docker, nginx, Cloudflare DNS for the subdomain. Root and SSH: Amaan only until decided (01 s1).
+- The Shaavir Drive server (Contabo Cloud VPS 8, US East, Ubuntu 24.04): PD's compose stack next to the Drive's, routed by the Drive's reverse proxy, Cloudflare DNS for the subdomain. Admin SSH only over the Drive's Headscale tailnet; public ports 80 and 443 only. Check PD fits the shared server first (01 s1.2).
 - Compose layout with the `sandbox` service and its host runner (01 s2.1). clamd limits at 300 MB or more and `ConcurrentDatabaseReload no`.
 - Database roles `pd_owner`, `pd_app`, and `pd_system` (02 s4).
 - GitHub repository, CI, container registry, staging environment (a separate small VPS if chosen; 🟨 **OPEN** in 01 s6).

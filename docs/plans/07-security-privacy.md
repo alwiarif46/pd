@@ -6,17 +6,17 @@
 
 | Area | Control |
 |---|---|
-| Transport | HTTPS only via Cloudflare and nginx. HSTS on |
+| Transport | HTTPS only, through the Drive's reverse proxy (and Cloudflare if it stays in front, 01 s3). HSTS on |
 | Passwords | Argon2id hashes. Lockout after 10 failed logins in 15 minutes |
 | Sessions | Stored in the Postgres `sessions` table. HttpOnly, Secure, SameSite=Lax cookies. 14-day sessions, revoked on password change. CSRF token on every state-changing request |
 | Tenancy | Row-level security with `FORCE ROW LEVEL SECURITY` on every tenant table. Every request and job sets `app.org_id` transaction-local. The app role `pd_app` is not the table owner and has `NOBYPASSRLS`; migrations run as `pd_owner`; jobs with no org context use named `pd_system` functions only. Membership checks in the api as well (02 s4) |
 | Files | Virus scan (clamd limits at 300 MB or more), type check by content (not extension), MB cap per bid, encryption check, page-count check before OCR, encrypted at rest, served only through per-document viewing tokens valid about 1 hour and bound to the session |
 | File processing | Only in the sandbox container: no network, no secrets, non-root, read-only mount of the one file, seccomp and AppArmor, hard time, CPU, and memory limits (01 s2.1) |
 | Secrets | API keys in environment files readable only by root and the containers that need them. Never in the repo. The sandbox gets none |
-| Server | SSH keys only, firewall limited to Cloudflare ranges, automatic security updates. Root and SSH: Amaan only until decided. 🟨 **OPEN:** who else gets root. SSH sessions are logged |
+| Server | PD lives on the Shaavir Drive server (01 s1). SSH keys only, and SSH only over the Drive's Headscale tailnet (`vpn.shaavir.com`); public ports 80 and 443 only, through the Drive's reverse proxy. Automatic security updates. Root on this server is root for both PD and the Drive. 🟨 **OPEN:** who gets root. SSH sessions are logged |
 | Dependencies | Weekly dependency audit in CI |
 | Logs | No document text, resumes, quotes, or phone numbers in logs. The error tracking service scrubs request bodies, headers, and cookies (01 s5) |
-| Admin access | No admin screen shows customer documents (there are no admin screens in v1). Staff with root on the server can technically read files and the database. Root is limited to named people (Amaan only until decided), and SSH sessions are logged. Support access to a customer's documents needs the customer's written approval and is logged in `audit_log`. This is a written procedure, not a screen |
+| Admin access | No admin screen shows customer documents (there are no admin screens in v1). Staff with root on the server can technically read files and the database. The server is shared with Shaavir Drive, so the Drive's administrators with root can too. Root is limited to named people, and SSH sessions are logged. Support access to a customer's documents needs the customer's written approval and is logged in `audit_log`. This is a written procedure, not a screen |
 
 ## 2. Data retention
 
@@ -58,7 +58,7 @@ Terms of use and the upload screen state:
 - Terms of Service
 - Privacy Policy
 - Data processing terms for organizations
-- Subprocessor list: OVHcloud US (hosting), DeepInfra (AI), Anthropic (AI, if used), Stripe, Telnyx, email provider, archive storage provider (🟨 **OPEN**, 01 s4), off-site backup target, error tracking service
+- Subprocessor list: Contabo (hosting, US East), DeepInfra (AI), Anthropic (AI, if used), Stripe, Telnyx, email provider, archive storage provider (🟨 **OPEN**, 01 s4), off-site backup target, error tracking service
 
 The Terms and Privacy Policy disclose:
 - The AI model and provider in use, and that a China-origin model may process documents.
