@@ -249,6 +249,86 @@ drill_env dr-offsite
 out="$(FAKE_MIGRATIONS=$JOURNAL_N FAKE_COPY_DEST_FILES=1 bash ops/restore-drill/drill.sh run --from-offsite --rclone-env "$S/restore.env" --borg-pass "$S/etc/borg.pass" 2>&1)"; rc=$?
 grep -q "^rclone --config .* copy b2crypt:borg " "$FAKE_CALLS" && ! grep -qF -- "$SECRET_KEY" "$FAKE_CALLS" && ! grep -qF -- "$SECRET_KEY" <<<"$out" && ok "drill --from-offsite pulls b2crypt:borg with the key only in the environment" || bad "drill offsite" "rc=$rc $(grep '^rclone' "$FAKE_CALLS")"
 
+# ------------------------------------------------------------------ deploy.sh (bugs 9-11; compose data placement)
+# deploy_env: a sandbox with a copy of the libs, providers, tenant file and compose file as PD_PROJECT_DIR
+deploy_env() {
+  setup "$1"
+  mkdir -p "$S/project/infra" "$S/project/config"
+  cp -R "$REPO/infra/lib" "$REPO/infra/providers" "$S/project/infra/"
+  cp "$REPO/infra/docker-compose.yml" "$S/project/infra/"
+  cp "$REPO/config/tenant.toml" "$S/project/config/"
+  mkdir -p "$S/project/.git"
+  printf 'POSTGRES_PASSWORD=x\n' >"$S/project/.env"
+}
+subprocessor_set() { sed -i 's/^subprocessor   = ""/subprocessor   = "Contabo GmbH"/' "$S/project/config/tenant.toml"; }
+compose_calls() { grep -c '^docker compose' "$FAKE_CALLS" || true; }
+
+deploy_env dp-nomount
+subprocessor_set
+out="$(FAKE_MOUNT_PDDATA= bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "is not mounted from /dev/mapper/pddata" <<<"$out" && [[ "$(compose_calls)" == 0 ]] && ok "deploy refuses when /mnt/pddata is not the encrypted mapper (nothing built or started)" || bad "data mount guard" "rc=$rc $out"
+out="$(FAKE_MOUNT_PDBACKUP=/dev/sdb1 bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "is not mounted from /dev/mapper/pdbackup" <<<"$out" && [[ "$(compose_calls)" == 0 ]] && ok "deploy refuses when /mnt/pdbackup is another device" || bad "backup mount guard" "rc=$rc $out"
+
+deploy_env dp-oldvol
+subprocessor_set
+out="$(FAKE_OLD_VOLUME=1 bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "infra_postgres_data" <<<"$out" && [[ "$(compose_calls)" == 0 ]] && ok "deploy refuses while the old named volume infra_postgres_data exists" || bad "old volume guard" "rc=$rc $out"
+
+deploy_env dp-nosub
+out="$(bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "subprocessor" <<<"$out" && [[ "$(compose_calls)" == 0 ]] && ok "deploy refuses an empty hosting subprocessor (ssh adapter without [infra] subprocessor)" || bad "subprocessor guard" "rc=$rc $out"
+
+deploy_env dp-run
+subprocessor_set
+out="$(bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+[[ $rc == 0 ]] && ok "deploy.sh real run against the fakes exits 0" || bad "deploy run" "rc=$rc $(tail -5 <<<"$out")"
+lno() { grep -nE -- "$1" "$FAKE_CALLS" | head -1 | cut -d: -f1; }
+l_build="$(lno ' build( |$)')"; l_db="$(lno 'up -d postgres redis')"; l_mig="$(lno 'run --rm -T migrate')"; l_up="$(lno 'up -d --remove-orphans')"
+[[ -n "$l_build" && -n "$l_up" ]] && (( l_build < l_db && l_db < l_mig && l_mig < l_up )) && ok "deploy order: build, database, migrations, then restart the services" || bad "deploy order" "build=$l_build db=$l_db mig=$l_mig up=$l_up"
+grep -q "^docker compose --env-file $S/project/.env -f $S/project/infra/docker-compose.yml up -d postgres redis" "$FAKE_CALLS" && ok "deploy passes --env-file and -f explicitly" || bad "compose flags"
+grep -q "^env .*PD_HOSTING_SUBPROCESSOR=Contabo GmbH PD_BACKUP_SUBPROCESSOR=Backblaze, Inc. (encrypted off-site backups) PD_DATA_ROOT=$S/pddata" "$FAKE_CALLS.env" && ok "deploy exports the hosting and backup subprocessors and the data root to compose" || bad "subprocessor env" "$(tail -2 "$FAKE_CALLS.env")"
+[[ -d "$S/pddata/files" && -d "$S/pddata/postgres" && -d "$S/pddata/redis" ]] && grep -q "^chown 1000:1000 $S/pddata/files" "$FAKE_CALLS" && ok "deploy creates files/, postgres/, redis/ on the data volume (files owned by 1000:1000)" || bad "data dirs" "$(ls "$S/pddata")"
+! grep -vE '^\s*#' infra/scripts/deploy.sh | grep -qE '/data/(files|backups)' && ok "deploy.sh no longer uses /data/files or /data/backups" || bad "old /data paths"
+grep -q "^docker compose .* build" "$FAKE_CALLS" && ! grep -q "^docker compose .* pull" "$FAKE_CALLS" && ok "without --pull-tag the images are built" || bad "build vs pull"
+
+deploy_env dp-pull
+subprocessor_set
+out="$(bash infra/scripts/deploy.sh --pull-tag abc1234 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q "^docker compose .* pull web api worker" "$FAKE_CALLS" && ! grep -q "^docker compose .* build" "$FAKE_CALLS" && grep -q "PD_IMAGE_PREFIX=ghcr.io/alwiarif46/pd- PD_IMAGE_TAG=abc1234" "$FAKE_CALLS.env" \
+  && ok "--pull-tag uses compose pull and sets PD_IMAGE_PREFIX / PD_IMAGE_TAG" || bad "pull-tag" "rc=$rc $(cat "$FAKE_CALLS")"
+out="$(bash infra/scripts/deploy.sh --ref v1.2.3 2>&1)"
+grep -q "^git checkout v1.2.3" "$FAKE_CALLS" && ok "--ref selects the git ref" || bad "--ref"
+
+# --ci: the request arrives in SSH_ORIGINAL_COMMAND and is parsed strictly
+deploy_env dp-ci
+subprocessor_set
+out="$(SSH_ORIGINAL_COMMAND='ref=master tag=abc1234' bash infra/scripts/deploy.sh --ci 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q "^git checkout master" "$FAKE_CALLS" && grep -q "PD_IMAGE_TAG=abc1234" "$FAKE_CALLS.env" && ok "--ci accepts 'ref=master tag=abc1234' (deploys that ref with that image tag)" || bad "ci accept" "rc=$rc $out"
+for bad_req in 'ref=master;id' 'ref=$(x)' '' 'ref=master tag=zzz' 'ref=master tag=abc1234 extra' 'ref=-x' 'ref=a..b' 'ref=master&&id' 'tag=abc1234'; do
+  deploy_env dp-ci-bad
+  subprocessor_set
+  out="$(SSH_ORIGINAL_COMMAND="$bad_req" bash infra/scripts/deploy.sh --ci 2>&1)"; rc=$?
+  if [[ $rc == 2 && ! -s "$FAKE_CALLS" ]]; then ok "--ci refuses '$bad_req' with exit 2 and runs nothing"; else bad "--ci accepted or ran for '$bad_req'" "rc=$rc calls=$(cat "$FAKE_CALLS")"; fi
+done
+deploy_env dp-ci-unset
+out="$(env -u SSH_ORIGINAL_COMMAND bash infra/scripts/deploy.sh --ci 2>&1)"; rc=$?
+[[ $rc == 2 && ! -s "$FAKE_CALLS" ]] && ok "--ci without SSH_ORIGINAL_COMMAND is refused (exit 2)" || bad "--ci unset" "rc=$rc"
+
+deploy_env dp-dry
+out="$(bash infra/scripts/deploy.sh --dry-run 2>&1)"; rc=$?
+[[ $rc == 0 ]] && ! grep -qE '^(docker compose|git (fetch|checkout|pull|clone)|chown)' "$FAKE_CALLS" && ok "deploy.sh --dry-run exits 0 and changes nothing (only read-only probes: findmnt, docker volume inspect)" || bad "deploy dry-run" "rc=$rc $(cat "$FAKE_CALLS")"
+
+# docker-compose.yml (bugs 10-11)
+yml="$(cat infra/docker-compose.yml)"
+! grep -qE '^version:' infra/docker-compose.yml && ok "compose: no obsolete version key" || bad "compose version key"
+grep -q '${PD_DATA_ROOT:-/mnt/pddata}/postgres:/var/lib/postgresql/data' <<<"$yml" && grep -q '${PD_DATA_ROOT:-/mnt/pddata}/redis:/data' <<<"$yml" && ok "compose: postgres and redis data on /mnt/pddata" || bad "compose data paths"
+[[ "$(grep -c '${PD_DATA_ROOT:-/mnt/pddata}/files:/data/files' <<<"$yml")" == 2 && "$(grep -c 'DATA_DIR=/data/files' <<<"$yml")" == 2 ]] && ok "compose: api and worker share the files volume with DATA_DIR=/data/files" || bad "compose files volume"
+! grep -qE '^  (postgres_data|redis_data):' infra/docker-compose.yml && grep -q '^  clamav_data:' infra/docker-compose.yml && ok "compose: the postgres/redis named volumes are gone, clamav_data stays" || bad "compose named volumes"
+grep -q 'PD_HOSTING_SUBPROCESSOR=${PD_HOSTING_SUBPROCESSOR:-}' <<<"$yml" && grep -q 'PD_BACKUP_SUBPROCESSOR=${PD_BACKUP_SUBPROCESSOR:-}' <<<"$yml" && ok "compose: the api receives both subprocessor values" || bad "compose subprocessors"
+[[ "$(grep -c 'image: ${PD_IMAGE_PREFIX:-pd-}' <<<"$yml")" == 5 ]] && ok "compose: five images follow PD_IMAGE_PREFIX / PD_IMAGE_TAG (defaults unchanged)" || bad "compose image variables"
+
+
 # ------------------------------------------------------------------ static
 mapfile -t SH < <(find ops infra/scripts -name '*.sh' -not -path '*/node_modules/*')
 badsyntax=""
