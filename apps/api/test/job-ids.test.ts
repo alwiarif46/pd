@@ -28,7 +28,7 @@ vi.mock('bullmq', async (importOriginal) => {
   return { ...real, Queue, validateForTest: validate };
 });
 
-const STAGES = ['scan', 'file', 'marking', 'classify', 'ai:overview', 'ai:dates', 'ai:compliance', 'ai:amendment'];
+const STAGES = ['scan', 'file', 'marking', 'classify', 'ai:overview', 'ai:dates', 'ai:compliance', 'ai:amendment', 'ai:amendment-tabs'];
 
 describe('BullMQ job ids', () => {
   it('the check is real: the old two-part ids are refused', async () => {
