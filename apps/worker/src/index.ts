@@ -1,6 +1,7 @@
 import { Worker } from 'bullmq';
 import { enforceTenantRole } from '@pd/core';
-import { processAmendmentJob, processCompliance, processDates, processOverview } from './ai-jobs.js';
+import { processCompliance, processDates, processOverview } from './ai-jobs.js';
+import { processAmendmentJob } from './amendment-job.js';
 import { processClassify } from './classify-job.js';
 import { processFile } from './file-job.js';
 import { processMarking } from './marking-job.js';
@@ -31,7 +32,9 @@ const workers = [
   start('ai:compliance', processCompliance),
   start('ai:dates', processDates),
   start('ai:overview', processOverview),
-  start('ai:amendment', processAmendmentJob),
+  start('ai:amendment', async (payload) => {
+    await processAmendmentJob(payload);
+  }),
 ];
 
 console.log('Worker running');

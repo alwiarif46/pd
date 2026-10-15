@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { legacyQueueJobId, queueJobId } from '@pd/core';
+import { amendmentKickJobId, legacyQueueJobId, queueJobId } from '@pd/core';
 
 const added = vi.hoisted(() => [] as { queue: string; jobId: string | undefined }[]);
 
@@ -63,6 +63,19 @@ describe('BullMQ job ids', () => {
       `scan-${payload.jobId}`,
       `classify-${payload.jobId}`,
       ...STAGES.map((stage) => queueJobId(stage, payload.jobId)),
+    ]);
+  });
+
+  it('the amendment kick ids (worker and api) are accepted and fresh each time', async () => {
+    const api = await import('../src/queue.js');
+    const worker = await import('../../worker/src/enqueue.js');
+    const payload = { orgId: randomUUID(), bidId: randomUUID(), documentId: randomUUID(), jobId: randomUUID(), storagePath: '', kind: 'amendment' as const };
+    added.length = 0;
+    await worker.enqueue('ai:amendment', payload, { jobId: amendmentKickJobId(payload.documentId, 1) });
+    await api.enqueueAmendment(payload, amendmentKickJobId(payload.documentId, 2));
+    expect(added.map((item) => item.jobId)).toEqual([
+      `ai-amendment-kick-${payload.documentId}-1`,
+      `ai-amendment-kick-${payload.documentId}-2`,
     ]);
   });
 });

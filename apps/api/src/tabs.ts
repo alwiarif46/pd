@@ -719,6 +719,7 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
       if (!await findBid(db, orgId, id)) {
         return respond(404, { error: 'Bid not found' });
       }
+      await lockComplianceRemoval(db, orgId, id, ids);
       const rows = [];
       for (const rowId of ids) {
         const [row] = await db.select().from(schema.complianceRows).where(and(
@@ -734,6 +735,8 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
         return respond(404, { error: 'Row not found' });
       }
       const [keep, ...rest] = rows;
+      // Amendment links first, then rows (lock order).
+      await detachComplianceRows(db, orgId, rest.map((row) => row.id));
       await db.update(schema.complianceRows).set({
         requirementText: rows.map((row) => row.requirementText).join(' '),
         updatedAt: new Date(),
@@ -784,6 +787,75 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
       return respond(201, created);
     });
   });
+}
+
+/**
+ * Before a compliance row is deleted (row delete, merge; 05 s3.3): an amendment proposal that
+ * would bring the row in can no longer be confirmed, so it becomes 'rejected' (and an amendment
+ * left with no proposal is applied); a row the deleted row replaced stays 'superseded' with no
+ * pointer. Lock order: amendments (by id), then their links, then rows (apps/api/src/credits.ts).
+ */
+async function detachComplianceRows(db: Db, orgId: string, rowIds: string[]): Promise<void> {
+  if (rowIds.length === 0) {
+    return;
+  }
+  const proposed = await db.select({ amendmentId: schema.amendmentLinks.amendmentId }).from(schema.amendmentLinks).where(and(
+    inArray(schema.amendmentLinks.newRowId, rowIds),
+    eq(schema.amendmentLinks.orgId, orgId),
+    eq(schema.amendmentLinks.rowTable, 'compliance_rows'),
+    eq(schema.amendmentLinks.status, 'proposed'),
+  ));
+  const amendmentIds = [...new Set(proposed.map((link) => link.amendmentId))].sort();
+  const now = new Date();
+  if (amendmentIds.length > 0) {
+    // One ordered statement for every amendment involved, so two removals never cross.
+    await db.select({ id: schema.amendments.id }).from(schema.amendments).where(and(
+      inArray(schema.amendments.id, amendmentIds),
+      eq(schema.amendments.orgId, orgId),
+    )).orderBy(asc(schema.amendments.id)).for('update');
+    await db.update(schema.amendmentLinks).set({ status: 'rejected', updatedAt: now }).where(and(
+      inArray(schema.amendmentLinks.newRowId, rowIds),
+      eq(schema.amendmentLinks.orgId, orgId),
+      eq(schema.amendmentLinks.rowTable, 'compliance_rows'),
+      eq(schema.amendmentLinks.status, 'proposed'),
+    ));
+    for (const amendmentId of amendmentIds) {
+      const [open] = await db.select({ id: schema.amendmentLinks.id }).from(schema.amendmentLinks).where(and(
+        eq(schema.amendmentLinks.amendmentId, amendmentId),
+        eq(schema.amendmentLinks.orgId, orgId),
+        eq(schema.amendmentLinks.status, 'proposed'),
+      )).limit(1);
+      if (!open) {
+        await db.update(schema.amendments).set({ status: 'applied', updatedAt: now }).where(and(
+          eq(schema.amendments.id, amendmentId),
+          eq(schema.amendments.orgId, orgId),
+          eq(schema.amendments.status, 'needs_confirmation'),
+        ));
+      }
+    }
+  }
+  await db.update(schema.complianceRows).set({ supersededByRowId: null, updatedAt: now }).where(and(
+    inArray(schema.complianceRows.supersededByRowId, rowIds),
+    eq(schema.complianceRows.orgId, orgId),
+  ));
+}
+
+/**
+ * Locks taken before compliance rows are removed (row delete, merge), so the removal is
+ * serialised with every other writer that closes or links rows (the worker's amendment write,
+ * link confirm and reject, PATCH of a number), which all hold the bid: first the "check these"
+ * hits promoted to these rows (deleting a row sets their promoted_row_id to null, and check_these
+ * comes before bids in the lock order), then the bid (apps/api/src/credits.ts).
+ */
+async function lockComplianceRemoval(db: Db, orgId: string, bidId: string, rowIds: string[]): Promise<void> {
+  await db.select({ id: schema.checkThese.id }).from(schema.checkThese).where(and(
+    inArray(schema.checkThese.promotedRowId, rowIds),
+    eq(schema.checkThese.orgId, orgId),
+  )).orderBy(asc(schema.checkThese.id)).for('update');
+  await db.select({ id: schema.bids.id }).from(schema.bids).where(and(
+    eq(schema.bids.id, bidId),
+    eq(schema.bids.orgId, orgId),
+  )).for('update');
 }
 
 /** True when `id` names a row of `table` on this bid in this organization. */
@@ -867,6 +939,9 @@ async function deleteRow(db: Db, orgId: string, bidId: string, table: RowTable, 
     // Before the read, so the renumber below sees every committed move.
     await lockOutline(db, bidId);
   }
+  if (table === 'compliance_rows') {
+    await lockComplianceRemoval(db, orgId, bidId, [rowId]);
+  }
   const row = await readRow(db, orgId, bidId, table, rowId);
   if (!row) {
     return false;
@@ -882,6 +957,7 @@ async function deleteRow(db: Db, orgId: string, bidId: string, table: RowTable, 
       await db.delete(schema.scheduleActivities).where(and(eq(schema.scheduleActivities.id, rowId), eq(schema.scheduleActivities.orgId, orgId)));
       return true;
     case 'compliance_rows':
+      await detachComplianceRows(db, orgId, [rowId]);
       await db.delete(schema.complianceRows).where(and(eq(schema.complianceRows.id, rowId), eq(schema.complianceRows.orgId, orgId)));
       return true;
     case 'outline_items': {
@@ -988,6 +1064,10 @@ async function insertRow(
       const [compliance] = await db.insert(schema.complianceRows).values({
         orgId,
         bidId,
+        // Not allocated under the bid lock on purpose: a user row's id is typed or `user-<ms>`.
+        // The worker's allocateReqIds continues after every committed `<prefix>-<digits>` id, so
+        // a typed C.3.1-07 can only repeat an AI row's label if both commit at the same moment;
+        // req_id is a label, not a key (no unique index).
         reqId: text(body.reqId) || `user-${Date.now()}`,
         sectionRef: text(body.sectionRef),
         requirementText: text(body.requirementText)!,

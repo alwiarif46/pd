@@ -16,6 +16,7 @@ import { as, createTenant, type Tenant } from './helpers.js';
 vi.mock('../src/queue.js', () => ({
   enqueueScan: vi.fn(async () => undefined),
   enqueueClassify: vi.fn(async () => undefined),
+  enqueueAmendment: vi.fn(async () => undefined),
 }));
 
 const enqueued = vi.hoisted(() => [] as string[]);

@@ -372,6 +372,21 @@ export interface AmendmentLinkDto extends OrgScopedDto {
   confidence: string | null;
   status: 'auto' | 'proposed' | 'confirmed' | 'rejected';
   decidedBy: string | null;
+  /** The amendment text behind a supersede or withdraw, quote-checked; null on add links and on links written before migration 0009. */
+  sourcePage: number | null;
+  sourceQuote: string | null;
+}
+
+/**
+ * POST /api/amendment-links/:id/confirm and /reject. Decisions are final: the same decision again
+ * answers 200; the other is 409 `link_already_decided`. Confirm is 409 `row_already_closed` when
+ * the old row is no longer active and `new_row_missing` when the replacing row is gone.
+ * `amendmentStatus` is `applied` once no proposal is left.
+ */
+export interface AmendmentDecisionDto {
+  ok: true;
+  status: 'confirmed' | 'rejected';
+  amendmentStatus: AmendmentStatus;
 }
 
 // ---------------------------------------------------------------------------
