@@ -1,6 +1,7 @@
 import { Queue } from 'bullmq';
+import { legacyQueueJobId, queueJobId } from '@pd/core';
 
-/** Pipeline stages, each a BullMQ queue named after the stage. A job is `${stage}:${jobId}`. */
+/** Pipeline stages, each a BullMQ queue named after the stage. A job's BullMQ id is queueJobId(stage, jobId) (packages/core job-ids.ts). */
 export const STAGES = ['scan', 'file', 'marking', 'classify', 'ai:overview', 'ai:dates', 'ai:compliance', 'ai:amendment'] as const;
 
 export const MIN_SAMPLES = 5;
@@ -10,7 +11,7 @@ const REDIS_TIMEOUT_MS = 2_000;
 
 /** What the stats need from one stage queue. The default reads BullMQ; tests supply a fake. */
 export interface StageQueue {
-  /** Ids of waiting jobs (`${stage}:${jobId}`), next to run first, across all organizations. */
+  /** BullMQ ids of waiting jobs (queueJobId), next to run first, across all organizations. */
   waitingIds(): Promise<string[]>;
   /** BullMQ state of one job in this queue, or null if the queue does not hold it. */
   jobState(id: string): Promise<string | null>;
@@ -154,11 +155,17 @@ async function compute(jobs: StatsInput[], concurrency: number, result: Map<stri
     return ids;
   };
   for (const job of jobs) {
-    let found: { stage: string; state: string } | null = null;
+    let found: { stage: string; state: string; bullId: string } | null = null;
     for (const stage of STAGES) {
-      const state = await source(stage).jobState(`${stage}:${job.id}`);
-      if (state && HOLDING.has(state)) {
-        found = { stage, state };
+      // The current id first, then the format used before it (still possible on ai:* queues).
+      for (const bullId of [queueJobId(stage, job.id), legacyQueueJobId(stage, job.id)]) {
+        const state = await source(stage).jobState(bullId);
+        if (state && HOLDING.has(state)) {
+          found = { stage, state, bullId };
+          break;
+        }
+      }
+      if (found) {
         break;
       }
     }
@@ -167,7 +174,7 @@ async function compute(jobs: StatsInput[], concurrency: number, result: Map<stri
       continue;
     }
     const ids = await waiting(found.stage);
-    const index = found.state === 'waiting' ? ids.indexOf(`${found.stage}:${job.id}`) : -1;
+    const index = found.state === 'waiting' ? ids.indexOf(found.bullId) : -1;
     const queuePosition = index >= 0 ? index + 1 : null;
     let etaSeconds: number | null = null;
     if (queuePosition !== null) {

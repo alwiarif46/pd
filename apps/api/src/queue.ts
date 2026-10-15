@@ -1,4 +1,5 @@
 import { Queue } from 'bullmq';
+import { queueJobId } from '@pd/core';
 
 export interface ScanJob {
   orgId: string;
@@ -24,7 +25,7 @@ export function getScanQueue(): Queue<ScanJob> {
 }
 
 export async function enqueueScan(payload: ScanJob): Promise<void> {
-  await getScanQueue().add('scan', payload, { jobId: `scan:${payload.jobId}` });
+  await getScanQueue().add('scan', payload, { jobId: queueJobId('scan', payload.jobId) });
 }
 
 /**
@@ -49,6 +50,6 @@ export async function enqueueClassify(payload: ScanJob): Promise<void> {
       port: Number(process.env.REDIS_PORT) || 6379,
     },
   });
-  await queue.add('classify', payload, { jobId: `classify:${payload.jobId}` });
+  await queue.add('classify', payload, { jobId: queueJobId('classify', payload.jobId) });
   await queue.close();
 }
