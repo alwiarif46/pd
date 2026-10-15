@@ -164,8 +164,12 @@ async function decide(
   return !found ? 'held' : status === 'needs_number' ? 'needs_number' : 'proceed';
 }
 
-/** Statuses the key check may change on a rerun; anything past them is never re-diffed. */
-const RECHECKED: schema.AmendmentStatus[] = ['held', 'processing', 'needs_number'];
+/**
+ * Statuses the key check may change on a rerun; anything past them is never re-diffed. A failed
+ * amendment step is treated like processing: the retry route queues classify, and the check
+ * returns it to processing and queues the step again.
+ */
+const RECHECKED: schema.AmendmentStatus[] = ['held', 'processing', 'needs_number', 'failed'];
 
 /**
  * The amendment's number, settled under the bid lock the caller holds (04 s3.1 numbering rules).
@@ -214,7 +218,7 @@ async function setDocumentKey(db: Db, payload: JobPayload, keyStatus: NonNullabl
 }
 
 /** Inserts a failed classify job row for the document; logged, never thrown (the caller throws). */
-async function recordQueueFailure(payload: JobPayload): Promise<void> {
+export async function recordQueueFailure(payload: JobPayload): Promise<void> {
   try {
     await withOrg(payload.orgId, async (db) => {
       await db.insert(schema.jobs).values({

@@ -1,4 +1,4 @@
-import { and, eq, gt, max, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, isNotNull, max, ne, or, sql } from 'drizzle-orm';
 import type { AppDatabase } from './db';
 import * as schema from './db/schema';
 
@@ -96,4 +96,45 @@ export function isAmendmentNoConflict(error: unknown): boolean {
   const cause = (error as { cause?: unknown } | null)?.cause ?? error;
   const record = cause as { code?: unknown; constraint?: unknown } | null;
   return record?.code === '23505' && record.constraint === 'documents_bid_amendment_no_uq';
+}
+
+/** app_settings key: amendment links at or above this confidence apply without the user (04 s3.1). */
+export const SETTING_AMENDMENT_LINK_CONFIDENCE = 'amendment_link_confidence';
+export const AMENDMENT_LINK_CONFIDENCE = 0.8;
+
+/** The link confidence setting from its app_settings value; missing or malformed gives 0.80. */
+export function amendmentLinkConfidence(value: string | null | undefined): number {
+  const parsed = value === null || value === undefined || value.trim() === '' ? Number.NaN : Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : AMENDMENT_LINK_CONFIDENCE;
+}
+
+export interface RunnableAmendment {
+  documentId: string;
+  storagePath: string | null;
+  amendmentNo: number;
+}
+
+/**
+ * The amendment of the bid that may run next (04 s3.1 order gate): the lowest-numbered amendment
+ * in `processing` whose document is not deleted, or null. Amendments that are held, failed,
+ * waiting for a number, or done never block it.
+ */
+export async function nextAmendmentToRun(db: AppDatabase, orgId: string, bidId: string): Promise<RunnableAmendment | null> {
+  const [row] = await db.select({
+    documentId: schema.amendments.documentId,
+    storagePath: schema.documents.storagePath,
+    amendmentNo: schema.amendments.amendmentNo,
+  }).from(schema.amendments)
+    .innerJoin(schema.documents, eq(schema.documents.id, schema.amendments.documentId))
+    .where(and(
+      eq(schema.amendments.orgId, orgId),
+      eq(schema.amendments.bidId, bidId),
+      eq(schema.amendments.status, 'processing'),
+      isNotNull(schema.amendments.amendmentNo),
+      eq(schema.documents.orgId, orgId),
+      sql`${schema.documents.liveStatus} is distinct from 'deleted'`,
+    ))
+    .orderBy(asc(schema.amendments.amendmentNo))
+    .limit(1);
+  return row && row.amendmentNo !== null ? { ...row, amendmentNo: row.amendmentNo } : null;
 }
