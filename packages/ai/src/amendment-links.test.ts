@@ -19,6 +19,8 @@ const existing: ExistingRow[] = [
   { id: OLD_C, reqId: 'C.3.41-01', sectionRef: 'C.3.41', requirementText: 'Badges', sourceQuote: 'Badges are worn on site at all times.' },
 ];
 
+const REVISED = 'C.3.1 is revised: The contractor shall staff the help desk from 7 to 7.';
+
 const amendmentPages = [{
   pageNo: 1,
   ocrUsed: false,
@@ -85,14 +87,14 @@ describe('diffAmendment', () => {
   it('drops and counts links that are malformed, not offered, or quote text not in the amendment', async () => {
     const model = provider([
       'not an object',
-      { action: 'replace', newKey: 'n1', oldRowId: OLD_A, confidence: 0.9, sourceQuote: 'C.3.1 is revised', sourcePage: 1 },
+      { action: 'replace', newKey: 'n1', oldRowId: OLD_A, confidence: 0.9, sourceQuote: REVISED, sourcePage: 1 },
       // n9 does not exist; OLD_C is not a candidate of n1; OLD_A is not a withdraw candidate.
-      { action: 'supersede', newKey: 'n9', oldRowId: OLD_A, confidence: 0.9, sourceQuote: 'C.3.1 is revised', sourcePage: 1 },
-      { action: 'supersede', newKey: 'n1', oldRowId: OLD_C, confidence: 0.9, sourceQuote: 'C.3.1 is revised', sourcePage: 1 },
-      { action: 'withdraw', newKey: null, oldRowId: OLD_A, confidence: 0.9, sourceQuote: 'C.3.1 is revised', sourcePage: 1 },
+      { action: 'supersede', newKey: 'n9', oldRowId: OLD_A, confidence: 0.9, sourceQuote: REVISED, sourcePage: 1 },
+      { action: 'supersede', newKey: 'n1', oldRowId: OLD_C, confidence: 0.9, sourceQuote: REVISED, sourcePage: 1 },
+      { action: 'withdraw', newKey: null, oldRowId: OLD_A, confidence: 0.9, sourceQuote: REVISED, sourcePage: 1 },
       // A UUID-shaped id that is not a row, and a req id instead of a row id.
       { action: 'withdraw', newKey: null, oldRowId: '99999999-9999-4999-8999-999999999999', confidence: 0.9, sourceQuote: 'is deleted', sourcePage: 1 },
-      { action: 'supersede', newKey: 'n1', oldRowId: 'C.3.1-01', confidence: 0.9, sourceQuote: 'C.3.1 is revised', sourcePage: 1 },
+      { action: 'supersede', newKey: 'n1', oldRowId: 'C.3.1-01', confidence: 0.9, sourceQuote: REVISED, sourcePage: 1 },
       // No quote, a quote not in the amendment, no confidence.
       { action: 'withdraw', newKey: null, oldRowId: OLD_B, confidence: 0.9 },
       { action: 'withdraw', newKey: null, oldRowId: OLD_B, confidence: 0.9, sourceQuote: 'Section C.3.4 is kept as written.', sourcePage: 1 },
@@ -102,6 +104,20 @@ describe('diffAmendment', () => {
     const diff = await diffAmendment({ newRows, existing, amendmentPages, provider: model, config });
     expect(diff.links).toEqual([]);
     expect(diff.dropped).toBe(11);
+  });
+
+  it('drops a link whose evidence is a trivial fragment (under 4 words or 20 characters)', async () => {
+    const model = provider([
+      { action: 'withdraw', newKey: null, oldRowId: OLD_B, confidence: 0.99, sourceQuote: 'is deleted', sourcePage: 1 },
+      { action: 'withdraw', newKey: null, oldRowId: OLD_B, confidence: 0.99, sourceQuote: 'C.3.4 is deleted', sourcePage: 1 },
+      { action: 'supersede', newKey: 'n1', oldRowId: OLD_A, confidence: 0.99, sourceQuote: 'C.3.1 is revised:', sourcePage: 1 },
+      { action: 'withdraw', newKey: null, oldRowId: OLD_B, confidence: 0.99, sourceQuote: 'Section C.3.4 is deleted', sourcePage: 1 },
+    ]);
+    const diff = await diffAmendment({ newRows, existing, amendmentPages, provider: model, config });
+    expect(diff.dropped).toBe(3);
+    expect(diff.links).toEqual([
+      { action: 'withdraw', newIndex: null, oldRowId: OLD_B, confidence: 0.99, sourcePage: 1, sourceQuote: 'Section C.3.4 is deleted' },
+    ]);
   });
 
   it('makes no model call when there are no new rows and nothing to withdraw', async () => {

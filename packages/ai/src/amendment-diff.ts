@@ -50,6 +50,10 @@ export interface AmendmentDiff {
   tokensUsed: number;
 }
 
+/** The shortest evidence quote a supersede or withdraw link may carry. */
+const MIN_QUOTE_CHARS = 20;
+const MIN_QUOTE_WORDS = 4;
+
 const DELETE_WORDS = /\b(?:delet\w*|strik\w*|struck|remov\w*|rescind\w*)\b/i;
 /** Characters either side of a section reference searched for a delete word. */
 const NEAR = 150;
@@ -203,7 +207,9 @@ function readLink(
     return null;
   }
   const quote = typeof item.sourceQuote === 'string' ? item.sourceQuote.trim() : '';
-  if (!quote) {
+  // The evidence must say something: a fragment such as "is deleted" is on most amendments and
+  // could justify closing any row automatically.
+  if (quote.length < MIN_QUOTE_CHARS || quote.split(/\s+/).length < MIN_QUOTE_WORDS) {
     return null;
   }
   const location = locateQuote(quote, pages, typeof item.sourcePage === 'number' ? item.sourcePage : undefined);
