@@ -9,7 +9,7 @@ import {
   type PageText,
   type PreScanHit,
 } from '@pd/ai';
-import { schema, withOrg } from '@pd/core';
+import { inferActivityKind, schema, withOrg } from '@pd/core';
 import { kickAmendments } from './kick.js';
 import { allocateReqIds } from './req-ids.js';
 import type { JobPayload } from './redis.js';
@@ -320,11 +320,16 @@ export async function processDates(payload: JobPayload): Promise<void> {
   if (hits.length === 0) {
     return;
   }
+  // As migration 0010 backfilled AI dates: the label's kind, else a milestone.
+  const label = 'Date from solicitation';
+  const inferred = inferActivityKind(label);
   await withOrg(payload.orgId, async (db) => {
     await db.insert(schema.scheduleActivities).values(hits.map((hit) => ({
       orgId: payload.orgId,
       bidId: payload.bidId,
-      label: 'Date from solicitation',
+      label,
+      kind: inferred.kind === 'custom' ? 'milestone' as const : inferred.kind,
+      reviewColor: inferred.reviewColor,
       locked: true,
       documentId: payload.documentId,
       sourcePage: hit.pageNo,
