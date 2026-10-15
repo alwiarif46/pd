@@ -92,6 +92,8 @@ Tables with these columns: `bid_facts`, `schedule_activities` (AI-extracted date
 - A superseded row is never deleted. It gets `supersede_status` = `superseded`, `superseded_by_row_id` = the new row, and `changed_by_amendment` = N.
 - A withdrawn row has `supersede_status` = `withdrawn`, no replacement row, and `changed_by_amendment` = N.
 - Links the model is unsure of stay in `amendment_links` with status `proposed`. The old row stays `active` until the user confirms.
+- Every row an amendment adds is inserted, with `document_id` = the amendment and an `add` link (null `old_row_id`) when it replaces nothing; `add` links are always `auto`. Supersede and withdraw links carry `source_page` and `source_quote` from the amendment.
+- Link decisions are final: only a `proposed` link is confirmed or rejected. When the user deletes or merges away a row, proposed links whose `new_row_id` is that row become `rejected`, and a row whose `superseded_by_row_id` pointed at it stays `superseded` with a null pointer. Deleting an applied amendment keeps the rows and closures it wrote.
 
 ## 4. AI records and settings
 
@@ -146,4 +148,5 @@ Archive (off-server object storage, encrypted before upload)
 | 13 Oct 2026 | Viewer copy kept for OCR'd PDFs and DOCX converted to PDF, with the original's retention |
 | 13 Oct 2026 | MB cap per bid counts every file on the bid; no page cap |
 | 15 Oct 2026 | Amendment key check (migration 0008): `documents.key_status` and `key_found`, `amendments.matched_key`, amendment status `held`, one `amendments` row per document; `solicitation_key` described as uppercased (it never lowercased) |
+| 15 Oct 2026 | Amendment run: added rows inserted with the amendment as their document and an always-auto `add` link; link quotes stored; decisions final; row delete and merge reject proposals to the removed row and clear `superseded_by_row_id` |
 | 15 Oct 2026 | Amendment numbers (migration 0009): `documents.amendment_no_source` and `amendment_no_found`, `upload_sessions.amendment_no`, number 1 to 999 and unique per bid among amendments not deleted; `amendments.amendment_no` mirrors the document and may be null; amendment status `needs_number` and `failed`; `amendment_links.source_page` and `source_quote`; app setting `amendment_link_confidence` = 0.80; existing amendments numbered by upload date; lock order extended with amendment_links and compliance_rows |
