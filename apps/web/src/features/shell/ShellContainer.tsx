@@ -12,13 +12,14 @@ import { Workspace } from '@/screens/Workspace';
 import { summarizeOrg, type OrgSummary } from '@/features/shared/credits';
 import { messageOf } from '@/features/shared/messages';
 import { TabFrameContainer } from '@/features/tab-frame/TabFrameContainer';
-import { SIGNAL_LABELS, tabSignals } from '@/features/tab-frame/derive';
+import { tabSignals } from '@/features/tab-frame/derive';
 import { ShellContext, type ConfirmOptions, type ShellContextValue } from './bid-context';
 import {
   jobsKey,
   loadBid,
   placeholderShellBid,
   loadShell,
+  localDayOf,
   needsPolling,
   pollDelay,
   shellApi,
@@ -29,10 +30,9 @@ import {
   type ShellApi,
   type ShellData,
 } from './controller';
-import { InterimUserBar, type InterimTab } from './InterimUserBar';
 import { LegacyFrame } from './LegacyFrame';
 import type { PageKey } from './registry';
-import { activePageOf, isPaidTab, pageHref, TAB_TITLES, TABS, tabHref, type AppRoute } from './routes';
+import { activePageOf, isPaidTab, pageHref, TAB_TITLES, tabHref, type AppRoute } from './routes';
 import { screens } from './screens';
 
 type ShellState = { kind: 'loading' } | { kind: 'error'; message: string } | ShellData;
@@ -297,18 +297,26 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
   if (shell.kind === 'no_org') {
     const page = route.kind === 'page' && (route.page === 'account' || route.page === 'privacy') ? route.page : 'organization';
     return (
-      <div className="min-h-screen bg-canvas">
-        <InterimUserBar
-          inBid={null}
-          signalLabels={SIGNAL_LABELS}
-          onSwitchBid={() => undefined}
-          onSelectTab={() => undefined}
-          onOpenPage={(p) => go(pageHref(p))}
-          onUpgrade={null}
-          onSignOut={signOut}
-        />
+      <AppShell
+        bid={null}
+        bids={[]}
+        activeTab={null}
+        activePage={page}
+        plan="free"
+        creditsLeft={0}
+        creditsResetOn=""
+        oralsEnabled={false}
+        tabSignals={[]}
+        user={userOf(shell.me)}
+        detail={null}
+        onSelectTab={() => undefined}
+        onSwitchBid={() => undefined}
+        onOpenPage={(next: OutsidePage) => go(pageHref(next))}
+        onUpgrade={() => undefined}
+        onSignOut={signOut}
+      >
         <LegacyFrame>{legacyPage(page)}</LegacyFrame>
-      </div>
+      </AppShell>
     );
   }
 
@@ -385,12 +393,6 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
     );
   }
 
-  const interimTabs: InterimTab[] = TABS.filter((item) => oralsEnabled || item !== 'orals').map((item) => ({
-    tab: item,
-    label: TAB_TITLES[item],
-    locked: org.plan === 'free' && isPaidTab(item),
-    signal: signals.find((s) => s.tab === item)?.signal ?? null,
-  }));
   const switcherBids = current.bids.map((bid) => ({ id: bid.id, name: bid.name }));
 
   return (
@@ -402,7 +404,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
         activePage={activePageOf(route)}
         plan={org.plan}
         creditsLeft={org.creditsLeft}
-        creditsResetOn={org.creditsResetOn}
+        creditsResetOn={localDayOf(org.creditsResetOn)}
         oralsEnabled={oralsEnabled}
         tabSignals={signals}
         user={userOf(current.me)}
@@ -412,20 +414,9 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
         }}
         onSwitchBid={(id) => go(tabHref(id, tab ?? 'overview'))}
         onOpenPage={(page: OutsidePage) => go(pageHref(page))}
-        onUpgrade={() => openUpgrade('plan')}
+        onUpgrade={() => openUpgrade('locked_tab')}
         onSignOut={signOut}
       >
-        <InterimUserBar
-          inBid={bidId && tab ? { bids: switcherBids, bidId, tab, tabs: interimTabs } : null}
-          signalLabels={SIGNAL_LABELS}
-          onSwitchBid={(id) => go(tabHref(id, tab ?? 'overview'))}
-          onSelectTab={(next) => {
-            if (bidId) go(tabHref(bidId, next));
-          }}
-          onOpenPage={(page) => go(pageHref(page))}
-          onUpgrade={org.plan === 'free' ? () => openUpgrade('plan') : null}
-          onSignOut={signOut}
-        />
         {content()}
       </AppShell>
       <UpgradeDialog

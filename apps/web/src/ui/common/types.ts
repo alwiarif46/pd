@@ -21,3 +21,11 @@ export type {
   AmendmentProposal,
   AmendmentConfirmProps,
 } from '@/types';
+
+export interface RowDetailField {
+  key: string;
+  label: string;
+  value: string;
+  type: 'text' | 'textarea' | 'select';
+  options: string[] | null;
+}
