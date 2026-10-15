@@ -135,7 +135,7 @@ export function readValue(rest: string): string | null {
     }
     kept.push(word);
   }
-  const raw = kept.join(' ').replace(/[\-./ ]+$/, '');
+  const raw = kept.join(' ').replace(/[-./ ]+$/, '');
   if (!/\d/.test(raw) || normalizeSolicitationKey(raw).length < MIN_CANDIDATE_KEY) {
     return null;
   }
