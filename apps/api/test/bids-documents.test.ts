@@ -112,7 +112,7 @@ describe.skipIf(Boolean(unavailable))('bids and documents', () => {
         const row = await bidRow(tenant.orgId, bid);
         if (uploaded.statusCode === 201) {
           // The upload ran first and fixed the key; the PATCH then saw a reserved credit.
-          expect(patched.statusCode).toBe(409);
+          expect(patched.statusCode, patched.body).toBe(409);
           expect(row.solicitationKey).toBe(`UPLOAD${round}`);
           expect(row.creditStatus).toBe('reserved');
         } else {
@@ -161,15 +161,20 @@ describe.skipIf(Boolean(unavailable))('bids and documents', () => {
   });
 
   describe('POST /api/documents/:id/key-override', () => {
+    // A held amendment (key not found) or a matched one, on a bid whose solicitation holds a credit.
     async function amendment(tenant: Tenant, keyFound: boolean) {
+      const [bid] = await withOrg(tenant.orgId, (db) => db.select().from(schema.bids).where(eq(schema.bids.id, tenant.bidId)));
+      if (!bid.creditStatus) {
+        await holdCredit(tenant.orgId, tenant.bidId, 'consumed');
+      }
       return withOrg(tenant.orgId, async (db) => {
         const [document] = await db.insert(schema.documents).values({
           orgId: tenant.orgId, bidId: tenant.bidId, fileName: 'addendum.pdf', mime: 'application/pdf', sizeBytes: 5,
-          sha256: randomUUID(), kind: 'amendment', liveStatus: 'live',
+          sha256: randomUUID(), kind: 'amendment', liveStatus: 'live', keyStatus: keyFound ? 'match' : 'not_found',
         }).returning();
         const [row] = await db.insert(schema.amendments).values({
           orgId: tenant.orgId, bidId: tenant.bidId, documentId: document.id, amendmentNo: 2,
-          solicitationKeyFound: keyFound, status: 'processing',
+          solicitationKeyFound: keyFound, status: keyFound ? 'processing' : 'held',
         }).returning();
         return { documentId: document.id, amendmentId: row.id };
       });

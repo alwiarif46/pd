@@ -15,10 +15,11 @@ import {
   withOrg,
 } from '@pd/core';
 import { requireAuth } from './context.js';
-import { hasLiveSolicitation, releaseBidCredit } from './credits.js';
+import { hasLiveSolicitation, releaseBidCredit, shareOrg } from './credits.js';
 import { orgPlan, readKeyOverrideLimit } from './documents.js';
 import { apiError } from './errors.js';
-import { type Db, findBid, inOrg } from './scope.js';
+import { enqueueClassify } from './queue.js';
+import { type Db, findBid, inOrg, type QueuedJob, queueAfterCommit } from './scope.js';
 
 const dataDir = process.env.DATA_DIR || '/data/files';
 const PENDING = 'PENDING';
@@ -81,6 +82,53 @@ async function bidDtos(db: Db, orgId: string, bids: BidRow[]) {
       keyOverridesLeft: keyOverridesLeft(limit, bid.keyOverridesUsed),
     };
   });
+}
+
+/**
+ * A classify job for each amendment the key check held because the bid key was PENDING (04 s3.1
+ * step 1). Called by PATCH when the key moves off PENDING, under the bid lock, with the documents
+ * it locked (FOR KEY SHARE) before the bid; the worker's key check rechecks each one against the
+ * new key. Deleted files are skipped. A key check still in flight for another document reads the
+ * new key under the bid lock itself.
+ */
+async function recheckPendingAmendments(db: Db, orgId: string, bidId: string, documentIds: string[]): Promise<QueuedJob[]> {
+  if (documentIds.length === 0) {
+    return [];
+  }
+  const held = await db.select({
+    documentId: schema.documents.id,
+    storagePath: schema.documents.storagePath,
+  }).from(schema.amendments).innerJoin(schema.documents, eq(schema.documents.id, schema.amendments.documentId)).where(and(
+    eq(schema.amendments.bidId, bidId),
+    eq(schema.amendments.orgId, orgId),
+    eq(schema.amendments.status, 'held'),
+    eq(schema.documents.orgId, orgId),
+    inArray(schema.documents.id, documentIds),
+    eq(schema.documents.keyStatus, 'bid_key_pending'),
+    sql`${schema.documents.liveStatus} is distinct from 'deleted'`,
+  ));
+  const queued: QueuedJob[] = [];
+  for (const amendment of held) {
+    const [job] = await db.insert(schema.jobs).values({
+      orgId,
+      bidId,
+      documentId: amendment.documentId,
+      type: 'classify',
+      status: 'pending',
+    }).returning({ id: schema.jobs.id });
+    queued.push({
+      jobId: job.id,
+      enqueue: () => enqueueClassify({
+        orgId,
+        bidId,
+        documentId: amendment.documentId,
+        jobId: job.id,
+        storagePath: amendment.storagePath ?? '',
+        kind: 'amendment',
+      }),
+    });
+  }
+  return queued;
 }
 
 async function bidDto(db: Db, orgId: string, bid: BidRow) {
@@ -161,7 +209,23 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
     if (!isUuid(id)) {
       return reply.code(404).send({ error: 'Bid not found' });
     }
-    return inOrg(reply, orgId, async (db, respond) => {
+    // Classify jobs that recheck amendments held while the bid key was PENDING; queued after COMMIT.
+    const rechecks: QueuedJob[] = [];
+    const result = await inOrg(reply, orgId, async (db, respond) => {
+      // Lock order (credits.ts): organizations -> documents -> bids. The audit and job rows written
+      // below reference the organization and the held amendments' documents, and a foreign key
+      // check takes FOR KEY SHARE on each. Taking those first means an upload start holding the
+      // organization row, or an override or the worker holding a document, never waits on this
+      // bid while this request waits on them.
+      await shareOrg(db, orgId);
+      const pendingDocuments = body.solicitationNumber?.trim()
+        ? (await db.select({ id: schema.documents.id }).from(schema.documents).where(and(
+          eq(schema.documents.bidId, id),
+          eq(schema.documents.orgId, orgId),
+          eq(schema.documents.kind, 'amendment'),
+          eq(schema.documents.keyStatus, 'bid_key_pending'),
+        )).for('key share')).map((row) => row.id)
+        : [];
       // Locked until COMMIT: an upload start that sets the key or reserves a credit for this bid
       // either finishes first (and this sees its result) or waits for this update.
       const [bid] = await db.select().from(schema.bids).where(and(
@@ -224,9 +288,22 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
           detail: { retentionExtendedUntil: retention ? retention.toISOString() : null },
         });
       }
+      if (keyFor(bid.solicitationKey) === PENDING && solicitationKey !== PENDING) {
+        rechecks.push(...await recheckPendingAmendments(db, orgId, id, pendingDocuments));
+        await db.insert(schema.auditLog).values({
+          orgId,
+          userId: auth.userId,
+          action: 'set_solicitation_key',
+          targetType: 'bid',
+          targetId: id,
+          detail: { previousKey: PENDING, solicitationKey, rechecked: rechecks.length },
+        });
+      }
       const updated = await findBid(db, orgId, id);
       return updated ? bidDto(db, orgId, updated) : null;
     });
+    await queueAfterCommit(orgId, { code: 200, body: null, queue: rechecks });
+    return result;
   });
 
   /**

@@ -263,6 +263,10 @@ export interface DocumentDto extends BidScopedDto {
   /** The latest `restored_until` of the file's restored, unpurged archive copies, or null. */
   restoredUntil: string | null;
   keyCheck: KeyCheck;
+  /** Why `keyCheck` is `mismatch`: another number, no number found, or the bid key is still PENDING; null otherwise. */
+  keyReason: KeyReason | null;
+  /** The solicitation number the amendment check found (the matched text, or the top labelled number); null if none or not an amendment. */
+  keyFound: string | null;
 }
 
 export interface ViewTokenDto {
@@ -290,10 +294,14 @@ export type DocumentLiveStatus = 'live' | 'archived' | 'restore_requested' | 're
 
 /**
  * The amendment key check (09 s5.11): `not_applicable` for anything but an amendment; `mismatch`
- * when the solicitation number was not found and no override was given; `overridden` after an
- * owner override; otherwise `ok`.
+ * when the bid's solicitation number was not found in the amendment (see `KeyReason`) and no
+ * override was given; `overridden` after an owner override; otherwise `ok` (matched, or not
+ * checked yet).
  */
 export type KeyCheck = 'not_applicable' | 'ok' | 'mismatch' | 'overridden';
+
+/** Why an amendment is held: a different number (`mismatch`), no number (`not_found`), or the bid key is still PENDING. */
+export type KeyReason = 'mismatch' | 'not_found' | 'bid_key_pending';
 
 /** POST /api/documents/:id/restore. A repeat while a restore is pending returns the current state. */
 export interface RestoreDocumentDto {

@@ -6,6 +6,7 @@ import {
   canRestore,
   type DocumentLiveStatus,
   documentLiveUntil,
+  isUuid,
   keyOverridesLeft,
   keyOverridesPerBid,
   type Plan,
@@ -18,7 +19,7 @@ import {
   withOrg,
 } from '@pd/core';
 import { requireAuth } from './context.js';
-import { lockBid, releaseBidCredit } from './credits.js';
+import { lockBid, releaseBidCredit, shareOrg } from './credits.js';
 import { apiError } from './errors.js';
 import { type Db, findBid, inOrg, findDocument, type Outcome, queueAfterCommit } from './scope.js';
 import { enqueueClassify } from './queue.js';
@@ -27,6 +28,8 @@ import { newToken } from './security.js';
 const dataDir = process.env.DATA_DIR || '/data/files';
 
 const HOUR = 60 * 60 * 1000;
+/** The longest key override reason kept (it goes to audit_log). */
+const OVERRIDE_REASON_MAX = 500;
 const viewTokens = new Map<string, { documentId: string; sessionId: string; expiresAt: number }>();
 
 /**
@@ -53,26 +56,43 @@ export async function orgPlan(db: Db, orgId: string): Promise<Plan> {
 }
 
 export type KeyCheck = 'not_applicable' | 'ok' | 'mismatch' | 'overridden';
+/** Why an amendment shows `mismatch` (5.11): another number, no number, or the bid key is still PENDING. */
+export type KeyReason = 'mismatch' | 'not_found' | 'bid_key_pending';
 
 /**
- * The amendment key check for a document (5.11): only amendments are checked. An amendment row
- * whose solicitation number was not found and is not overridden is a mismatch; an override is
- * shown as such; otherwise (matched, or not processed yet) it is ok.
+ * The amendment key check for a document (5.11): only amendments are checked. The worker's
+ * result (`documents.key_status`, 04 s3.1 step 1) decides: match is ok; mismatch, not found and
+ * a PENDING bid key show as mismatch with that reason; an override shows as overridden. Before
+ * the check has run (and for rows seeded before migration 0008) the amendments row decides: a
+ * number not found and not overridden is a mismatch (reason not_found), an override is
+ * overridden, anything else (matched, or not processed yet) is ok.
  */
 export function keyCheckFor(
-  kind: string,
+  document: { kind: string; keyStatus: schema.KeyStatus | null },
   amendments: { solicitationKeyFound: boolean; keyOverride: boolean }[],
-): KeyCheck {
-  if (kind !== 'amendment') {
-    return 'not_applicable';
+): { keyCheck: KeyCheck; keyReason: KeyReason | null } {
+  if (document.kind !== 'amendment') {
+    return { keyCheck: 'not_applicable', keyReason: null };
+  }
+  switch (document.keyStatus) {
+    case 'match':
+      return { keyCheck: 'ok', keyReason: null };
+    case 'overridden':
+      return { keyCheck: 'overridden', keyReason: null };
+    case 'mismatch':
+    case 'not_found':
+    case 'bid_key_pending':
+      return { keyCheck: 'mismatch', keyReason: document.keyStatus };
+    default:
+      break;
   }
   if (amendments.some((row) => !row.solicitationKeyFound && !row.keyOverride)) {
-    return 'mismatch';
+    return { keyCheck: 'mismatch', keyReason: 'not_found' };
   }
   if (amendments.some((row) => row.keyOverride)) {
-    return 'overridden';
+    return { keyCheck: 'overridden', keyReason: null };
   }
-  return 'ok';
+  return { keyCheck: 'ok', keyReason: null };
 }
 
 const RESTORE_PENDING: readonly DocumentLiveStatus[] = ['restore_requested', 'restoring', 'restored'];
@@ -112,8 +132,11 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
         solicitationKeyFound: schema.amendments.solicitationKeyFound,
         keyOverride: schema.amendments.keyOverride,
       }).from(schema.amendments).where(and(eq(schema.amendments.bidId, bidId), eq(schema.amendments.orgId, orgId)));
-      return documents.map((document) => ({
+      return documents.map(({ keyStatus, keyFound, ...document }) => ({
         ...document,
+        ...keyCheckFor({ kind: document.kind, keyStatus }, amendments.filter((row) => row.documentId === document.id)),
+        // The number the key check found on an amendment (5.11), shown beside a mismatch.
+        keyFound: document.kind === 'amendment' ? keyFound : null,
         liveUntil: document.liveStatus === 'deleted' ? null : documentLiveUntil({
           plan,
           kind: document.kind,
@@ -122,7 +145,6 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
           retentionExtendedUntil: bid.retentionExtendedUntil,
         }),
         restoredUntil: restored.find((row) => row.documentId === document.id)?.restoredUntil ?? null,
-        keyCheck: keyCheckFor(document.kind, amendments.filter((row) => row.documentId === document.id)),
       }));
     });
   });
@@ -178,7 +200,7 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       return {
         code: 200,
         body: { ok: true },
-        queue: {
+        queue: [{
           jobId: job.id,
           enqueue: () => enqueueClassify({
             orgId,
@@ -188,7 +210,7 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
             storagePath,
             kind: document.kind,
           }),
-        },
+        }],
       };
     });
     await queueAfterCommit(orgId, outcome);
@@ -200,38 +222,61 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
     if (auth.role !== 'owner') {
       return reply.code(403).send({ error: 'Only the owner can override a solicitation key' });
     }
-    const reason = ((request.body as { reason?: string }).reason ?? '').trim();
-    if (!reason) {
+    const reason = ((request.body as { reason?: unknown } | null)?.reason ?? '');
+    const trimmed = typeof reason === 'string' ? reason.trim() : '';
+    if (!trimmed) {
       return reply.code(400).send({ error: 'A reason is required' });
+    }
+    if (trimmed.length > OVERRIDE_REASON_MAX) {
+      return reply.code(400).send({ error: `The reason must be ${OVERRIDE_REASON_MAX} characters or fewer.` });
     }
     const documentId = (request.params as { id: string }).id;
     const orgId = auth.orgId!;
-    return inOrg(reply, orgId, async (db, respond) => {
-      const document = await findDocument(db, orgId, documentId);
+    if (!isUuid(documentId)) {
+      return reply.code(404).send({ error: 'Document not found' });
+    }
+    // One transaction, lock order documents -> bids -> amendments (credits.ts). Processing resumes
+    // after COMMIT through a classify job: the worker's key check sees the override and queues
+    // the amendment step. An override is never refunded (06 s4).
+    const outcome = await withOrg(orgId, async (db): Promise<Outcome> => {
+      // The audit and job rows inserted below take FOR KEY SHARE on the organization; take it
+      // before the bid (lock order organizations -> bids, credits.ts shareOrg).
+      await shareOrg(db, orgId);
+      // Locked before the bid, as document delete and the worker do: a delete either commits
+      // before this (and is refused here) or waits until the override has committed.
+      const [document] = await db.select().from(schema.documents).where(and(
+        eq(schema.documents.id, documentId),
+        eq(schema.documents.orgId, orgId),
+      )).for('update');
       if (!document) {
-        return respond(404, { error: 'Document not found' });
+        return { code: 404, body: { error: 'Document not found' } };
       }
       if (document.liveStatus === 'deleted') {
-        return respond(409, apiError('document_deleted'));
+        return { code: 409, body: apiError('document_deleted') };
       }
       if (document.kind !== 'amendment') {
-        return respond(409, apiError('not_an_amendment'));
+        return { code: 409, body: apiError('not_an_amendment') };
       }
-      // Lock order (credits.ts): the bid before its amendments, as a bid delete (which locks the
-      // bid, then cascades into amendments) does.
-      if ((await lockBid(db, orgId, document.bidId)).length === 0) {
-        return respond(404, { error: 'Bid not found' });
+      const [locked] = await lockBid(db, orgId, document.bidId);
+      if (!locked) {
+        return { code: 404, body: { error: 'Bid not found' } };
       }
-      // The amendment whose solicitation number did not match, not yet accepted. Locked until
-      // COMMIT, so two overrides of one amendment cannot both pass and spend two overrides.
+      // An amendment runs only on a bid whose solicitation holds a credit (06 s4); an override
+      // spent now would buy nothing.
+      if (locked.creditStatus !== 'reserved' && locked.creditStatus !== 'consumed') {
+        return { code: 409, body: apiError('solicitation_first') };
+      }
+      // The amendment the key check held, not yet accepted. Locked until COMMIT, so two overrides
+      // of one amendment cannot both pass and spend two overrides.
       const [amendment] = await db.select().from(schema.amendments).where(and(
         eq(schema.amendments.documentId, documentId),
         eq(schema.amendments.orgId, orgId),
         eq(schema.amendments.solicitationKeyFound, false),
         eq(schema.amendments.keyOverride, false),
+        eq(schema.amendments.status, 'held'),
       )).limit(1).for('update');
       if (!amendment) {
-        return respond(409, apiError('override_not_needed'));
+        return { code: 409, body: apiError('override_not_needed') };
       }
       // Spend one of the bid's overrides with a conditional increment, so concurrent overrides
       // of different amendments cannot exceed the limit (app_settings key_overrides_per_bid).
@@ -245,23 +290,56 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
         lt(schema.bids.keyOverridesUsed, limit),
       )).returning({ keyOverridesUsed: schema.bids.keyOverridesUsed });
       if (!bid) {
-        return respond(409, apiError('override_limit'));
+        return { code: 409, body: apiError('override_limit') };
       }
       await db.update(schema.amendments).set({
         keyOverride: true,
-        overrideReason: reason,
+        overrideReason: trimmed,
+        status: 'processing',
         updatedAt: new Date(),
       }).where(and(eq(schema.amendments.id, amendment.id), eq(schema.amendments.orgId, orgId)));
+      await db.update(schema.documents).set({ keyStatus: 'overridden', updatedAt: new Date() })
+        .where(and(eq(schema.documents.id, documentId), eq(schema.documents.orgId, orgId)));
+      // Identifiers and the user's reason only, never document text.
       await db.insert(schema.auditLog).values({
         orgId,
         userId: auth.userId,
         action: 'key_override',
         targetType: 'document',
         targetId: documentId,
-        detail: { reason, amendmentId: amendment.id },
+        detail: {
+          reason: trimmed,
+          amendmentId: amendment.id,
+          keyStatusBefore: document.keyStatus,
+          foundNumber: document.keyFound,
+          bidKey: locked.solicitationKey,
+        },
       });
-      return { ok: true, amendmentId: amendment.id, remaining: keyOverridesLeft(limit, bid.keyOverridesUsed) };
+      const [job] = await db.insert(schema.jobs).values({
+        orgId,
+        bidId: document.bidId,
+        documentId,
+        type: 'classify',
+        status: 'pending',
+      }).returning();
+      return {
+        code: 200,
+        body: { ok: true, amendmentId: amendment.id, remaining: keyOverridesLeft(limit, bid.keyOverridesUsed) },
+        queue: [{
+          jobId: job.id,
+          enqueue: () => enqueueClassify({
+            orgId,
+            bidId: document.bidId,
+            documentId,
+            jobId: job.id,
+            storagePath: document.storagePath ?? '',
+            kind: 'amendment',
+          }),
+        }],
+      };
     });
+    await queueAfterCommit(orgId, outcome);
+    return reply.code(outcome.code).send(outcome.body);
   });
 
   app.get('/api/documents/view/:token', { preHandler: requireAuth }, async (request, reply) => {

@@ -23,8 +23,10 @@ import type { Db } from './scope.js';
  *   is the expiry sweep, which touches expired sessions only, so it never waits on that row.
  *   Bid delete locks the bid's
  *   documents, then its upload sessions, then the bid (its cascades reach rows already locked
- *   or locked after the bid). Key override locks the bid before the amendment. Document
- *   delete and the worker's matrix write lock the document before the bid.
+ *   or locked after the bid). Key override, the worker's amendment key check and its
+ *   amendment write each lock the document, then the bid, then the amendment. Document
+ *   delete and the worker's matrix write lock the document before the bid. PATCH of a bid
+ *   locks only the bid; moving its key off PENDING inserts recheck jobs, without row locks.
  * - A bid's reservation changes state only through a conditional UPDATE on
  *   `bids.credit_status = 'reserved'`. Whoever wins that row settles the counter; everyone else
  *   sees no row and does nothing, so a reservation is released or consumed at most once.
@@ -51,6 +53,17 @@ export async function hasLiveSolicitation(db: Db, orgId: string, bidId: string):
     sql`${schema.documents.liveStatus} is distinct from 'deleted'`,
   )).limit(1);
   return Boolean(row);
+}
+
+/**
+ * Takes FOR KEY SHARE on the organization row, the lock a foreign key check on an inserted row
+ * takes. A transaction that inserts rows (audit_log, jobs, amendments) after locking a bid takes
+ * this first, keeping the lock order organizations -> bids: otherwise an upload start holding the
+ * organization row FOR UPDATE and waiting on the bid would wait in a cycle with it.
+ */
+export async function shareOrg(db: Db, orgId: string): Promise<void> {
+  await db.select({ id: schema.organizations.id }).from(schema.organizations)
+    .where(eq(schema.organizations.id, orgId)).for('key share');
 }
 
 /** Locks this organization's row until the transaction ends and returns it. */

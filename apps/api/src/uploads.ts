@@ -394,7 +394,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       return {
         code: 201,
         body: { documentId: document.id, jobId: job.id },
-        queue: {
+        queue: [{
           jobId: job.id,
           enqueue: () => enqueueScan({
             orgId,
@@ -404,7 +404,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
             storagePath,
             kind: session.kind,
           }),
-        },
+        }],
       };
     }).catch(async (error: unknown) => {
       // The transaction rolled back (a thrown error, a lost connection): no document row points

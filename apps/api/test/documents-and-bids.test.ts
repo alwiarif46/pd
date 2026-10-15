@@ -42,6 +42,8 @@ interface DocumentJson {
   markingPage: number | null;
   markingStatus: string | null;
   keyCheck: 'not_applicable' | 'ok' | 'mismatch' | 'overridden';
+  keyReason: 'mismatch' | 'not_found' | 'bid_key_pending' | null;
+  keyFound: string | null;
 }
 
 interface BidJson {
@@ -137,8 +139,15 @@ describe.skipIf(Boolean(unavailable))('documents and bids (0005)', () => {
       solicitationKeyFound: found,
       keyOverride: override,
       overrideReason: override ? 'seeded' : null,
-      status: 'needs_confirmation',
+      // Rows seeded without documents.key_status, as before migration 0008: the key check held
+      // a row whose number was not found; the others went on.
+      status: found ? 'needs_confirmation' : override ? 'processing' : 'held',
     }));
+  }
+
+  /** Amendments run only while the bid's solicitation holds a credit (06 s4). */
+  async function consumeCredit(tenant: Tenant) {
+    await withOrg(tenant.orgId, (db) => db.update(schema.bids).set({ creditStatus: 'consumed' }).where(eq(schema.bids.id, tenant.bidId)));
   }
 
   async function listDocuments(tenant: Tenant): Promise<DocumentJson[]> {
@@ -416,6 +425,8 @@ describe.skipIf(Boolean(unavailable))('documents and bids (0005)', () => {
 
       const docs = await listDocuments(tenant);
       expect(byId(docs, mismatch).keyCheck).toBe('mismatch');
+      expect(byId(docs, mismatch).keyReason).toBe('not_found');
+      expect(byId(docs, mismatch).keyFound).toBeNull();
       expect(byId(docs, overridden).keyCheck).toBe('overridden');
       expect(byId(docs, matched).keyCheck).toBe('ok');
       expect(byId(docs, unprocessed).keyCheck).toBe('ok');
@@ -423,6 +434,7 @@ describe.skipIf(Boolean(unavailable))('documents and bids (0005)', () => {
       // The helper's solicitation carries an amendments row; it is still not an amendment.
       expect(byId(docs, tenant.documentId).keyCheck).toBe('not_applicable');
 
+      await consumeCredit(tenant);
       const response = await as(app, tenant.token)('POST', `/api/documents/${mismatch}/key-override`, { reason: 'SLED addendum' });
       expect(response.statusCode).toBe(200);
       expect(byId(await listDocuments(tenant), mismatch).keyCheck).toBe('overridden');
@@ -436,6 +448,7 @@ describe.skipIf(Boolean(unavailable))('documents and bids (0005)', () => {
       await addAmendment(tenant, first, false);
       const second = await addDocument(tenant, { kind: 'amendment' });
       await addAmendment(tenant, second, false);
+      await consumeCredit(tenant);
       const call = as(app, tenant.token);
 
       expect((await getBid(tenant)).keyOverridesLeft).toBe(2);
