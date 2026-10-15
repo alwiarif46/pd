@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { addMonths, formatDay, formatMonth, formatRange, formatShort, monthOf, pageText, plural } from './format';
 
 describe('schedule formatting', () => {
@@ -10,9 +10,18 @@ describe('schedule formatting', () => {
 
   it('formats a day without a time zone shift', () => {
     expect(formatDay('2026-11-25')).toBe('Wed, Nov 25, 2026');
-    process.env.TZ = 'America/Los_Angeles';
-    expect(formatDay('2026-11-25')).toBe('Wed, Nov 25, 2026');
     expect(formatShort('2026-11-25')).toBe('Nov 25');
+  });
+
+  it('formats the same day when the module loads west of UTC', async () => {
+    // The formatters are built at import, so the zone must be set before the module loads.
+    process.env.TZ = 'America/Los_Angeles';
+    expect(new Date(Date.UTC(2026, 10, 25)).getDate()).toBe(24); // the zone took effect
+    vi.resetModules();
+    const fresh = await import('./format');
+    expect(fresh.formatDay('2026-11-25')).toBe('Wed, Nov 25, 2026');
+    expect(fresh.formatShort('2026-11-25')).toBe('Nov 25');
+    expect(fresh.formatMonth('2026-11-01')).toBe('November 2026');
   });
 
   it('formats one day and a span', () => {

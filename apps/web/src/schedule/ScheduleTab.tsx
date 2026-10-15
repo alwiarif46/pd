@@ -65,10 +65,10 @@ export function ScheduleTab(p: ScheduleTabProps) {
 
   const holidays = useMemo(() => new Map(p.holidays.map((h) => [h.date, h.name])), [p.holidays]);
   const template = p.templates.find((t) => t.id === templateId) ?? null;
-  const templateCount = p.activities.filter((a) => a.origin === 'template' && !a.locked).length;
-  const userCount = p.activities.filter((a) => a.origin === 'user' && !a.locked).length;
   const aiRows = p.activities.filter((a) => a.origin === 'ai');
   const editing = panel?.mode === 'edit' ? (p.activities.find((a) => a.id === panel.id) ?? null) : null;
+  // An activity removed by a reload closes its panel (never turning it into an add form).
+  const panelOpen = panel !== null && (panel.mode === 'add' || editing !== null);
 
   const openAdd = () => setPanel({ mode: 'add' });
   const selectActivity = (id: string) => setPanel({ mode: 'edit', id });
@@ -229,7 +229,7 @@ export function ScheduleTab(p: ScheduleTabProps) {
         )}
       </Tabs>
 
-      {panel && (
+      {panelOpen && (
         <ActivityPanel
           key={editing?.id ?? 'new'}
           open
@@ -255,8 +255,8 @@ export function ScheduleTab(p: ScheduleTabProps) {
         open={confirmOpen}
         template={template}
         dueDate={p.dueDate}
-        templateCount={templateCount}
-        userCount={userCount}
+        templateCount={p.replaceCounts.template}
+        userCount={p.replaceCounts.user}
         onApply={(replace) => {
           setConfirmOpen(false);
           if (template) p.onApplyTemplate(template.id, replace);
@@ -283,6 +283,7 @@ export function ScheduleTab(p: ScheduleTabProps) {
           summary={p.dateChangeSummary}
           workdaysOnly={p.workdaysOnly}
           busy={p.dateChangeBusy}
+          dueSaved={p.dateChangeDueSaved}
           onChoose={p.onResolveDateChange}
           onCancel={p.onCancelDateChange}
         />

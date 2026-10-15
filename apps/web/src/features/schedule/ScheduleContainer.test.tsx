@@ -78,24 +78,34 @@ function mockExporter(): ScheduleExporter {
   return { csv: vi.fn(), xlsx: vi.fn(), ics: vi.fn(), print: vi.fn() };
 }
 
-function renderContainer(opts: { api?: ScheduleApi; shell?: Partial<ShellContextValue>; exporter?: ScheduleExporter } = {}) {
+function renderContainer(
+  opts: { api?: ScheduleApi; shell?: Partial<ShellContextValue>; exporter?: ScheduleExporter; now?: () => Date } = {},
+) {
   const api = opts.api ?? mockApi();
   const exporter = opts.exporter ?? mockExporter();
   const shell = shellValue(opts.shell);
+  const now = opts.now ?? (() => new Date(2026, 10, 20, 9));
   const user = userEvent.setup();
-  const view = render(
-    <ShellContext.Provider value={shell}>
-      <ScheduleContainer
-        bidId="bid-1"
-        tab="schedule"
-        selectedRowId={null}
-        api={api}
-        exporter={exporter}
-        now={() => new Date(2026, 10, 20, 9)}
-      />
-    </ShellContext.Provider>,
+  const tree = (bidId: string, value: ShellContextValue) => (
+    <ShellContext.Provider value={value}>
+      <ScheduleContainer bidId={bidId} tab="schedule" selectedRowId={null} api={api} exporter={exporter} now={now} />
+    </ShellContext.Provider>
   );
-  return { api, exporter, shell, user, ...view };
+  const view = render(tree('bid-1', shell));
+  /** The shell switching bids without remounting the container (the same registered component). */
+  const switchTo = (bidId: string, over: Partial<ShellContextValue> = {}) => view.rerender(tree(bidId, shellValue({ bidId, ...over })));
+  return { api, exporter, shell, user, switchTo, ...view };
+}
+
+/** A promise the test settles by hand. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 const ready = () => screen.findByRole('heading', { name: 'Schedule', level: 1 });
@@ -202,14 +212,70 @@ describe('ScheduleContainer: actions', () => {
 
   it('saves Workdays only, and reverts the switch when it fails', async () => {
     const api = mockApi();
-    vi.mocked(api.updateBid).mockRejectedValueOnce(new ApiError('No.', 500));
+    const save = deferred<never>();
+    vi.mocked(api.updateBid).mockReturnValueOnce(save.promise);
     const { user } = renderContainer({ api });
     await ready();
     const toggle = screen.getByRole('switch', { name: 'Workdays only' });
     await user.click(toggle);
     expect(api.updateBid).toHaveBeenCalledWith('bid-1', { scheduleWorkdaysOnly: false });
+    expect(toggle.getAttribute('aria-checked')).toBe('false'); // optimistic, while saving
+    save.reject(new ApiError('No.', 500));
     await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
     expect(toast.error).toHaveBeenCalledWith('No.');
+  });
+
+  it('sends one move at a time for held arrow keys, then only the latest', async () => {
+    const api = mockApi([userRow]);
+    const first = deferred<ScheduleActivityDto>();
+    vi.mocked(api.updateRow).mockReturnValueOnce(first.promise as never);
+    const { user, container } = renderContainer({ api });
+    await ready();
+    (container.querySelector('[data-activity="act-1"]') as HTMLElement).focus();
+    await user.keyboard('{ArrowRight}{ArrowRight}{ArrowRight}');
+    expect(api.updateRow).toHaveBeenCalledTimes(1);
+    expect(api.updateRow).toHaveBeenLastCalledWith('bid-1', 'schedule_activities', 'act-1', { startDate: '2026-11-17', endDate: '2026-11-19' });
+    first.resolve(userRow);
+    await waitFor(() => expect(api.updateRow).toHaveBeenCalledTimes(2));
+    expect(api.updateRow).toHaveBeenLastCalledWith('bid-1', 'schedule_activities', 'act-1', { startDate: '2026-11-19', endDate: '2026-11-21' });
+    await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2)); // one reload, after the last save
+  });
+
+  it('locks at once and ignores a second click while saving', async () => {
+    const api = mockApi([userRow]);
+    const save = deferred<ScheduleActivityDto>();
+    vi.mocked(api.updateRow).mockReturnValueOnce(save.promise as never);
+    const { user } = renderContainer({ api });
+    await ready();
+    await user.click(screen.getByRole('tab', { name: 'Milestones' }));
+    const box = screen.getByRole('checkbox', { name: 'Lock First draft writing' });
+    await user.click(box);
+    expect(box.getAttribute('aria-checked')).toBe('true');
+    await user.click(box);
+    expect(api.updateRow).toHaveBeenCalledTimes(1);
+    expect(api.updateRow).toHaveBeenCalledWith('bid-1', 'schedule_activities', 'act-1', { locked: true });
+    save.resolve(userRow);
+    await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
+  });
+
+  it('counts a replace from the stored origin: a row with none is kept by the server', async () => {
+    const legacy = scheduleActivityDto({ id: 'act-old', origin: null, label: 'Old row' });
+    const { user } = renderContainer({ api: mockApi([legacy]) });
+    await ready();
+    await user.click(screen.getByRole('button', { name: 'Apply template' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).queryByText(/Hand-added activities/)).toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'Apply template' })).toBeTruthy();
+  });
+
+  it('moves today forward when the window comes back on a later day', async () => {
+    let clock = new Date(2026, 10, 20, 9);
+    renderContainer({ now: () => clock });
+    await ready();
+    expect(screen.getByText(/workdays left/).parentElement?.textContent).toContain('3 workdays left');
+    clock = new Date(2026, 10, 23, 9);
+    fireEvent.focus(window);
+    await waitFor(() => expect(screen.getByText(/workdays? left/).parentElement?.textContent).toContain('2 workdays left'));
   });
 
   it('moves an activity by drag, and reloads after a lock refusal', async () => {
@@ -327,6 +393,63 @@ describe('ScheduleContainer: due date change', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(api.adjustSchedule).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenLastCalledWith(expect.stringContaining('may already have moved'));
+  });
+
+  it('ignores Escape while an answer is being applied, then closes when it is done', async () => {
+    const api = mockApi();
+    const adjust = deferred<AdjustScheduleDto>();
+    vi.mocked(api.adjustSchedule).mockReturnValueOnce(adjust.promise);
+    const { user } = renderContainer({ api });
+    await ready();
+    await changeDueTo(user, '2026-12-02');
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Shift dates' }));
+    await waitFor(() => expect(api.adjustSchedule).toHaveBeenCalled());
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    adjust.resolve(adjusted);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(toast.success).toHaveBeenCalledWith('Moved 1 activity.');
+  });
+
+  it('closes on a stale due date without writing', async () => {
+    const api = mockApi();
+    vi.mocked(api.getBid).mockResolvedValue(bidDto({ dueDate: ts('2026-12-09') }));
+    const { user } = renderContainer({ api });
+    await ready();
+    await changeDueTo(user, '2026-12-02');
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Keep dates' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(toast.error).toHaveBeenCalledWith('The due date changed while this was open. Check the new date and try again.');
+    expect(api.updateBid).not.toHaveBeenCalled();
+    expect(api.adjustSchedule).not.toHaveBeenCalled();
+  });
+
+  it('says the due date is saved after a try that did not move the schedule', async () => {
+    const api = mockApi();
+    vi.mocked(api.adjustSchedule).mockRejectedValueOnce(new ApiError('Bad date.', 400, 'invalid_date'));
+    const { user } = renderContainer({ api });
+    await ready();
+    await changeDueTo(user, '2026-12-02');
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByText(/The new due date is saved/)).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Shift dates' }));
+    expect(await within(dialog).findByText('The new due date is saved. Choose how to move the schedule.')).toBeTruthy();
+  });
+
+  it('keeps a pending change with its bid when the shell switches bids', async () => {
+    const { api, user, switchTo } = renderContainer();
+    await ready();
+    await changeDueTo(user, '2026-12-02');
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    switchTo('bid-2', { bid: bidDto({ id: 'bid-2', name: 'Navy IT', dueDate: ts('2026-12-15') }) });
+    await waitFor(() => expect(api.getTab).toHaveBeenCalledWith('bid-2', 'schedule', expect.anything()));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await ready();
+    switchTo('bid-1', { bid: bidDto({ dueDate: ts('2026-11-25'), dueTime: '17:00' }) });
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/from Wed, Nov 25, 2026 to Wed, Dec 2, 2026/)).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Shift dates' }));
+    await waitFor(() => expect(api.adjustSchedule).toHaveBeenCalledWith('bid-1', expect.objectContaining({ nextDue: '2026-12-02' })));
   });
 
   it('warns about a move of 0 workdays', async () => {

@@ -98,6 +98,13 @@ export interface ScheduleTabProps {
   onCancelDateChange: () => void;
   /** True while a date-change answer is being applied (prompt buttons disabled). */
   dateChangeBusy: boolean;
+  /** True after a try saved the new due date but did not move the schedule: the prompt says so. */
+  dateChangeDueSaved: boolean;
+  /**
+   * The unlocked activities a template replace would remove, counted by the container from the API's
+   * origin ('template' and 'user' exactly; rows with no origin stay, as the server keeps them).
+   */
+  replaceCounts: { template: number; user: number };
   /** "Change due date" in the header: the container opens the date-change prompt (or saves at once when the bid had no due date). */
   onChangeDueDate: (nextDue: string) => void;
   onOpenRow: (id: string) => void;
@@ -112,4 +119,6 @@ export interface ScheduleDateChangePromptProps extends DateChangePromptProps {
   summary: Record<DateChangeMode, string> | null;
   workdaysOnly: boolean;
   busy: boolean;
+  /** The new due date is already saved (an earlier try moved no activity). */
+  dueSaved: boolean;
 }

@@ -72,6 +72,12 @@ describe('scheduleIcs', () => {
     expect(text).toContain('DTEND;VALUE=DATE:20261201');
   });
 
+  it('escapes a lone carriage return as a line break', () => {
+    const text = scheduleIcs([scheduleActivity({ label: 'One\rTwo\r\nThree' })], { calendarName: 'x', now });
+    expect(text).toContain('SUMMARY:One\\nTwo\\nThree');
+    expect(text.replace(/\r\n/g, '')).not.toMatch(/\r/);
+  });
+
   it('escapes text and uses CRLF only', () => {
     const text = scheduleIcs([scheduleActivity({ label: 'Kickoff, phase 1; part A' })], { calendarName: 'x', now });
     expect(text).toContain('SUMMARY:Kickoff\\, phase 1\\; part A');

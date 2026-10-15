@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { createEvent, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { SCHEDULE_TEMPLATES } from '@pd/core/schedule';
@@ -14,8 +14,18 @@ const TEMPLATES: ScheduleTemplateOption[] = SCHEDULE_TEMPLATES.map((t) => ({
 }));
 const STANDARD = TEMPLATES[0]!;
 
+function countsOf(activities: ScheduleActivity[]) {
+  const unlocked = activities.filter((a) => !a.locked);
+  return {
+    template: unlocked.filter((a) => a.origin === 'template').length,
+    user: unlocked.filter((a) => a.origin === 'user').length,
+  };
+}
+
 function renderTab(over: Partial<ScheduleTabProps> = {}) {
   const props: ScheduleTabProps = {
+    replaceCounts: countsOf(over.activities ?? []),
+    dateChangeDueSaved: false,
     activities: [],
     holidays: [{ date: '2026-11-26', name: 'Thanksgiving Day' }],
     templates: TEMPLATES,
@@ -46,7 +56,8 @@ function renderTab(over: Partial<ScheduleTabProps> = {}) {
   };
   const user = userEvent.setup();
   const view = render(<ScheduleTab {...props} />);
-  return { props, user, ...view };
+  const rerender = (next: Partial<ScheduleTabProps>) => view.rerender(<ScheduleTab {...props} {...next} />);
+  return { props, user, ...view, rerender };
 }
 
 const aiRow = scheduleActivity({
@@ -120,6 +131,15 @@ describe('template picker', () => {
     await user.click(screen.getByRole('button', { name: 'Apply template' }));
     await user.click(screen.getByRole('button', { name: 'Replace activities' }));
     expect(props.onApplyTemplate).toHaveBeenLastCalledWith('federal-standard', true);
+  });
+
+  it('counts what a replace removes from replaceCounts, not from the shown origin', async () => {
+    // A row with no stored origin shows as added by hand, but the server keeps it on replace.
+    const { user } = renderTab({ activities: [aiRow, userRow], replaceCounts: { template: 0, user: 0 } });
+    await user.click(screen.getByRole('button', { name: 'Apply template' }));
+    const dialog = screen.getByRole('alertdialog');
+    expect(within(dialog).getByText('Apply Federal standard (Pink, Red, Gold)?')).toBeTruthy();
+    expect(within(dialog).queryByText(/Hand-added activities/)).toBeNull();
   });
 
   it('is disabled without a due date', () => {
@@ -235,6 +255,25 @@ describe('calendar', () => {
     fireEvent.dragStart(bar(container, 'act-1'), { dataTransfer: data });
     fireEvent.dragOver(cell(container, '2026-11-19'), { dataTransfer: data });
     fireEvent.drop(cell(container, '2026-11-19'), { dataTransfer: data });
+    expect(props.onMoveActivity).toHaveBeenCalledWith('act-1', '2026-11-19', '2026-11-21');
+  });
+
+  it('moves an activity dropped on a bar, by the column under the pointer', () => {
+    const other = scheduleActivity({ id: 'act-2', label: 'Pricing', start: '2026-11-19', end: '2026-11-20' });
+    const { props, container } = renderTab({ activities: [userRow, other] });
+    const data = { setData: vi.fn(), getData: vi.fn(() => 'act-1') };
+    const target = bar(container, 'act-2');
+    const row = target.parentElement!;
+    row.getBoundingClientRect = () => ({ left: 0, width: 700, top: 0, height: 100, right: 700, bottom: 100, x: 0, y: 0, toJSON: () => ({}) });
+    fireEvent.dragStart(bar(container, 'act-1'), { dataTransfer: data });
+    const over = createEvent.dragOver(target, { dataTransfer: data });
+    Object.defineProperty(over, 'clientX', { value: 450 });
+    fireEvent(target, over);
+    expect(over.defaultPrevented).toBe(true);
+    // Column 4 of the week of Nov 15 is Thursday, Nov 19; act-1 was grabbed on its first day.
+    const drop = createEvent.drop(target, { dataTransfer: data });
+    Object.defineProperty(drop, 'clientX', { value: 450 });
+    fireEvent(target, drop);
     expect(props.onMoveActivity).toHaveBeenCalledWith('act-1', '2026-11-19', '2026-11-21');
   });
 
@@ -355,6 +394,16 @@ describe('activity panel', () => {
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
     expect(props.onEditActivity).not.toHaveBeenCalled();
     expect(screen.queryByText('Edit activity')).toBeNull();
+  });
+
+  it('closes the panel when the activity being edited is gone after a reload', async () => {
+    const { user, props, rerender } = renderTab({ activities: [userRow, userRow2] });
+    await user.click(screen.getByRole('button', { name: /^First draft writing,/ }));
+    expect(screen.getByText('Edit activity')).toBeTruthy();
+    rerender({ activities: [userRow2] });
+    expect(screen.queryByText('Edit activity')).toBeNull();
+    expect(screen.queryByText('New activity')).toBeNull();
+    expect(props.onAddActivity).not.toHaveBeenCalled();
   });
 
   it('deletes after a confirm', async () => {

@@ -35,7 +35,9 @@ export interface DateChangeProgress {
   dueWritten: boolean;
   /**
    * The schedule as it was before an adjust that may have been applied (anything but a 4xx refusal):
-   * a retry adjusts again only while the schedule still matches it, so a lost response never shifts twice.
+   * a retry adjusts again only while the schedule still matches it. This narrows a double shift to an
+   * adjust still running on the server when the retry reads the schedule (a 504 or a dropped connection):
+   * the read does not take the server's schedule lock, so it cannot see an adjust that has not committed.
    */
   snapshot: ActivitySnapshot[] | null;
 }
@@ -86,6 +88,10 @@ export function scheduleMoved(before: readonly ActivitySnapshot[], now: readonly
  *   (`progress.dueWritten`), so a date set elsewhere (perhaps with its own adjust) is never adjusted twice;
  * - before adjusting, the schedule is read; when an earlier adjust may have been applied, a retry goes on
  *   only while the schedule still matches what it was before that adjust.
+ * This narrows, but does not close, a double shift: an adjust still running on the server when the retry
+ * reads the schedule is not seen. TODO(PR5, server): close it in the API, with one endpoint that saves the
+ * due date and adjusts in one transaction, or an adjust precondition (apply only while the bid's due date
+ * and schedule still match what the client saw), so a repeated adjust is refused instead of applied.
  */
 export async function resolveDateChange(
   deps: Pick<ScheduleApi, 'getBid' | 'updateBid' | 'getTab' | 'adjustSchedule'>,

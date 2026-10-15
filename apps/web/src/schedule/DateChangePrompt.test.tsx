@@ -17,6 +17,7 @@ function setup(over: Partial<ScheduleDateChangePromptProps> = {}) {
       summary={null}
       workdaysOnly
       busy={false}
+      dueSaved={false}
       onChoose={onChoose}
       onCancel={onCancel}
       {...over}
@@ -69,6 +70,7 @@ describe('DateChangePrompt', () => {
         summary={{ shift: 'S sentence.', scale: 'C sentence.', keep: 'K sentence.' }}
         workdaysOnly
         busy={false}
+        dueSaved={false}
         onChoose={vi.fn()}
         onCancel={vi.fn()}
       />,
@@ -92,7 +94,7 @@ describe('DateChangePrompt', () => {
 
   it('handles 0 workdays: Friday to Saturday', () => {
     setup({ previousDue: '2026-11-27', nextDue: '2026-11-28' });
-    expect(screen.getByText('That is 0 workdays, because Sat, Nov 28, 2026 is not a workday. Shifting moves no activity.')).toBeTruthy();
+    expect(screen.getByText('That is 0 workdays, because Sat, Nov 28, 2026 is not a workday. Shifting moves no unlocked activity.')).toBeTruthy();
     expect(document.activeElement).toBe(button('Keep dates'));
   });
 
@@ -124,5 +126,23 @@ describe('DateChangePrompt', () => {
     for (const name of ['Cancel', 'Keep dates', 'Scale dates', 'Shift dates']) {
       expect((button(name) as HTMLButtonElement).disabled).toBe(true);
     }
+  });
+
+  it('ignores Escape while busy', async () => {
+    const user = userEvent.setup();
+    const { onCancel } = setup({ busy: true });
+    await user.keyboard('{Escape}');
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('says the due date is saved after a try that moved no activity', () => {
+    setup({ dueSaved: true });
+    expect(screen.getByText('The new due date is saved. Choose how to move the schedule.')).toBeTruthy();
+  });
+
+  it('does not say so before', () => {
+    setup();
+    expect(screen.queryByText(/The new due date is saved/)).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { bidDto, scheduleActivity, scheduleActivityDto } from '@/test/fixtures';
 import {
   ACTIVITY_OPTIONS,
@@ -15,6 +15,20 @@ import {
 } from './derive';
 
 describe('dayOf and localToday', () => {
+  const zone = process.env.TZ;
+  afterEach(() => {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  });
+
+  it('takes the local day, not the UTC day', () => {
+    process.env.TZ = 'America/Los_Angeles';
+    // 03:00 UTC on Nov 25 is the evening of Nov 24 in Los Angeles.
+    expect(localToday(new Date('2026-11-25T03:00:00.000Z'))).toBe('2026-11-24');
+    process.env.TZ = 'Asia/Tokyo';
+    expect(localToday(new Date('2026-11-24T20:00:00.000Z'))).toBe('2026-11-25');
+  });
+
   it('takes the stored day and the local day', () => {
     expect(dayOf('2026-11-25T00:00:00.000Z')).toBe('2026-11-25');
     expect(dayOf(null)).toBeNull();
@@ -104,7 +118,7 @@ describe('dateChangeSummary', () => {
 
   it('says a move of 0 workdays moves nothing, and the submission follows the due date', () => {
     const s = dateChangeSummary([...three, submission], { previousDue: '2026-11-27', nextDue: '2026-11-28' }, { anchor: null, workdaysOnly: true });
-    expect(s.shift).toBe('The due date moves 0 workdays, so no activity moves. The submission moves to the new due date.');
+    expect(s.shift).toBe('The due date moves 0 workdays, so no unlocked activity moves. The submission moves to the new due date.');
     expect(s.keep).toBe('The submission moves to the new due date. Every other activity stays where it is.');
   });
 

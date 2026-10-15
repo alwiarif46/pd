@@ -30,6 +30,12 @@ export function localToday(now: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+/** Milliseconds from `now` to the next local midnight (when `localToday` changes). */
+export function msToNextLocalDay(now: Date): number {
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  return Math.max(0, next.getTime() - now.getTime());
+}
+
 /** An API activity in the ui contract shape. `rowIds` are the bid's activity ids (for a superseded row's jump). */
 export function toScheduleActivity(dto: ScheduleActivityDto, rowIds: ReadonlySet<string>): ScheduleActivity {
   const start = dayOf(dto.startDate);
@@ -160,7 +166,7 @@ export function dateChangeSummary(
     const u = (k: number) => (plan.unit === 'workdays' ? (k === 1 ? 'workday' : 'workdays') : k === 1 ? 'day' : 'days');
     const unlocked = plural(n, '1 unlocked activity', `${n} unlocked activities`);
     const shiftSentence = () => {
-      if (plan.delta === 0) return `The due date moves 0 ${u(0)}, so no activity moves.`;
+      if (plan.delta === 0) return `The due date moves 0 ${u(0)}, so no unlocked activity moves.`;
       if (n === 0) return 'No unlocked activity has a date to move.';
       const d = Math.abs(plan.delta);
       return `Moves ${unlocked} ${d} ${u(d)} ${plan.delta > 0 ? 'later' : 'earlier'}.`;

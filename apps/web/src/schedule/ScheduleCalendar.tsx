@@ -68,11 +68,26 @@ export function ScheduleCalendar(p: Props) {
     event.dataTransfer.setData('text/plain', seg.activity.id);
   };
 
-  const onDrop = (event: DragEvent, day: string) => {
+  /**
+   * The day under the pointer in a week row. Bars cover the day cells, so the row takes the drop and
+   * finds the column from the pointer; without a layout (no width), the day cell that was hit.
+   */
+  const dayAt = (event: DragEvent<HTMLElement>, week: string[]): string | null => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.width > 0 && Number.isFinite(event.clientX)) {
+      const col = Math.min(6, Math.max(0, Math.floor(((event.clientX - rect.left) * 7) / rect.width)));
+      return week[col] ?? null;
+    }
+    return (event.target as HTMLElement).closest<HTMLElement>('[data-date]')?.dataset.date ?? null;
+  };
+
+  const onDrop = (event: DragEvent<HTMLElement>, week: string[]) => {
     const current = drag.current;
-    drag.current = null;
     if (current === null) return;
     event.preventDefault();
+    drag.current = null;
+    const day = dayAt(event, week);
+    if (day === null) return;
     const a = p.activities.find((item) => item.id === current.id);
     if (!a || a.start === null || a.locked) return;
     const offset = diffIsoDays(current.grabbedDay, day);
@@ -129,6 +144,10 @@ export function ScheduleCalendar(p: Props) {
               key={week[0]}
               className="grid grid-cols-7"
               style={{ gridTemplateRows: `minmax(2.5rem, auto) repeat(${lanes}, 1.625rem)` }}
+              onDragOver={(event) => {
+                if (drag.current !== null) event.preventDefault();
+              }}
+              onDrop={(event) => onDrop(event, week)}
             >
               {week.map((day, col) => {
                 const holiday = p.holidays.get(day);
@@ -150,10 +169,6 @@ export function ScheduleCalendar(p: Props) {
                     aria-current={isToday ? 'date' : undefined}
                     className={classes.filter(Boolean).join(' ')}
                     style={{ gridColumn: col + 1, gridRow: `1 / span ${lanes + 1}` }}
-                    onDragOver={(event) => {
-                      if (drag.current !== null) event.preventDefault();
-                    }}
-                    onDrop={(event) => onDrop(event, day)}
                   >
                     <span className="font-numeric tabular-nums">{Number(day.slice(8, 10))}</span>
                     {isDue && <span className="ml-1 font-medium text-due">Due</span>}

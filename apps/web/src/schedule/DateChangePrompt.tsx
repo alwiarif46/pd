@@ -15,8 +15,9 @@ export function DateChangePrompt(p: ScheduleDateChangePromptProps) {
     scale: 'Stretches or squeezes unlocked activities between the start date and the new due date.',
     keep: 'Leaves every activity where it is.',
   };
+  // Esc and an outside click cancel, except while an answer is being applied.
   return (
-    <Dialog open={p.open} onOpenChange={(v) => !v && p.onCancel()}>
+    <Dialog open={p.open} onOpenChange={(v) => !v && !p.busy && p.onCancel()}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{p.amendmentNo ? `Amendment ${p.amendmentNo} moved the due date` : 'The due date changed'}</DialogTitle>
@@ -24,9 +25,12 @@ export function DateChangePrompt(p: ScheduleDateChangePromptProps) {
             {`The due date moved from ${formatDay(p.previousDue)} to ${formatDay(p.nextDue)}. Move the schedule with it?`}
           </DialogDescription>
         </DialogHeader>
+        {p.dueSaved && (
+          <p role="status" className="text-sm text-ink">The new due date is saved. Choose how to move the schedule.</p>
+        )}
         {zero && (
           <p className="text-sm text-warning">
-            {`That is 0 workdays, because ${formatDay(p.nextDue)} is not a workday. Shifting moves no activity.`}
+            {`That is 0 workdays, because ${formatDay(p.nextDue)} is not a workday. Shifting moves no unlocked activity.`}
           </p>
         )}
         {offDay && <p className="text-sm text-warning">{`${formatDay(p.nextDue)} is not a workday.`}</p>}
