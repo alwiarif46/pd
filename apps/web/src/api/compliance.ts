@@ -1,7 +1,7 @@
 import { request, seg, type CallOptions } from './http';
 import { deleteRow, updateRow } from './rows';
 import { createTabRow, getTab } from './tabs';
-import type { ComplianceRowDto, ComplianceRowPatch, CreateComplianceRowInput, Ok } from './types';
+import type { CheckTheseDto, ComplianceRowDto, ComplianceRowPatch, CreateComplianceRowInput, Ok } from './types';
 
 export async function listComplianceRows(bidId: string, opts?: CallOptions): Promise<ComplianceRowDto[]> {
   const payload = await getTab(bidId, 'compliance', opts);
@@ -46,4 +46,22 @@ export function splitComplianceRow(
     json: { rowId, at },
     signal: opts?.signal,
   });
+}
+
+/** Pre-scan sentences no row quotes yet, on documents the user has not deleted. */
+export function listCheckThese(bidId: string, opts?: CallOptions): Promise<CheckTheseDto[]> {
+  return request(`/api/bids/${seg(bidId)}/check-these`, { signal: opts?.signal });
+}
+
+/**
+ * Adds a "check these" sentence as a requirement (origin 'user', quoting the sentence and its
+ * page) and returns the new row. `ApiError` 409 when it was already added or dismissed.
+ */
+export function promoteCheckThese(id: string, opts?: CallOptions): Promise<ComplianceRowDto> {
+  return request(`/api/check-these/${seg(id)}/promote`, { method: 'POST', signal: opts?.signal });
+}
+
+/** Dismisses a "check these" sentence. `ApiError` 409 when it was already added or dismissed. */
+export function dismissCheckThese(id: string, opts?: CallOptions): Promise<Ok> {
+  return request(`/api/check-these/${seg(id)}/dismiss`, { method: 'POST', signal: opts?.signal });
 }

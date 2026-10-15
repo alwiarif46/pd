@@ -5,8 +5,18 @@
 --     owner from Postgres 15, and grants CONNECT on the database);
 --   - have CREATEROLE, or find pd_app and pd_system already created with the attributes below.
 -- From Postgres 16 a CREATEROLE role gets ADMIN on the roles it creates; this migration then
--- grants itself SET (not INHERIT) on pd_system, which CREATE SCHEMA ... AUTHORIZATION and
--- ALTER FUNCTION ... OWNER TO need.
+-- grants itself SET (not INHERIT) on pd_system, which CREATE SCHEMA ... AUTHORIZATION and the
+-- SET ROLE pd_system below need. Notes on that grant:
+--   - The migrator keeps SET on pd_system afterwards (it can become pd_system, and so read
+--     every organization's memberships through pd_system's policy). Revoke it by hand after
+--     migrating if that matters: REVOKE pd_system FROM <migrator>; re-grant before a later
+--     migration touches pd_system objects.
+--   - Before Postgres 16 there is no SET/INHERIT split: the plain GRANT also gives INHERIT,
+--     so the migrator reads all memberships without SET ROLE. This stack runs Postgres 16;
+--     the older branch is there only so the migration does not fail.
+--   - If pd_system already exists and another role created it, a non-superuser migrator has
+--     no ADMIN on it and cannot grant itself SET: a superuser must run
+--     GRANT pd_system TO <migrator> WITH INHERIT FALSE, SET TRUE before migrating.
 --
 -- No passwords are set here. Set them out of band, for example:
 --   ALTER ROLE pd_app PASSWORD '...';

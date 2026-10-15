@@ -1,25 +1,30 @@
 version: '3.9'
 
+# Build contexts are the repo root (the Dockerfiles need the workspace lockfile and packages).
+# Run from the repo root with the env file, e.g.:
+#   docker compose --env-file .env -f infra/docker-compose.yml build
+
 services:
   web:
     build:
-      context: ../apps/web
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/web/Dockerfile
     image: pd-web:latest
     restart: unless-stopped
     # Static build served by nginx, not a running container
 
   api:
     build:
-      context: ../apps/api
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/api/Dockerfile
+      target: runtime
     image: pd-api:latest
     restart: unless-stopped
     depends_on:
       - postgres
       - redis
     environment:
-      - DATABASE_URL=postgresql://pd_app:${POSTGRES_PASSWORD}@postgres:5432/pd
+      - DATABASE_URL=postgresql://pd_app:${PD_APP_PASSWORD}@postgres:5432/pd
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - CORS_ORIGIN=https://pd.shaavir.com
@@ -29,10 +34,24 @@ services:
           cpus: '0.5'
           memory: 512M
 
+  # One-off: applies database migrations as the owner role pd_owner. Not started by `up`;
+  # infra/scripts/deploy.sh runs it before the api and worker restart.
+  migrate:
+    profiles: ['tools']
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+      target: migrate
+    image: pd-migrate:latest
+    depends_on:
+      - postgres
+    environment:
+      - DATABASE_URL=postgresql://pd_owner:${POSTGRES_PASSWORD}@postgres:5432/pd
+
   worker:
     build:
-      context: ../apps/worker
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/worker/Dockerfile
     image: pd-worker:latest
     restart: unless-stopped
     depends_on:
@@ -40,7 +59,7 @@ services:
       - redis
       - clamav
     environment:
-      - DATABASE_URL=postgresql://pd_app:${POSTGRES_PASSWORD}@postgres:5432/pd
+      - DATABASE_URL=postgresql://pd_app:${PD_APP_PASSWORD}@postgres:5432/pd
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     deploy:
@@ -51,9 +70,10 @@ services:
 
   sandbox:
     build:
-      context: ../apps/sandbox
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/sandbox/Dockerfile
     image: pd-sandbox:latest
+    profiles: ['tools'] # started on demand by the sandbox runner (docker compose run), not by up
     network_mode: none
     deploy:
       resources:
@@ -70,6 +90,11 @@ services:
       - POSTGRES_DB=pd
       - POSTGRES_USER=pd_owner
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U pd_owner -d pd']
+      interval: 5s
+      timeout: 5s
+      retries: 20
     deploy:
       resources:
         limits:
@@ -93,7 +118,7 @@ services:
     restart: unless-stopped
     volumes:
       - clamav_data:/var/lib/clamav
-      - ./infra/clamav/clamd.conf:/etc/clamav/clamd.conf:ro
+      - ./clamav/clamd.conf:/etc/clamav/clamd.conf:ro
     deploy:
       resources:
         limits:

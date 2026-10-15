@@ -1,4 +1,4 @@
-import { type AnyPgColumn, pgTable, uuid, text, timestamp, boolean, integer, jsonb, decimal } from 'drizzle-orm/pg-core';
+import { type AnyPgColumn, index, pgTable, uniqueIndex, uuid, text, timestamp, boolean, integer, jsonb, decimal } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
 // Base columns for all tables
@@ -30,11 +30,16 @@ export const organizations = pgTable('organizations', {
   plan: text('plan').notNull().$type<'free' | 'starter' | 'growth'>(),
   stripeCustomerId: text('stripe_customer_id'),
   stripeSubscriptionId: text('stripe_subscription_id'),
-  planStatus: text('plan_status').notNull(),
+  // 'free' on the free plan; 'active' or 'past_due' on a paid plan (06 s5). CHECK in 0007.
+  planStatus: text('plan_status').notNull().$type<'active' | 'past_due' | 'free'>(),
   cycleStart: timestamp('cycle_start'),
   cycleEnd: timestamp('cycle_end'),
   freeFirstMonthEnds: timestamp('free_first_month_ends'),
-});
+}, (table) => ({
+  // One organization per Stripe customer. NULLs are distinct in a unique index, so
+  // organizations without a customer are not constrained.
+  stripeCustomer: uniqueIndex('organizations_stripe_customer_uq').on(table.stripeCustomerId),
+}));
 
 export const memberships = pgTable('memberships', {
   ...baseColumns,
@@ -81,15 +86,22 @@ export const rfpCredits = pgTable('rfp_credits', {
   allowed: integer('allowed').notNull(),
   used: integer('used').notNull().default(0),
   reserved: integer('reserved').notNull().default(0),
-});
+}, (table) => ({
+  orgPeriod: uniqueIndex('rfp_credits_org_period_uq').on(table.orgId, table.periodStart),
+}));
 
 export const phoneCodes = pgTable('phone_codes', {
   ...baseColumns,
+  /** The account the code was sent for. verify-phone accepts only that account's latest code. */
+  userId: uuid('user_id').references(() => users.id),
   phoneE164: text('phone_e164').notNull(),
   codeHash: text('code_hash').notNull(),
   expiresAt: timestamp('expires_at').notNull(),
   attempts: integer('attempts').notNull().default(0),
-});
+  usedAt: timestamp('used_at'),
+}, (table) => ({
+  userCreatedIdx: index('phone_codes_user_id_created_at_idx').on(table.userId, table.createdAt),
+}));
 
 export const stripeEvents = pgTable('stripe_events', {
   ...baseColumns,
@@ -121,7 +133,8 @@ export const bids = pgTable('bids', {
   bidType: text('bid_type').notNull().$type<'federal' | 'sled'>(),
   solicitationNumber: text('solicitation_number').notNull(),
   solicitationKey: text('solicitation_key').notNull(),
-  status: text('status').notNull(),
+  // CHECK bids_status_check (migration 0005, hand-written) allows only these values.
+  status: text('status').notNull().default('planning').$type<'planning' | 'writing' | 'submitted' | 'closed'>(),
   startDate: timestamp('start_date'),
   dueDate: timestamp('due_date'),
   dueTime: text('due_time'),
@@ -137,7 +150,7 @@ export const bids = pgTable('bids', {
 export const documents = pgTable('documents', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
   fileName: text('file_name').notNull(),
   mime: text('mime').notNull(),
   sizeBytes: integer('size_bytes').notNull(),
@@ -154,14 +167,18 @@ export const documents = pgTable('documents', {
   extractStatus: text('extract_status'),
   markingFound: jsonb('marking_found').$type<string[]>(),
   markingStatus: text('marking_status').$type<'none' | 'blocked' | 'confirmed'>(),
+  // The lowest page a marking was found on (the marking step writes it), or null.
+  markingPage: integer('marking_page'),
+  // Not written yet: the api computes the live-until date it shows (packages/core retention.ts);
+  // the retention job will store it here.
   liveUntil: timestamp('live_until'),
-  liveStatus: text('live_status').$type<'live' | 'archived' | 'restoring' | 'restored' | 'deleted'>(),
+  liveStatus: text('live_status').$type<'live' | 'archived' | 'restore_requested' | 'restoring' | 'restored' | 'deleted'>(),
 });
 
 export const uploadSessions = pgTable('upload_sessions', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').notNull().references(() => users.id),
   fileName: text('file_name').notNull(),
   kind: text('kind').notNull().$type<'solicitation' | 'amendment' | 'attachment' | 'resume' | 'draft'>(),
@@ -170,15 +187,17 @@ export const uploadSessions = pgTable('upload_sessions', {
   chunkCount: integer('chunk_count').notNull(),
   chunksReceived: integer('chunks_received').notNull().default(0),
   bytesReceived: integer('bytes_received').notNull().default(0),
-  status: text('status').notNull(),
+  status: text('status').notNull().$type<'open' | 'complete' | 'expired' | 'cancelled'>(),
   expiresAt: timestamp('expires_at').notNull(),
+  // The credit this session reserved for its bid, if any. Released when the session is abandoned.
+  creditId: uuid('credit_id').references(() => rfpCredits.id),
 });
 
 export const amendments = pgTable('amendments', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
-  documentId: uuid('document_id').notNull().references(() => documents.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
+  documentId: uuid('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
   amendmentNo: integer('amendment_no').notNull(),
   solicitationKeyFound: boolean('solicitation_key_found').notNull(),
   keyOverride: boolean('key_override').notNull().default(false),
@@ -190,7 +209,7 @@ export const amendments = pgTable('amendments', {
 export const amendmentLinks = pgTable('amendment_links', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  amendmentId: uuid('amendment_id').notNull().references(() => amendments.id),
+  amendmentId: uuid('amendment_id').notNull().references(() => amendments.id, { onDelete: 'cascade' }),
   rowTable: text('row_table').notNull(),
   oldRowId: uuid('old_row_id'),
   newRowId: uuid('new_row_id'),
@@ -203,7 +222,7 @@ export const amendmentLinks = pgTable('amendment_links', {
 export const pages = pgTable('pages', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  documentId: uuid('document_id').notNull().references(() => documents.id),
+  documentId: uuid('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
   pageNo: integer('page_no').notNull(),
   text: text('text').notNull(),
   ocrUsed: boolean('ocr_used').notNull().default(false),
@@ -213,7 +232,9 @@ export const pages = pgTable('pages', {
 export const archiveObjects = pgTable('archive_objects', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  documentId: uuid('document_id').notNull().references(() => documents.id),
+  // Null once the document (or its bid) is deleted: the row stays so the purge job can delete
+  // the archive copy (07 s2).
+  documentId: uuid('document_id').references(() => documents.id, { onDelete: 'set null' }),
   objectType: text('object_type').notNull().$type<'original' | 'viewer'>(),
   archiveKey: text('archive_key').notNull(),
   archivedAt: timestamp('archived_at').notNull(),
@@ -227,8 +248,8 @@ export const archiveObjects = pgTable('archive_objects', {
 export const jobs = pgTable('jobs', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').references(() => bids.id),
-  documentId: uuid('document_id').references(() => documents.id),
+  bidId: uuid('bid_id').references(() => bids.id, { onDelete: 'cascade' }),
+  documentId: uuid('document_id').references(() => documents.id, { onDelete: 'cascade' }),
   type: text('type').notNull(),
   status: text('status').notNull(),
   progress: integer('progress').notNull().default(0),
@@ -241,7 +262,7 @@ export const jobs = pgTable('jobs', {
 export const exports = pgTable('exports', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
   tab: text('tab').notNull(),
   format: text('format').notNull(),
   storagePath: text('storage_path').notNull(),
@@ -256,7 +277,7 @@ export const exports = pgTable('exports', {
 export const aiRuns = pgTable('ai_runs', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').references(() => bids.id),
+  bidId: uuid('bid_id').references(() => bids.id, { onDelete: 'set null' }),
   task: text('task').notNull(),
   provider: text('provider').notNull(),
   model: text('model').notNull(),
@@ -348,7 +369,7 @@ export const bidsRelations = relations(bids, ({ many }) => ({
 
 // Common source columns mixin
 const sourceColumns = {
-  documentId: uuid('document_id').references(() => documents.id),
+  documentId: uuid('document_id').references(() => documents.id, { onDelete: 'set null' }),
   sourcePage: integer('source_page'),
   sourcePageEnd: integer('source_page_end'),
   sourceQuote: text('source_quote'),
@@ -365,7 +386,7 @@ const sourceColumns = {
 export const bidFacts = pgTable('bid_facts', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
   field: text('field').notNull(),
   value: text('value').notNull(),
   ...sourceColumns,
@@ -375,7 +396,7 @@ export const bidFacts = pgTable('bid_facts', {
 export const kickoffItems = pgTable('kickoff_items', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
   label: text('label').notNull(),
   done: boolean('done').notNull().default(false),
   owner: text('owner'),
@@ -385,7 +406,7 @@ export const kickoffItems = pgTable('kickoff_items', {
 export const scheduleActivities = pgTable('schedule_activities', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
   label: text('label').notNull(),
   phase: text('phase'),
   startDate: timestamp('start_date'),
@@ -402,7 +423,7 @@ export const scheduleActivities = pgTable('schedule_activities', {
 export const complianceRows = pgTable('compliance_rows', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
   reqId: text('req_id').notNull(),
   sectionRef: text('section_ref'),
   requirementText: text('requirement_text').notNull(),
@@ -412,28 +433,32 @@ export const complianceRows = pgTable('compliance_rows', {
   evalRef: text('eval_ref'),
   responseSection: text('response_section'),
   owner: text('owner'),
-  status: text('status'),
+  // CHECK (open, assigned, drafted, done) in migration 0006.
+  status: text('status').notNull().default('open').$type<'open' | 'assigned' | 'drafted' | 'done'>(),
 });
 
 export const outlineItems = pgTable('outline_items', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
-  parentId: uuid('parent_id').references((): AnyPgColumn => outlineItems.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
+  parentId: uuid('parent_id').references((): AnyPgColumn => outlineItems.id, { onDelete: 'set null' }),
   number: text('number'),
   title: text('title').notNull(),
   pageLimit: integer('page_limit'),
   sourceRef: text('source_ref'),
   ...sourceColumns,
   writer: text('writer'),
-  status: text('status'),
+  // CHECK (not_started, in_progress, review, done) in migration 0006.
+  status: text('status').notNull().default('not_started').$type<'not_started' | 'in_progress' | 'review' | 'done'>(),
   dueDate: timestamp('due_date'),
+  /** Order among siblings (same bid and parent), 0..n-1. Kept contiguous by the move route. */
+  position: integer('position').notNull().default(0),
 });
 
 export const personnelRequirements = pgTable('personnel_requirements', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
   role: text('role').notNull(),
   requirement: text('requirement').notNull(),
   kind: text('kind').$type<'degree' | 'years' | 'certification' | 'clearance' | 'skill' | 'other'>(),
@@ -443,18 +468,20 @@ export const personnelRequirements = pgTable('personnel_requirements', {
 export const candidates = pgTable('candidates', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   role: text('role').notNull(),
-  documentId: uuid('document_id').references(() => documents.id),
+  documentId: uuid('document_id').references(() => documents.id, { onDelete: 'set null' }),
 });
 
 export const resumeMatches = pgTable('resume_matches', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  candidateId: uuid('candidate_id').notNull().references(() => candidates.id),
-  requirementId: uuid('requirement_id').notNull().references(() => personnelRequirements.id),
+  candidateId: uuid('candidate_id').notNull().references(() => candidates.id, { onDelete: 'cascade' }),
+  requirementId: uuid('requirement_id').notNull().references(() => personnelRequirements.id, { onDelete: 'cascade' }),
   result: text('result').notNull().$type<'meets' | 'partial' | 'gap' | 'unknown'>(),
+  /** The AI's own result, kept so a reviewer override can be undone. Null when there is none. */
+  aiResult: text('ai_result').$type<'meets' | 'partial' | 'gap' | 'unknown'>(),
   evidenceQuote: text('evidence_quote'),
   evidencePage: integer('evidence_page'),
   reviewerOverride: boolean('reviewer_override').notNull().default(false),
@@ -463,17 +490,18 @@ export const resumeMatches = pgTable('resume_matches', {
 export const reviews = pgTable('reviews', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
   type: text('type').notNull().$type<'pink' | 'red' | 'green' | 'gold' | 'other'>(),
-  draftDocumentId: uuid('draft_document_id').references(() => documents.id),
+  draftDocumentId: uuid('draft_document_id').references(() => documents.id, { onDelete: 'set null' }),
   scheduledAt: timestamp('scheduled_at'),
-  status: text('status'),
+  // CHECK (planned, in_progress, done) in migration 0006.
+  status: text('status').notNull().default('planned').$type<'planned' | 'in_progress' | 'done'>(),
 });
 
 export const reviewAssignments = pgTable('review_assignments', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  reviewId: uuid('review_id').notNull().references(() => reviews.id),
+  reviewId: uuid('review_id').notNull().references(() => reviews.id, { onDelete: 'cascade' }),
   reviewerName: text('reviewer_name').notNull(),
   sections: text('sections'),
 });
@@ -481,42 +509,55 @@ export const reviewAssignments = pgTable('review_assignments', {
 export const reviewFindings = pgTable('review_findings', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  reviewId: uuid('review_id').notNull().references(() => reviews.id),
+  reviewId: uuid('review_id').notNull().references(() => reviews.id, { onDelete: 'cascade' }),
   evalFactor: text('eval_factor'),
   kind: text('kind').notNull().$type<'strength' | 'weakness' | 'deficiency' | 'risk' | 'comment'>(),
   text: text('text').notNull(),
-  documentId: uuid('document_id').references(() => documents.id),
+  documentId: uuid('document_id').references(() => documents.id, { onDelete: 'set null' }),
   sourcePage: integer('source_page'),
   sourcePageEnd: integer('source_page_end'),
   sourceQuote: text('source_quote'),
   origin: text('origin').$type<'ai' | 'user'>(),
-  disposition: text('disposition'),
+  // CHECK (open, accepted, rejected, done) in migration 0006.
+  disposition: text('disposition').notNull().default('open').$type<'open' | 'accepted' | 'rejected' | 'done'>(),
+  /** The user who added the finding by hand; null for AI findings. */
+  authorUserId: uuid('author_user_id').references(() => users.id, { onDelete: 'set null' }),
 });
 
 export const productionItems = pgTable('production_items', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
-  category: text('category').notNull(),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
+  // CHECK (format, files, submission, copies, other) in migration 0006.
+  category: text('category').notNull().$type<'format' | 'files' | 'submission' | 'copies' | 'other'>(),
   rule: text('rule').notNull(),
   ...sourceColumns,
+  // Seeded checklist rows are 'standard'.
+  origin: text('origin').$type<'ai' | 'user' | 'standard'>(),
   done: boolean('done').notNull().default(false),
+  owner: text('owner'),
 });
 
 export const oralsItems = pgTable('orals_items', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
-  category: text('category').notNull(),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
+  // CHECK (rules, prep, session) in migration 0006.
+  category: text('category').notNull().$type<'rules' | 'prep' | 'session'>(),
   item: text('item').notNull(),
   ...sourceColumns,
+  // Seeded checklist rows are 'standard'.
+  origin: text('origin').$type<'ai' | 'user' | 'standard'>(),
   done: boolean('done').notNull().default(false),
+  owner: text('owner'),
+  // CHECK (minutes >= 0) in migration 0006.
+  minutes: integer('minutes'),
 });
 
 export const lessons = pgTable('lessons', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
-  bidId: uuid('bid_id').notNull().references(() => bids.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
   question: text('question').notNull(),
   answer: text('answer').notNull(),
   author: text('author'),
@@ -533,3 +574,28 @@ export const rowHistory = pgTable('row_history', {
   newValue: text('new_value'),
   changedAt: timestamp('changed_at').notNull(),
 });
+
+// =============================================================================
+// Compliance pre-scan hits ("check these", 05 s3.4)
+// =============================================================================
+
+/**
+ * Requirement-like sentences the pre-scan found that no compliance row quotes. The worker
+ * replaces a document's open hits in the transaction that writes its rows; the user promotes a
+ * hit to a compliance row or dismisses it. CHECK on status in migration 0006.
+ */
+export const checkThese = pgTable('check_these', {
+  ...baseColumns,
+  orgId: uuid('org_id').notNull().references(() => organizations.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
+  documentId: uuid('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
+  sentence: text('sentence').notNull(),
+  pageNo: integer('page_no').notNull(),
+  status: text('status').notNull().default('open').$type<'open' | 'promoted' | 'dismissed'>(),
+  promotedRowId: uuid('promoted_row_id').references(() => complianceRows.id, { onDelete: 'set null' }),
+  decidedBy: uuid('decided_by').references(() => users.id, { onDelete: 'set null' }),
+  decidedAt: timestamp('decided_at'),
+}, (table) => ({
+  bidStatusIdx: index('check_these_bid_id_status_idx').on(table.bidId, table.status),
+  documentStatusIdx: index('check_these_document_id_status_idx').on(table.documentId, table.status),
+}));

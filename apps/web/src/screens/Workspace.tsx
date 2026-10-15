@@ -673,7 +673,7 @@ function Reviews({ bid, data, onReload, onError, onOpen }: Panel) {
                     <button type="button" onClick={() => onOpen('review_findings', item.id)}>{item.kind}</button> {item.text}
                     {item.sourceQuote ? <span className="quote">{item.sourceQuote} p.{item.sourcePage}</span> : null}
                     <span className="row">
-                      {['accept', 'reject', 'done'].map((disposition) => (
+                      {['accepted', 'rejected', 'done'].map((disposition) => (
                         <button key={disposition} className="btn secondary" type="button" onClick={() => {
                           api(`/api/bids/${bid.id}/rows/review_findings/${item.id}`, { method: 'PATCH', body: JSON.stringify({ fields: { disposition } }) }).then(onReload);
                         }}>{disposition}</button>
@@ -726,7 +726,7 @@ function Orals({ bid, data, onOpen, onReload, onError }: Panel) {
           <button type="button" onClick={() => onOpen('orals_items', item.id)}>{item.category}: {item.item}</button>
         </label>
       ))}
-      <AddForm label="Session topic" onSubmit={(body) => postRow(bid.id, 'orals', { category: 'Session', item: body.name }, onReload, onError)} />
+      <AddForm label="Session topic" onSubmit={(body) => postRow(bid.id, 'orals', { category: 'session', item: body.name }, onReload, onError)} />
     </div>
   );
 }
@@ -767,7 +767,6 @@ function Documents({ bid, plan, docs, onReload, onError, onNotice }: Panel) {
           onReload();
         }).catch((err: Error) => {
           if (err instanceof ApiError && err.status === 413) onError(`This file is larger than the ${mb(Math.max(0, cap * 1024 * 1024 - used))} left.`);
-          else if (err instanceof ApiError && (err.message === 'key_mismatch' || err.status === 409)) onError('This file belongs to a different solicitation. Start a new bid.');
           else if (err.message.toLowerCase().includes('password')) onError('Upload an unlocked copy.');
           else onError(err.message);
         });

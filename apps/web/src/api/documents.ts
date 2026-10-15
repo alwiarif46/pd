@@ -1,5 +1,5 @@
 import { request, requestBlob, seg, type CallOptions } from './http';
-import type { DocumentDto, DocumentPagesDto, Ok, ViewTokenDto } from './types';
+import type { DocumentDto, DocumentPagesDto, KeyOverrideDto, Ok, RestoreDocumentDto, ViewTokenDto } from './types';
 
 export function listDocuments(bidId: string, opts?: CallOptions): Promise<DocumentDto[]> {
   return request(`/api/bids/${seg(bidId)}/documents`, { signal: opts?.signal });
@@ -34,11 +34,12 @@ export function confirmMarking(documentId: string, opts?: CallOptions): Promise<
   return request(`/api/documents/${seg(documentId)}/confirm-marking`, { method: 'POST', signal: opts?.signal });
 }
 
+/** Owner only. 409 `override_limit` once the bid has none left; `remaining` is what is left after this one. */
 export function overrideSolicitationKey(
   documentId: string,
   reason: string,
   opts?: CallOptions,
-): Promise<{ ok: true; remaining: number }> {
+): Promise<KeyOverrideDto> {
   return request(`/api/documents/${seg(documentId)}/key-override`, {
     method: 'POST',
     json: { reason },
@@ -46,7 +47,12 @@ export function overrideSolicitationKey(
   });
 }
 
-export function restoreDocument(documentId: string, opts?: CallOptions): Promise<{ status: string }> {
+/**
+ * Asks for an archived file back. Answers `{ status: 'restore_requested' }`, or the current state
+ * when a restore is already pending. 402 `plan_required` when free restores are turned off;
+ * 409 when the file is not archived, or (code `no_archive_copy`) when no archive copy is left to restore from.
+ */
+export function restoreDocument(documentId: string, opts?: CallOptions): Promise<RestoreDocumentDto> {
   return request(`/api/documents/${seg(documentId)}/restore`, { method: 'POST', signal: opts?.signal });
 }
 

@@ -3,7 +3,7 @@ import { connect } from 'node:net';
 import { and, eq } from 'drizzle-orm';
 import { resolveOrgPath, schema, withOrg } from '@pd/core';
 import { enqueue } from './enqueue.js';
-import { expectOneRow } from './rows.js';
+import { expectOneRow, markJobFailed } from './rows.js';
 import { dataDir, type JobPayload } from './redis.js';
 
 /**
@@ -33,18 +33,28 @@ export async function processScan(payload: JobPayload): Promise<void> {
   // The stored path must stay inside this organization's folder; otherwise fail the job.
   const filePath = resolveOrgPath(dataDir, payload.orgId, payload.storagePath);
   if (!filePath) {
-    await withOrg(payload.orgId, async (db) => {
-      await db.update(schema.jobs).set({
-        status: 'failed',
-        error: 'The stored file path is not valid',
-        finishedAt: new Date(),
-        updatedAt: new Date(),
-      }).where(and(eq(schema.jobs.id, payload.jobId), eq(schema.jobs.orgId, payload.orgId)));
-    });
+    await markJobFailed(payload, 'The stored file path is not valid');
     throw new Error(`Stored path outside the organization folder for job ${payload.jobId}`);
   }
-  const response = await scanPath(filePath);
-  const infected = response.includes('FOUND');
+  let infected = false;
+  try {
+    const response = await scanPath(filePath);
+    infected = response.includes('FOUND');
+    await recordScan(payload, infected);
+  } catch (error) {
+    // recordScan rolls back as a whole (expectOneRow, a lost connection), and a clamd failure
+    // never reaches it; either way the job row would stay pending. Fail it on its own.
+    await markJobFailed(payload, 'The virus scan could not be completed');
+    throw error;
+  }
+  if (infected) {
+    await unlink(filePath).catch(() => undefined);
+    throw new Error('File failed the virus scan');
+  }
+  await enqueue('file', payload);
+}
+
+async function recordScan(payload: JobPayload, infected: boolean): Promise<void> {
   await withOrg(payload.orgId, async (db) => {
     expectOneRow('document', await db.update(schema.documents).set({
       scanStatus: infected ? 'infected' : 'clean',
@@ -57,9 +67,4 @@ export async function processScan(payload: JobPayload): Promise<void> {
       updatedAt: new Date(),
     }).where(and(eq(schema.jobs.id, payload.jobId), eq(schema.jobs.orgId, payload.orgId))).returning({ id: schema.jobs.id }));
   });
-  if (infected) {
-    await unlink(filePath).catch(() => undefined);
-    throw new Error('File failed the virus scan');
-  }
-  await enqueue('file', payload);
 }

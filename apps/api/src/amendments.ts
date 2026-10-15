@@ -1,29 +1,59 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { isUuid, schema, withOrg } from '@pd/core';
+import { isUuid, schema } from '@pd/core';
 import { requireAuth } from './context.js';
-import { findBid } from './scope.js';
+import { findBid, inOrg } from './scope.js';
 
 export async function registerAmendments(app: FastifyInstance): Promise<void> {
   app.get('/api/bids/:id/amendment-links', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const bidId = (request.params as { id: string }).id;
-    return withOrg(orgId, async (db) => {
+    return inOrg(reply, orgId, async (db, respond) => {
       const bid = await findBid(db, orgId, bidId);
       if (!bid) {
-        return reply.code(404).send({ error: 'Bid not found' });
+        return respond(404, { error: 'Bid not found' });
       }
-      const amendments = await db.select({ id: schema.amendments.id }).from(schema.amendments).where(and(
+      const amendments = await db.select({ id: schema.amendments.id, amendmentNo: schema.amendments.amendmentNo }).from(schema.amendments).where(and(
         eq(schema.amendments.bidId, bidId),
         eq(schema.amendments.orgId, orgId),
       ));
       if (amendments.length === 0) {
         return [];
       }
-      return db.select().from(schema.amendmentLinks).where(and(
+      const links = await db.select().from(schema.amendmentLinks).where(and(
         inArray(schema.amendmentLinks.amendmentId, amendments.map((amendment) => amendment.id)),
         eq(schema.amendmentLinks.orgId, orgId),
       ));
+      const rowIds = [...new Set(links.flatMap((link) => (
+        link.rowTable === 'compliance_rows' ? [link.oldRowId, link.newRowId] : []
+      )).filter((id): id is string => Boolean(id)))];
+      // Only rows of this organization and this bid: a link that names any other row gets null.
+      const rows = rowIds.length === 0 ? [] : await db.select({
+        id: schema.complianceRows.id,
+        reqId: schema.complianceRows.reqId,
+        requirementText: schema.complianceRows.requirementText,
+        sourcePage: schema.complianceRows.sourcePage,
+      }).from(schema.complianceRows).where(and(
+        inArray(schema.complianceRows.id, rowIds),
+        eq(schema.complianceRows.bidId, bidId),
+        eq(schema.complianceRows.orgId, orgId),
+      ));
+      const byId = new Map(rows.map((row) => [row.id, {
+        rowId: row.id,
+        label: row.reqId,
+        text: row.requirementText,
+        sourcePage: row.sourcePage,
+      }]));
+      const numbers = new Map(amendments.map((amendment) => [amendment.id, amendment.amendmentNo]));
+      const lookup = (link: { rowTable: string }, id: string | null) => (
+        link.rowTable === 'compliance_rows' && id ? byId.get(id) ?? null : null
+      );
+      return links.map((link) => ({
+        ...link,
+        amendmentNo: numbers.get(link.amendmentId) ?? null,
+        oldRow: lookup(link, link.oldRowId),
+        newRow: lookup(link, link.newRowId),
+      }));
     });
   });
 
@@ -46,13 +76,13 @@ async function decide(
   if (!isUuid(linkId)) {
     return reply.code(404).send({ error: 'Amendment link not found' });
   }
-  return withOrg(orgId, async (db) => {
+  return inOrg(reply, orgId, async (db, respond) => {
     const [link] = await db.select().from(schema.amendmentLinks).where(and(
       eq(schema.amendmentLinks.id, linkId),
       eq(schema.amendmentLinks.orgId, orgId),
     ));
     if (!link) {
-      return reply.code(404).send({ error: 'Amendment link not found' });
+      return respond(404, { error: 'Amendment link not found' });
     }
     // The link's bid, through its amendment. The row it supersedes must be on that same bid.
     const [amendment] = await db.select().from(schema.amendments).where(and(
@@ -60,7 +90,7 @@ async function decide(
       eq(schema.amendments.orgId, orgId),
     ));
     if (!amendment) {
-      return reply.code(404).send({ error: 'Amendment link not found' });
+      return respond(404, { error: 'Amendment link not found' });
     }
     await db.update(schema.amendmentLinks).set({
       status,

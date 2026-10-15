@@ -20,6 +20,7 @@ const TENANT_TABLES = [
   'bid_facts', 'kickoff_items', 'schedule_activities', 'compliance_rows', 'outline_items',
   'personnel_requirements', 'candidates', 'resume_matches', 'reviews', 'review_assignments',
   'review_findings', 'production_items', 'orals_items', 'lessons', 'row_history',
+  'check_these',
 ];
 
 describe.skipIf(Boolean(unavailable))('row-level security catalog', () => {
@@ -125,12 +126,12 @@ describe.skipIf(Boolean(unavailable))('row-level security as pd_app', () => {
     await withOrg(orgA, async (db) => {
       await db.insert(schema.memberships).values({ orgId: orgA, userId: userA, role: 'owner' });
       [{ id: bidA }] = await db.insert(schema.bids).values({
-        orgId: orgA, name: 'A', bidType: 'federal', solicitationNumber: 'A', solicitationKey: 'a', status: 'draft',
+        orgId: orgA, name: 'A', bidType: 'federal', solicitationNumber: 'A', solicitationKey: 'a', status: 'planning',
       }).returning({ id: schema.bids.id });
     });
     await withOrg(orgB, async (db) => {
       [{ id: bidB }] = await db.insert(schema.bids).values({
-        orgId: orgB, name: 'B', bidType: 'federal', solicitationNumber: 'B', solicitationKey: 'b', status: 'draft',
+        orgId: orgB, name: 'B', bidType: 'federal', solicitationNumber: 'B', solicitationKey: 'b', status: 'planning',
       }).returning({ id: schema.bids.id });
     });
   });
@@ -190,7 +191,7 @@ describe.skipIf(Boolean(unavailable))('row-level security as pd_app', () => {
     });
     await expect(withOrg(orgA, async (db) => {
       await db.insert(schema.bids).values({
-        orgId: orgB, name: 'planted', bidType: 'federal', solicitationNumber: 'x', solicitationKey: 'x', status: 'draft',
+        orgId: orgB, name: 'planted', bidType: 'federal', solicitationNumber: 'x', solicitationKey: 'x', status: 'planning',
       });
     })).rejects.toThrow(/row-level security/);
     await expect(withOrg(orgA, async (db) => {

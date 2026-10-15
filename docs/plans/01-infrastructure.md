@@ -122,6 +122,15 @@ Restore test, once a month: restore the latest base backup and WAL (or the lates
 - Code in a private GitHub repository under the Shaavir organization.
 - GitHub Actions: run tests, build Docker images, push to GitHub Container Registry.
 - Deploy: SSH into the server, pull images, `docker compose up -d`. Database migrations run as the owner role `pd_owner` in a separate step before the api restarts. The running app uses `pd_app` (02 s4).
+- `infra/scripts/deploy.sh` does this in order: pull, build images (build context is the repo root), start `postgres` and `redis`, run `db:migrate` as `pd_owner` in the one-off `migrate` compose service, then `docker compose up -d`. A failed migration stops the deploy before the api and worker restart. The script never prints secrets; they come from `/opt/pd/.env` (root-only, mode 600).
+- **Setting the `pd_app` password (out of band, never in a script or a migration).** The migration creates `pd_app` with `LOGIN` and no password. After the first successful migration on a server, set it once from the server shell, reading the value from the root-only env file so it never lands in shell history or a process list:
+
+  ```
+  docker compose --env-file /opt/pd/.env -f /opt/pd/infra/docker-compose.yml exec -T postgres \
+    sh -c 'psql -U pd_owner -d pd -v ON_ERROR_STOP=1' <<< "ALTER ROLE pd_app PASSWORD '$(grep ^PD_APP_PASSWORD= /opt/pd/.env | cut -d= -f2-)';"
+  ```
+
+  Then run `deploy.sh` again (or restart `api` and `worker`). To rotate: change `PD_APP_PASSWORD` in `.env`, run the same `ALTER ROLE`, restart `api` and `worker`. `PD_APP_PASSWORD` must differ from `POSTGRES_PASSWORD`, and the value must not contain a single quote. Until it is set, the api and worker fail to log in and exit.
 - Two environments: `staging` and `production`. The 8 GB server already has about 5.6 GB allocated to production containers (section 2.2), so a staging copy does not fit on it. If there is a staging server, it is a separate small VPS. 🟨 **OPEN:** whether to run a separate staging VPS.
 
 ## 7. Monthly running cost (estimate, provisional)
@@ -153,6 +162,20 @@ AI cost changes with the model the test selects (v1 estimates, provisional; see 
 
 Add 18% GST under reverse charge for foreign providers (claimable as input credit if Shaavir is GST-registered) and card forex fees. Confirm with the accountant.
 
+## 8. Stripe setup
+
+Billing (06 s5) works once these are done in the Stripe dashboard, in test mode first, then live. Prices exist only in Stripe; the app never shows or stores an amount.
+
+1. **Products and prices.** Two products, Starter and Growth, each with one recurring monthly USD price. Put the Price ids (`price_...`) in `STRIPE_PRICE_STARTER` and `STRIPE_PRICE_GROWTH`. A subscription on any other price is not applied: the webhook records it in `audit_log` (`billing.unknown_price`) and logs an error.
+2. **API key.** `STRIPE_SECRET_KEY`. A restricted key needs: Customers write (create, update, retrieve), Checkout Sessions write (create, list, expire), Customer Portal sessions write, and Subscriptions read (retrieve, list). Nothing else; the webhook signing secret comes from step 3, not from the key.
+3. **Webhook endpoint.** `https://<api host>/api/billing/webhook`, pinned to API version `2026-08-26.dahlia` (the version the `stripe` package in `apps/api` is written against). Events: `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`. Put its signing secret in `STRIPE_WEBHOOK_SECRET`.
+4. **Customer Portal.** Turn it on. Its product catalog must contain only the Starter and Growth prices from step 1. Allow switching between them with proration; downgrades take effect at the end of the billing period; cancellation at the end of the period, not immediately. Allow payment method updates and invoice history. Set the business name and the privacy and terms links.
+5. **Failed payments.** Under subscription settings, choose what happens after the last retry: cancel the subscription or mark it unpaid. Either moves the organization to Free (06 s5).
+6. **Stripe Tax.** Off. 🟨 **OPEN** (06 s5).
+7. **App URL.** `APP_URL` is the web app's public origin. Checkout returns to `APP_URL/#/org?billing=success` or `?billing=cancelled`; the Portal returns to `APP_URL/#/org`.
+8. **Check.** In test mode, forward events with `stripe listen --forward-to <api>/api/billing/webhook`, upgrade a test organization, change plan in the Portal, and cancel. `GET /api/org` shows `billingAvailable: true` only when the secret key, both price ids, and `APP_URL` are set.
+9. **Two live subscriptions.** If an error log or an `audit_log` row `billing.second_live_subscription` appears, one customer has two live subscriptions. The app keeps the first and never cancels anything itself; cancel the extra one in the dashboard and refund if needed.
+
 ## Decision log
 
 | Date | Decision |
@@ -169,3 +192,4 @@ Add 18% GST under reverse charge for foreign providers (claimable as input credi
 | 13 Oct 2026 | Root and SSH: Amaan only until decided. Staging stays OPEN; it does not fit on the 8 GB server |
 | 13 Oct 2026 | AI cost figures marked provisional until Phase 1 measurements |
 | 13 Oct 2026 | Error tracking service must scrub request bodies |
+| 15 Oct 2026 | Stripe dashboard setup recorded (section 8): two monthly prices, restricted-key permissions, webhook events and API version, Portal catalog limited to Starter and Growth, end-of-period downgrade and cancel, Stripe Tax off |

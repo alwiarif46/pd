@@ -1,14 +1,35 @@
 // Core shared types and utilities
 
+/** `bids.status` (5.2). Migration 0005 adds a CHECK on these values; new bids start in planning. */
+export const BID_STATUSES = ['planning', 'writing', 'submitted', 'closed'] as const;
+export type BidStatus = (typeof BID_STATUSES)[number];
+
+export function isBidStatus(value: unknown): value is BidStatus {
+  return typeof value === 'string' && (BID_STATUSES as readonly string[]).includes(value);
+}
+
+/** `documents.live_status` (03, 07 s2). */
+export type DocumentLiveStatus = 'live' | 'archived' | 'restore_requested' | 'restoring' | 'restored' | 'deleted';
+
 export interface Bid {
   id: string;
   orgId: string;
   name: string;
-  solicitationKey: string;
+  agency: string | null;
   bidType: 'federal' | 'sled';
-  status: 'draft' | 'active' | 'archived';
+  solicitationNumber: string;
+  solicitationKey: string;
+  status: BidStatus;
   createdAt: Date;
-  dueDate?: Date;
+  updatedAt: Date;
+  startDate: Date | null;
+  dueDate: Date | null;
+  dueTime: string | null;
+  timeZone: string | null;
+  oralsEnabled: boolean;
+  creditStatus: 'reserved' | 'consumed' | 'released' | null;
+  keyOverridesUsed: number;
+  retentionExtendedUntil: Date | null;
 }
 
 export interface Document {
@@ -51,6 +72,7 @@ export interface Job {
 export { PLAN_LIMITS, type Plan } from './limits';
 export { resolveOrgPath } from './paths';
 export * from './credits';
+export * from './retention';
 
 // Database
 export * from './db';
