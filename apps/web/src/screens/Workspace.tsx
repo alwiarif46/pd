@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError, api, uploadFile } from '../legacy-api';
 import { Dialog } from '../components/Dialog';
 import { RowDetail } from '../components/RowDetail';
@@ -41,6 +41,9 @@ export function Workspace({
   org,
   onTab,
   onSwitch,
+  embedded = false,
+  onChanged,
+  refreshKey = '',
 }: {
   bidId: string;
   tab: TabId;
@@ -48,6 +51,12 @@ export function Workspace({
   org: OrgPayload | null;
   onTab: (tab: TabId) => void;
   onSwitch: (id: string) => void;
+  /** Inside the v0 shell: no sidebar, Menu button or bid switcher (the shell has them). */
+  embedded?: boolean;
+  /** Called after this screen changes something, so the shell can reload. */
+  onChanged?: () => void;
+  /** Reloads this screen when it changes (the shell passes its job states). */
+  refreshKey?: string;
 }) {
   const [bid, setBid] = useState<Bid | null>(null);
   const [docs, setDocs] = useState<DocumentRow[]>([]);
@@ -64,14 +73,14 @@ export function Workspace({
   const plan = org?.org?.plan ?? 'free';
   const locked = plan === 'free' && PAID.includes(tab);
 
-  function reload() {
+  function reload(quiet = false) {
     api<Bid>(`/api/bids/${bidId}`).then(setBid).catch((err: Error) => setError(err.message));
     api<DocumentRow[]>(`/api/bids/${bidId}/documents`).then(setDocs).catch(() => undefined);
     api<JobRow[]>(`/api/bids/${bidId}/jobs`).then(setJobs).catch(() => undefined);
     api<typeof links>(`/api/bids/${bidId}/amendment-links`).then(setLinks).catch(() => undefined);
     if (tab !== 'documents' && tab !== 'settings' && !locked) {
       const started = Date.now();
-      setData(null);
+      if (!quiet) setData(null);
       api<Record<string, unknown>>(`/api/bids/${bidId}/tabs/${tab}`).then((payload) => {
         if (Date.now() - started > 100) setSlow(false);
         setData(payload);
@@ -87,6 +96,23 @@ export function Workspace({
     setSlow(false);
     return reload();
   }, [bidId, tab, plan]);
+
+  // The shell polls while files process; reload in place when a job starts, finishes or fails. The key
+  // seen at mount, and the first one the shell sends after it, describe what the mount load already
+  // fetched, so only later changes reload.
+  const lastKey = useRef(refreshKey);
+  useEffect(() => {
+    if (!refreshKey || refreshKey === lastKey.current) return;
+    const first = lastKey.current === '';
+    lastKey.current = refreshKey;
+    if (!first) reload(true);
+  }, [refreshKey]);
+
+  /** After a change here: reload this screen and let the shell reload its state. */
+  function changed() {
+    reload();
+    onChanged?.();
+  }
 
   useEffect(() => {
     if (tab === 'overview' || tab === 'production' || tab === 'orals' || tab === 'lessons') {
@@ -117,7 +143,7 @@ export function Workspace({
 
   return (
     <div className="workspace">
-      <nav className={menu ? 'sidebar open' : 'sidebar'} aria-label="Bid sections">
+      {embedded ? null : <nav className={menu ? 'sidebar open' : 'sidebar'} aria-label="Bid sections">
         {tabs.map((item, index) => (
           <span key={item}>
             {index === 3 ? <hr className="divider" /> : null}
@@ -128,17 +154,19 @@ export function Workspace({
             </button>
           </span>
         ))}
-      </nav>
+      </nav>}
       <div className="content stack">
         <div className="row no-print">
-          <button className="menu-btn" type="button" onClick={() => setMenu((open) => !open)}>Menu</button>
+          {embedded ? null : <button className="menu-btn" type="button" onClick={() => setMenu((open) => !open)}>Menu</button>}
           <h1>{TAB_LABEL[tab]}</h1>
-          <span className="grow" />
-          <label className="small">Bid
-            <select value={bidId} onChange={(event) => onSwitch(event.target.value)}>
-              {bids.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>
+          {embedded ? null : <>
+            <span className="grow" />
+            <label className="small">Bid
+              <select value={bidId} onChange={(event) => onSwitch(event.target.value)}>
+                {bids.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </label>
+          </>}
         </div>
         {bid?.dueDate ? <p className="num">Due {bid.dueDate.slice(0, 10)} {bid.dueTime || ''} {bid.timeZone || ''} · {daysLeft(bid.dueDate)}</p> : null}
         {error ? <p className="banner bad">{error}</p> : null}
@@ -163,10 +191,10 @@ export function Workspace({
             <p>This file carries the marking {(blocked.markingFound ?? []).join(', ') || 'a controlled marking'}. AI processing is paused. Confirm the file is public or approved for third-party processing.</p>
             <div className="row">
               <button className="btn" type="button" onClick={() => {
-                api(`/api/documents/${blocked.id}/confirm-marking`, { method: 'POST' }).then(reload).catch((err: Error) => setError(err.message));
+                api(`/api/documents/${blocked.id}/confirm-marking`, { method: 'POST' }).then(changed).catch((err: Error) => setError(err.message));
               }}>Confirm</button>
               <button className="btn danger" type="button" onClick={() => {
-                api(`/api/documents/${blocked.id}`, { method: 'DELETE' }).then(reload).catch((err: Error) => setError(err.message));
+                api(`/api/documents/${blocked.id}`, { method: 'DELETE' }).then(changed).catch((err: Error) => setError(err.message));
               }}>Remove the file</button>
             </div>
           </div>
@@ -175,7 +203,7 @@ export function Workspace({
           <div className="banner bad">
             <p>This step did not finish.</p>
             <button className="btn" type="button" onClick={() => {
-              api(`/api/jobs/${failed.id}/retry`, { method: 'POST' }).then(reload).catch((err: Error) => setError(err.message));
+              api(`/api/jobs/${failed.id}/retry`, { method: 'POST' }).then(changed).catch((err: Error) => setError(err.message));
             }}>Retry</button>
           </div>
         ) : null}
@@ -185,8 +213,8 @@ export function Workspace({
             {proposed.map((link) => (
               <div key={link.id} className="row">
                 <span>{link.action} · old {link.oldRowId ?? 'none'} · new {link.newRowId ?? 'none'} · confidence {link.confidence ?? '—'}</span>
-                <button className="btn" type="button" onClick={() => api(`/api/amendment-links/${link.id}/confirm`, { method: 'POST' }).then(reload)}>Confirm</button>
-                <button className="btn secondary" type="button" onClick={() => api(`/api/amendment-links/${link.id}/reject`, { method: 'POST' }).then(reload)}>Reject</button>
+                <button className="btn" type="button" onClick={() => api(`/api/amendment-links/${link.id}/confirm`, { method: 'POST' }).then(changed)}>Confirm</button>
+                <button className="btn secondary" type="button" onClick={() => api(`/api/amendment-links/${link.id}/reject`, { method: 'POST' }).then(changed)}>Reject</button>
               </div>
             ))}
           </div>
@@ -201,7 +229,7 @@ export function Workspace({
             onOpen={openRow}
             onNotice={setNotice}
             onError={setError}
-            onReload={reload}
+            onReload={changed}
           />
         )}
       </div>
@@ -214,7 +242,7 @@ export function Workspace({
           documents={docs}
           onClose={() => setSelected(null)}
           onOpenSource={(row) => setSource(row)}
-          onSaved={reload}
+          onSaved={changed}
         />
       ) : null}
       {source?.documentId ? (
@@ -508,8 +536,8 @@ function Compliance({ bid, data, onOpen, onReload, onError }: Panel) {
                   <td>{row.sectionRef}</td>
                   <td>
                     {closed ? <s>{row.requirementText}</s> : row.requirementText}
-                    {row.supersedeStatus === 'superseded' ? <span className="tag superseded">Superseded by Amd {row.changedByAmendment ?? row.amendmentNo}</span> : null}
-                    {row.supersedeStatus === 'withdrawn' ? <span className="tag withdrawn">Withdrawn by Amd {row.changedByAmendment ?? row.amendmentNo}</span> : null}
+                    {row.supersedeStatus === 'superseded' ? <span className="tag superseded">{row.changedByAmendment ? `Superseded by Amd ${row.changedByAmendment}` : 'Superseded'}</span> : null}
+                    {row.supersedeStatus === 'withdrawn' ? <span className="tag withdrawn">{row.changedByAmendment ? `Withdrawn by Amd ${row.changedByAmendment}` : 'Withdrawn'}</span> : null}
                     {!closed && row.amendmentNo ? <span className="tag added">Added by Amd {row.amendmentNo}</span> : null}
                     {row.origin === 'user' ? <span className="tag">added by user</span> : null}
                     {row.supersedeStatus === 'superseded' && row.supersededByRowId ? (

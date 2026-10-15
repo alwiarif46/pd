@@ -1,7 +1,8 @@
 /**
  * The amendment solicitation-number check (04 s3.1 step 1, 06 s4) across the worker and the api,
  * against the real database: the worker's classify and amendment steps are imported from
- * apps/worker, @pd/ai's processAmendment is mocked, and both queues are spied.
+ * apps/worker, @pd/ai's model passes (extractRows, diffAmendment, mapRows) are mocked, and both
+ * queues are spied.
  */
 import { randomUUID } from 'node:crypto';
 import { mkdtemp } from 'node:fs/promises';
@@ -18,6 +19,7 @@ import { as, createTenant, createUser, type Tenant } from './helpers.js';
 vi.mock('../src/queue.js', () => ({
   enqueueScan: vi.fn(async () => undefined),
   enqueueClassify: vi.fn(async () => undefined),
+  enqueueAmendment: vi.fn(async () => undefined),
 }));
 
 const enqueued = vi.hoisted(() => [] as { name: string; documentId: string; jobId: string }[]);
@@ -37,7 +39,12 @@ vi.mock('@pd/ai', async (importOriginal) => {
   return {
     ...original,
     getProvider: () => ({}),
-    processAmendment: vi.fn(async () => {
+    extractRows: vi.fn(async () => ({
+      requirements: [], hits: [], classified: [], tokensUsed: 0, chunksProcessed: 0, quoteCheckFailures: 0,
+      quoteCheckFailureRate: 0, droppedRows: 0, skillName: 'compliance-matrix', skillVersion: 'test',
+    })),
+    mapRows: vi.fn(async () => ({ tokensUsed: 0 })),
+    diffAmendment: vi.fn(async () => {
       diff.calls += 1;
       return diff.impl!();
     }),
@@ -53,7 +60,7 @@ type Payload = { orgId: string; bidId: string; documentId: string; jobId: string
 
 describe.skipIf(Boolean(unavailable))('amendment solicitation key check', () => {
   let app: FastifyInstance;
-  let worker: typeof import('../../worker/src/ai-jobs.js');
+  let worker: typeof import('../../worker/src/amendment-job.js');
   let classify: typeof import('../../worker/src/classify-job.js');
 
   beforeAll(async () => {
@@ -61,7 +68,7 @@ describe.skipIf(Boolean(unavailable))('amendment solicitation key check', () => 
     getPool({ connectionString: inject('appUrl'), max: 8 });
     const { buildApp } = await import('../src/app.js');
     app = await buildApp({ logger: false });
-    worker = await import('../../worker/src/ai-jobs.js');
+    worker = await import('../../worker/src/amendment-job.js');
     classify = await import('../../worker/src/classify-job.js');
   });
 
@@ -77,9 +84,9 @@ describe.skipIf(Boolean(unavailable))('amendment solicitation key check', () => 
     vi.mocked(enqueueClassify).mockClear();
     // One withdraw link against the tenant's first compliance row.
     diff.impl = async () => ({
-      requirements: [],
-      links: [{ oldRowId: current!.rows.compliance_rows, newRowId: null, action: 'withdraw', confidence: 0.95, status: 'auto' }],
-      dateChanges: [],
+      dropped: 0,
+      links: [{ action: 'withdraw', newIndex: null, oldRowId: current!.rows.compliance_rows, confidence: 0.95, sourcePage: 1, sourceQuote: 'is deleted' }],
+      tokensUsed: 0,
     });
   });
 

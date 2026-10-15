@@ -106,7 +106,7 @@ export function NewBid({ onCreated }: { onCreated: (id: string) => void }) {
   );
 }
 
-export function Organization() {
+export function Organization({ onChanged }: { onChanged?: () => void }) {
   const [org, setOrg] = useState<OrgPayload | null>(null);
   const [members, setMembers] = useState<{ userId: string; role: string }[]>([]);
   const [about, setAbout] = useState<{ provider: string; model: string; subprocessors: string[] } | null>(null);
@@ -137,6 +137,7 @@ export function Organization() {
     try {
       await api('/api/org', { method: 'POST', body: JSON.stringify({ name }) });
       load();
+      onChanged?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create the organization');
     }

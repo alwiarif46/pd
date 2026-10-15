@@ -1,0 +1,17 @@
+import { Button } from '@/components/ui/button';
+import type { SourceLinkProps } from './types';
+export function SourceLink({ page, pageEnd, rowLabel, onOpen }: SourceLinkProps) {
+  if (page === null) return <span className="text-sm text-muted-foreground">No source</span>;
+  const label = pageEnd ? `pp. ${page}–${pageEnd}` : `p. ${page}`;
+  return (
+    <Button
+      variant="link"
+      size="sm"
+      className="font-numeric px-0"
+      aria-label={`Open source for ${rowLabel}, ${pageEnd ? `pages ${page} to ${pageEnd}` : `page ${page}`}`}
+      onClick={onOpen}
+    >
+      {label}
+    </Button>
+  );
+}

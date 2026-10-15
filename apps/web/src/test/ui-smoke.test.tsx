@@ -1,0 +1,215 @@
+// @vitest-environment jsdom
+// Smoke renders of every integrated v0 component (src/ui) with its sample data: catches runtime breaks
+// (a missing import, a crash on null) that tsc cannot. Tests live here, not in src/ui, which is generated.
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import type { ProcessingState } from '@/types';
+import { LogIn } from '@/ui/auth/LogIn';
+import { ResetPassword } from '@/ui/auth/ResetPassword';
+import { ResetRequest } from '@/ui/auth/ResetRequest';
+import { SignUp } from '@/ui/auth/SignUp';
+import { Verify } from '@/ui/auth/Verify';
+import { BidsList } from '@/ui/bids/BidsList';
+import { NewBid } from '@/ui/bids/NewBid';
+import { OutOfCreditsMessage } from '@/ui/bids/OutOfCreditsMessage';
+import { SAMPLE_BIDS, SAMPLE_CREDITS_RESET_ON } from '@/ui/bids/sample-data';
+import { AmendmentConfirm } from '@/ui/common/AmendmentConfirm';
+import { EmptyState } from '@/ui/common/EmptyState';
+import { LockedTab } from '@/ui/common/LockedTab';
+import { MarkingPrompt } from '@/ui/common/MarkingPrompt';
+import { ProcessingBanner } from '@/ui/common/ProcessingBanner';
+import { SAMPLE_AMENDMENTS, SAMPLE_MARKINGS, SAMPLE_PROCESSING } from '@/ui/common/sample-data';
+import { SourceLink } from '@/ui/common/SourceLink';
+import { TabFrame } from '@/ui/common/TabFrame';
+import { AppShell } from '@/ui/shell/AppShell';
+import { ConfirmDialog } from '@/ui/shell/ConfirmDialog';
+import { UpgradeDialog } from '@/ui/shell/UpgradeDialog';
+
+const noop = () => undefined;
+const idle = { state: 'idle' } as const;
+
+describe('auth', () => {
+  it('renders each screen', () => {
+    render(<LogIn status={idle} onLogIn={noop} onForgotPassword={noop} onSignUp={noop} />);
+    render(<SignUp status={idle} onSignUp={noop} onLogIn={noop} onOpenPrivacy={noop} />);
+    render(
+      <Verify
+        email="dana@example.gov"
+        phone="2025550100"
+        step="phone"
+        status={{ state: 'error', message: 'That code is wrong.' }}
+        onSubmitCode={noop}
+        onResendEmail={noop}
+        onResendCode={noop}
+        onLogIn={noop}
+      />,
+    );
+    render(<ResetRequest status={{ state: 'done', message: 'Sent.' }} onRequest={noop} onLogIn={noop} />);
+    render(<ResetPassword status={idle} onSetPassword={noop} onLogIn={noop} />);
+    expect(screen.getByText('That code is wrong.')).toBeTruthy();
+  });
+});
+
+describe('bids', () => {
+  it('renders the list with the sample bids', () => {
+    render(
+      <BidsList
+        bids={SAMPLE_BIDS}
+        creditsLeft={3}
+        creditsResetOn={SAMPLE_CREDITS_RESET_ON}
+        onOpen={noop}
+        onCreate={noop}
+        onUpgrade={noop}
+      />,
+    );
+    expect(screen.getAllByText(SAMPLE_BIDS[0].name).length).toBeGreaterThan(0);
+  });
+
+  it('renders an empty list, new bid, and the out-of-credits message', () => {
+    render(<BidsList bids={[]} creditsLeft={0} creditsResetOn={SAMPLE_CREDITS_RESET_ON} onOpen={noop} onCreate={noop} onUpgrade={noop} />);
+    render(
+      <NewBid
+        creditsLeft={0}
+        creditsResetOn={SAMPLE_CREDITS_RESET_ON}
+        plan="free"
+        mbCap={50}
+        status={{ state: 'submitting' }}
+        onCreate={noop}
+        onCancel={noop}
+        onUpgrade={noop}
+      />,
+    );
+    render(<OutOfCreditsMessage creditsResetOn={SAMPLE_CREDITS_RESET_ON} onUpgrade={noop} />);
+  });
+});
+
+describe('shell', () => {
+  const bid = {
+    id: '1',
+    name: 'VA EHR Support Services',
+    agency: 'Department of Veterans Affairs',
+    dueDate: '2026-11-03T12:00:00',
+    dueTime: '14:00',
+    timeZone: 'America/New_York',
+  };
+  const base = {
+    bids: [{ id: '1', name: 'VA EHR Support Services' }],
+    plan: 'free' as const,
+    creditsLeft: 3,
+    creditsResetOn: '2026-11-01T00:00:00.000Z',
+    tabSignals: [],
+    user: { name: 'Dana Reyes', email: 'dana.reyes@example.gov' },
+    detail: null,
+    onSelectTab: noop,
+    onSwitchBid: noop,
+    onOpenPage: noop,
+    onUpgrade: noop,
+    onSignOut: noop,
+  };
+
+  it('renders inside a bid with the tab list and locked paid tabs', () => {
+    render(
+      <AppShell {...base} bid={bid} activeTab="overview" activePage={null} oralsEnabled={false}>
+        <p>Tab content</p>
+      </AppShell>,
+    );
+    expect(screen.getByText('Tab content')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Outline (locked)' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Orals/ })).toBeNull();
+  });
+
+  it('renders outside a bid with a detail column', () => {
+    render(
+      <AppShell {...base} bid={null} activeTab={null} activePage="bids" oralsEnabled plan="growth" detail={<p>Detail</p>}>
+        <p>Page</p>
+      </AppShell>,
+    );
+    expect(screen.getByRole('button', { name: 'Organization' })).toBeTruthy();
+    expect(screen.getByText('Detail')).toBeTruthy();
+  });
+
+  it('renders the dialogs open', () => {
+    render(
+      <UpgradeDialog
+        open
+        reason="out_of_credits"
+        plan="starter"
+        creditsLeft={0}
+        creditsResetOn="2026-11-01T00:00:00.000Z"
+        onChoosePlan={noop}
+        onClose={noop}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Choose Growth' })).toBeTruthy();
+    render(
+      <ConfirmDialog
+        open
+        title="Delete VA EHR?"
+        body="This cannot be undone."
+        confirmLabel="Delete bid"
+        typeToConfirm="VA EHR"
+        busy={false}
+        onConfirm={noop}
+        onCancel={noop}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Delete bid' }).hasAttribute('disabled')).toBe(true);
+  });
+});
+
+describe('common', () => {
+  const frame = {
+    tab: 'overview' as const,
+    title: 'Overview',
+    plan: 'free' as const,
+    processing: null,
+    waiting: null,
+    overCap: null,
+    draftNotice: false,
+    onUploadSolicitation: noop,
+    onRetry: noop,
+    onUpgrade: noop,
+  };
+
+  it('renders every TabFrame block', () => {
+    render(<TabFrame {...frame} block={{ kind: 'no_solicitation' }}>x</TabFrame>);
+    render(<TabFrame {...frame} block={{ kind: 'failed', reason: 'We could not read this file.' }}>x</TabFrame>);
+    render(<TabFrame {...frame} block={{ kind: 'locked', description: 'Paid.' }}>x</TabFrame>);
+    render(
+      <TabFrame {...frame} block={{ kind: 'out_of_credits', creditsLeft: 0, creditsResetOn: '2026-11-01T12:00:00' }}>
+        x
+      </TabFrame>,
+    );
+    expect(screen.getByText('We could not read this file.')).toBeTruthy();
+    expect(screen.getByText('No solicitation yet')).toBeTruthy();
+  });
+
+  it('renders TabFrame banners around the content', () => {
+    render(
+      <TabFrame
+        {...frame}
+        block={null}
+        processing={SAMPLE_PROCESSING}
+        waiting={<MarkingPrompt fileName="rfp.pdf" markings={SAMPLE_MARKINGS} page={12} busy={false} onConfirm={noop} onRemoveFile={noop} />}
+        overCap={{ usedBytes: 60 * 1048576, capMb: 50 }}
+        draftNotice
+      >
+        <p>Rows</p>
+      </TabFrame>,
+    );
+    expect(screen.getByText('Rows')).toBeTruthy();
+    expect(screen.getByText('Needs you')).toBeTruthy();
+  });
+
+  it('renders the shared pieces with the sample data', () => {
+    render(<AmendmentConfirm proposals={SAMPLE_AMENDMENTS} busyIds={['proposal-adds']} onConfirm={noop} onReject={noop} onOpenSource={noop} />);
+    render(<EmptyState title="No items found" text="Add one by hand." action={{ label: 'Add item', onClick: noop }} />);
+    render(<LockedTab tab="outline" title="Outline" description="Paid." onUpgrade={noop} />);
+    const idleState: ProcessingState = { steps: [], queuePosition: null, etaSeconds: 30 };
+    render(<ProcessingBanner processing={idleState} />);
+    render(<SourceLink page={12} pageEnd={13} rowLabel="C.3.2" onOpen={noop} />);
+    render(<SourceLink page={null} pageEnd={null} rowLabel="C.3.2" onOpen={noop} />);
+    expect(screen.getByRole('button', { name: 'Open source for C.3.2, pages 12 to 13' })).toBeTruthy();
+    expect(screen.getByText('No source')).toBeTruthy();
+  });
+});

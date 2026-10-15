@@ -15,7 +15,21 @@ import type { Db } from './scope.js';
  *   back values read earlier, so concurrent requests and the worker cannot lose an update.
  * - Row locks are always taken in this order, by the api and the worker alike, so no two
  *   transactions wait on each other in a cycle:
- *     organizations -> documents -> check_these -> upload_sessions -> bids -> amendments -> rfp_credits.
+ *     organizations -> documents -> check_these -> upload_sessions -> bids -> amendments
+ *       -> amendment_links -> compliance_rows -> rfp_credits.
+ *   compliance_rows are locked FOR UPDATE ordered by id, after the amendment (and its link).
+ *   Amendment numbers (packages/core amendment-numbers.ts) are checked and written only under the
+ *   bid lock: upload start (organization, bid), upload complete of an amendment (its session,
+ *   organization, bid, as the solicitation branch), the worker's key check (document, bid,
+ *   amendment) and PATCH of the number (organization key share, document, bid, amendment, rows).
+ *   The worker's amendment write (apps/worker/src/amendment-job.ts) takes organization key
+ *   share, document, its check_these rows, bid, amendment, then the old rows its links close (by
+ *   id); the matrix write takes document, check_these, bid (for req id allocation), credit. Link
+ *   confirm and reject take organization key share, bid, amendment, link, rows (by id). Row
+ *   delete and merge of compliance rows lock the check_these hits promoted to the removed rows,
+ *   then the bid, then the amendments of proposals to the removed rows (one ordered statement),
+ *   then update those links, then rows: holding the bid serialises them with every other writer
+ *   that closes or links rows.
  *   check_these: the worker's matrix write replaces a document's hits under the document lock,
  *   and promote locks the document (FOR SHARE) before the hit (check-these.ts).
  *   One exception: upload complete claims its own unexpired session before the org lock (so
@@ -91,8 +105,35 @@ export async function currentCreditPeriod(db: Db, orgId: string, now: Date): Pro
   return row ?? null;
 }
 
+/** The current period, created if missing (bounds and allowance from `planCreditPeriod`). The caller must hold `lockOrg`. */
+export async function ensureCreditPeriod(db: Db, org: OrgRow, now: Date): Promise<CreditRow> {
+  const existing = await currentCreditPeriod(db, org.id, now);
+  if (existing) {
+    return existing;
+  }
+  const { start, end, allowed } = await planCreditPeriod(db, org, now);
+  const [created] = await db.insert(schema.rfpCredits).values({
+    orgId: org.id,
+    periodStart: start,
+    periodEnd: end,
+    allowed,
+  }).returning();
+  return created;
+}
+
+/** The bounds and allowance of the period row `ensureCreditPeriod` would create. */
+export interface PlannedCreditPeriod {
+  start: Date;
+  end: Date;
+  allowed: number;
+}
+
+type PeriodOrg = Pick<OrgRow, 'id' | 'plan' | 'cycleStart' | 'cycleEnd' | 'createdAt' | 'freeFirstMonthEnds'>;
+
 /**
- * The current period, created if missing. The caller must hold `lockOrg`.
+ * The period row `ensureCreditPeriod` would create for `now`, computed without writing anything.
+ * GET /api/org shows it while the organization has no row for the current period yet, so a new
+ * organization reads its real allowance and reset date instead of 0 credits left.
  *
  * Bounds: a paid plan whose cached Stripe cycle (`cycle_start`, `cycle_end`) holds `now` uses
  * that cycle. Otherwise periods are whole months from `cycle_start` (or signup), clamped to the
@@ -101,11 +142,7 @@ export async function currentCreditPeriod(db: Db, orgId: string, now: Date): Pro
  * Free allowance: 2 only in the first month after signup, before `free_first_month_ends` if set,
  * and only if the organization has had no period row before; 1 otherwise.
  */
-export async function ensureCreditPeriod(db: Db, org: OrgRow, now: Date): Promise<CreditRow> {
-  const existing = await currentCreditPeriod(db, org.id, now);
-  if (existing) {
-    return existing;
-  }
+export async function planCreditPeriod(db: Db, org: PeriodOrg, now: Date): Promise<PlannedCreditPeriod> {
   const plan = (org.plan ?? 'free') as Plan;
   let start: Date;
   let end: Date;
@@ -131,13 +168,7 @@ export async function ensureCreditPeriod(db: Db, org: OrgRow, now: Date): Promis
     isFirstPeriod: inSignupMonth && !previous,
     returningToFree: false,
   });
-  const [created] = await db.insert(schema.rfpCredits).values({
-    orgId: org.id,
-    periodStart: start,
-    periodEnd: end,
-    allowed,
-  }).returning();
-  return created;
+  return { start, end, allowed };
 }
 
 /**

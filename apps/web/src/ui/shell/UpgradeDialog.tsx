@@ -1,0 +1,44 @@
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import type { UpgradeDialogProps } from './types';
+export function UpgradeDialog(p: UpgradeDialogProps) {
+  const reason =
+    p.reason === 'locked_tab'
+      ? 'This tab is on a paid plan.'
+      : p.reason === 'out_of_credits'
+        ? `You have ${p.creditsLeft} RFP credits left. They reset on ${new Date(p.creditsResetOn).toLocaleDateString()}.`
+        : p.reason === 'over_cap'
+          ? 'This bid is at its file cap.'
+          : p.reason === 'seats'
+            ? "Your plan's seats are full."
+            : 'Compare plans.';
+  return (
+    <Dialog open={p.open} onOpenChange={(v) => !v && p.onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{reason}</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm">Free: 1 RFP per period, 50 MB per bid, 2 users, Overview, Schedule and Compliance.</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {(['starter', 'growth'] as const).map((plan) => (
+            <div key={plan} className="rounded border border-line p-4">
+              <h3 className="font-semibold capitalize">{plan}</h3>
+              {p.plan === plan && <Badge>Current plan</Badge>}
+              <p className="mt-2 text-sm">10 RFPs per period · 300 MB per bid · 5 users · All tabs</p>
+              {p.plan !== plan && (
+                <Button className="mt-4" onClick={() => p.onChoosePlan(plan)}>
+                  Choose {plan[0].toUpperCase() + plan.slice(1)}
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+        <p className="text-sm text-muted-foreground">The price is shown at checkout.</p>
+        <Button variant="outline" onClick={p.onClose}>
+          Close
+        </Button>
+      </DialogContent>
+    </Dialog>
+  );
+}

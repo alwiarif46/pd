@@ -60,6 +60,9 @@ const doc: DocumentDto = {
   keyCheck: 'mismatch',
   keyReason: 'mismatch',
   keyFound: 'W912-24-R-0002',
+  amendmentNoSource: 'sequence',
+  amendmentNoFound: null,
+  amendmentStatus: 'held',
 };
 
 describe('bid status', () => {

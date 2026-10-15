@@ -1,10 +1,17 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { isUuid, schema } from '@pd/core';
 import { requireAuth } from './context.js';
+import { lockBid, shareOrg } from './credits.js';
+import { apiError } from './errors.js';
 import { findBid, inOrg } from './scope.js';
 
 export async function registerAmendments(app: FastifyInstance): Promise<void> {
+  /**
+   * The bid's amendment links, each with its amendment's number, the rows it names (null when a
+   * row is gone), and sourcePage and sourceQuote: the amendment text behind a supersede or
+   * withdraw (null on add links and on links written before migration 0009).
+   */
   app.get('/api/bids/:id/amendment-links', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const bidId = (request.params as { id: string }).id;
@@ -76,38 +83,100 @@ async function decide(
   if (!isUuid(linkId)) {
     return reply.code(404).send({ error: 'Amendment link not found' });
   }
+  const userId = request.auth!.userId;
   return inOrg(reply, orgId, async (db, respond) => {
-    const [link] = await db.select().from(schema.amendmentLinks).where(and(
+    const notFound = () => respond(404, { error: 'Amendment link not found' });
+    // Unlocked reads find the bid; everything is read again under the locks below.
+    const [found] = await db.select({ amendmentId: schema.amendmentLinks.amendmentId }).from(schema.amendmentLinks).where(and(
       eq(schema.amendmentLinks.id, linkId),
       eq(schema.amendmentLinks.orgId, orgId),
     ));
-    if (!link) {
-      return respond(404, { error: 'Amendment link not found' });
-    }
-    // The link's bid, through its amendment. The row it supersedes must be on that same bid.
-    const [amendment] = await db.select().from(schema.amendments).where(and(
-      eq(schema.amendments.id, link.amendmentId),
+    const [owner] = found ? await db.select({ bidId: schema.amendments.bidId }).from(schema.amendments).where(and(
+      eq(schema.amendments.id, found.amendmentId),
       eq(schema.amendments.orgId, orgId),
-    ));
-    if (!amendment) {
-      return respond(404, { error: 'Amendment link not found' });
+    )) : [];
+    if (!owner) {
+      return notFound();
     }
-    await db.update(schema.amendmentLinks).set({
-      status,
-      decidedBy: request.auth!.userId,
-      updatedAt: new Date(),
-    }).where(and(eq(schema.amendmentLinks.id, linkId), eq(schema.amendmentLinks.orgId, orgId)));
-    if (status === 'confirmed' && link.oldRowId && (link.action === 'supersede' || link.action === 'withdraw')) {
-      await db.update(schema.complianceRows).set({
-        supersedeStatus: link.action === 'supersede' ? 'superseded' : 'withdrawn',
+    // Lock order: organization (key share, for the history rows), bid, amendment, link, rows by id
+    // (apps/api/src/credits.ts), the same as the worker's amendment write.
+    await shareOrg(db, orgId);
+    const [bid] = await lockBid(db, orgId, owner.bidId);
+    const [amendment] = bid ? await db.select().from(schema.amendments).where(and(
+      eq(schema.amendments.id, found.amendmentId),
+      eq(schema.amendments.orgId, orgId),
+    )).for('update') : [];
+    const [link] = amendment ? await db.select().from(schema.amendmentLinks).where(and(
+      eq(schema.amendmentLinks.id, linkId),
+      eq(schema.amendmentLinks.orgId, orgId),
+    )).for('update') : [];
+    if (!bid || !amendment || !link) {
+      return notFound();
+    }
+    // Decisions are final: the same decision again is a no-op; the other one is refused.
+    if (link.status === status) {
+      return { ok: true, status: link.status, amendmentStatus: amendment.status };
+    }
+    if (link.status !== 'proposed') {
+      return respond(409, apiError('link_already_decided'));
+    }
+    const now = new Date();
+    if (status === 'confirmed' && link.rowTable === 'compliance_rows' && link.oldRowId && (link.action === 'supersede' || link.action === 'withdraw')) {
+      const ids = [link.oldRowId, ...(link.action === 'supersede' && link.newRowId ? [link.newRowId] : [])];
+      const rows = await db.select({
+        id: schema.complianceRows.id,
+        supersedeStatus: schema.complianceRows.supersedeStatus,
+        supersededByRowId: schema.complianceRows.supersededByRowId,
+        changedByAmendment: schema.complianceRows.changedByAmendment,
+      }).from(schema.complianceRows).where(and(
+        inArray(schema.complianceRows.id, ids),
+        eq(schema.complianceRows.bidId, bid.id),
+        eq(schema.complianceRows.orgId, orgId),
+      )).orderBy(asc(schema.complianceRows.id)).for('update');
+      const old = rows.find((row) => row.id === link.oldRowId);
+      if (!old || (old.supersedeStatus !== null && old.supersedeStatus !== 'active')) {
+        return respond(409, apiError('row_already_closed'));
+      }
+      if (link.action === 'supersede' && !rows.some((row) => row.id === link.newRowId)) {
+        return respond(409, apiError('new_row_missing'));
+      }
+      const next = {
+        supersedeStatus: link.action === 'supersede' ? 'superseded' as const : 'withdrawn' as const,
         supersededByRowId: link.action === 'supersede' ? link.newRowId : null,
-        updatedAt: new Date(),
-      }).where(and(
-        eq(schema.complianceRows.id, link.oldRowId),
-        eq(schema.complianceRows.bidId, amendment.bidId),
+        changedByAmendment: amendment.amendmentNo,
+      };
+      await db.update(schema.complianceRows).set({ ...next, updatedAt: now }).where(and(
+        eq(schema.complianceRows.id, old.id),
         eq(schema.complianceRows.orgId, orgId),
       ));
+      const history = ([
+        ['supersede_status', old.supersedeStatus ?? 'active', next.supersedeStatus],
+        ['superseded_by_row_id', old.supersededByRowId, next.supersededByRowId],
+        ['changed_by_amendment', old.changedByAmendment === null ? null : String(old.changedByAmendment),
+          next.changedByAmendment === null ? null : String(next.changedByAmendment)],
+      ] as const).filter(([, before, after]) => before !== after);
+      if (history.length > 0) {
+        await db.insert(schema.rowHistory).values(history.map(([field, oldValue, newValue]) => ({
+          orgId, rowTable: 'compliance_rows', rowId: old.id, userId, field, oldValue, newValue, changedAt: now,
+        })));
+      }
     }
-    return { ok: true };
+    await db.update(schema.amendmentLinks).set({ status, decidedBy: userId, updatedAt: now })
+      .where(and(eq(schema.amendmentLinks.id, linkId), eq(schema.amendmentLinks.orgId, orgId)));
+    // The last open proposal decided: the amendment is applied.
+    let amendmentStatus = amendment.status;
+    if (amendment.status === 'needs_confirmation') {
+      const [open] = await db.select({ id: schema.amendmentLinks.id }).from(schema.amendmentLinks).where(and(
+        eq(schema.amendmentLinks.amendmentId, amendment.id),
+        eq(schema.amendmentLinks.orgId, orgId),
+        eq(schema.amendmentLinks.status, 'proposed'),
+      )).limit(1);
+      if (!open) {
+        amendmentStatus = 'applied';
+        await db.update(schema.amendments).set({ status: 'applied', updatedAt: now })
+          .where(and(eq(schema.amendments.id, amendment.id), eq(schema.amendments.orgId, orgId)));
+      }
+    }
+    return { ok: true, status, amendmentStatus };
   });
 }
