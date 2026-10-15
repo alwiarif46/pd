@@ -44,7 +44,9 @@ const LABELS = [
   'Kick-off call', 'Site visit', 'Answers posted', 'RFP released', 'Production', 'Print and package',
   'Storyboard', 'Draft', 'First draft writing', 'Outline and compliance matrix', 'Final revisions',
   'Pricing volume', 'Date from solicitation', 'Lunch', '  Red team  ', 'Proposal submission', 'Due date',
-  'Questions due date',
+  'Questions due date', 'Proposal due date', 'Offers due', 'Final quote submission', 'Bid due', 'Submission',
+  'Due date for questions', 'Due date for Q&A', 'Due date for site visit registration', 'Submission of questions',
+  'Submit questions', 'RFI response due', 'Inquiries due', 'Intent to bid due', 'Orals submission', 'Registration submission',
 ];
 
 describe.skipIf(Boolean(unavailable))('0010_schedule_kind on a database with schedule rows', () => {

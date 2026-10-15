@@ -378,6 +378,21 @@ describe('inferActivityKind', () => {
     ['Proposal submission', 'submission', null],
     ['Due date', 'submission', null],
     ['Questions due date', 'milestone', null],
+    ['Proposal due date', 'submission', null],
+    ['Offers due', 'submission', null],
+    ['Final quote submission', 'submission', null],
+    ['Bid due', 'submission', null],
+    ['Submission', 'submission', null],
+    ['Due date for questions', 'milestone', null],
+    ['Due date for Q&A', 'milestone', null],
+    ['Due date for site visit registration', 'milestone', null],
+    ['Submission of questions', 'milestone', null],
+    ['Submit questions', 'milestone', null],
+    ['RFI response due', 'milestone', null],
+    ['Inquiries due', 'milestone', null],
+    ['Intent to bid due', 'milestone', null],
+    ['Orals submission', 'custom', null],
+    ['Registration submission', 'custom', null],
   ])('%s is %s', (label, kind, reviewColor) => {
     expect(inferActivityKind(label)).toEqual({ kind, reviewColor });
   });

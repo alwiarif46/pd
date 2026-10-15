@@ -518,11 +518,18 @@ export function buildScheduleTemplate(template: ScheduleTemplate, dueDate: strin
 // Kind from a label
 // ---------------------------------------------------------------------------
 
+// The SQL copies in migration 0010 must match these (migration-schedule-kind.test.ts checks).
+const SUBMISSION = /^submit|^submission\b|^due date\b|\b(proposals?|offers?|quotes?|quotations?|bids?|responses?) (submission|due)\b/;
+const NOT_SUBMISSION = /question|\bq ?& ?a\b|\brfi\b|inquir|site visit|registration|intent|\borals?\b/;
+
 /**
  * The kind (and review color) a label suggests. Migration 0010 backfills existing rows with the
  * same rules in SQL; the api uses this when an activity is added without a kind.
  * - "<color> team..." (blue, pink, red, green, gold) and "white glove..." are reviews.
- * - "proposal due", "submit...", "due date..." and any "submission" are the submission.
+ * - The submission: "submit...", "submission...", "due date...", and a proposal, offer, quote,
+ *   quotation, bid, or response "submission" or "due" ("Proposal due date", "Offers due"); never
+ *   a label about questions, Q&A, an RFI, inquiries, a site visit, registration, intent, or
+ *   orals (those come due well before the proposal).
  * - production, print, and packag(e/ing) are production.
  * - kickoff, meeting, released, questions, answers, site visit, and other "... due" dates are milestones.
  * - draft, writ(e/ing), storyboard, outline, revis(e/ion), and pricing are writing.
@@ -533,7 +540,7 @@ export function inferActivityKind(label: string): { kind: ActivityKind; reviewCo
   if (/^white[ -]glove\b/.test(name)) return { kind: 'review', reviewColor: 'white_glove' };
   const color = /^(blue|pink|red|green|gold)[ -]team\b/.exec(name);
   if (color) return { kind: 'review', reviewColor: color[1] as ReviewColor };
-  if (/\bproposals? due\b|^submit|\bsubmission\b|^due date\b/.test(name)) return { kind: 'submission', reviewColor: null };
+  if (!NOT_SUBMISSION.test(name) && SUBMISSION.test(name)) return { kind: 'submission', reviewColor: null };
   if (/production|\bprint|packag/.test(name)) return { kind: 'production', reviewColor: null };
   if (/kickoff|kick-off|meeting|released|questions|answers|site visit|\bdue\b/.test(name)) return { kind: 'milestone', reviewColor: null };
   if (/draft|\bwrit|storyboard|outline|revis|pricing/.test(name)) return { kind: 'writing', reviewColor: null };
