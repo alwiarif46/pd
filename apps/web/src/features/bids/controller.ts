@@ -139,9 +139,9 @@ function estimateCredits(org: OrganizationDto, now: Date): { left: number; reset
 }
 
 /**
- * Credits left = allowed - used - reserved. The API answers `credits: null` until the first credit of the
- * period is reserved (the period row is created then), so a new organization has no row yet. That is
- * not "out of credits": the allowance for the plan is shown instead, and the API decides at upload.
+ * Credits left = max(0, allowed - used - reserved). The API sends the current period even before its
+ * row exists (projected, `id: null`). The estimate below is a fallback only, for a payload with
+ * `credits: null` (an older API); it is not "out of credits", and the API decides at upload.
  */
 export function summarizeOrg(payload: OrgPayloadDto, now: Date): OrgSummary {
   const org = payload.org;

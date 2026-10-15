@@ -105,8 +105,35 @@ export async function currentCreditPeriod(db: Db, orgId: string, now: Date): Pro
   return row ?? null;
 }
 
+/** The current period, created if missing (bounds and allowance from `planCreditPeriod`). The caller must hold `lockOrg`. */
+export async function ensureCreditPeriod(db: Db, org: OrgRow, now: Date): Promise<CreditRow> {
+  const existing = await currentCreditPeriod(db, org.id, now);
+  if (existing) {
+    return existing;
+  }
+  const { start, end, allowed } = await planCreditPeriod(db, org, now);
+  const [created] = await db.insert(schema.rfpCredits).values({
+    orgId: org.id,
+    periodStart: start,
+    periodEnd: end,
+    allowed,
+  }).returning();
+  return created;
+}
+
+/** The bounds and allowance of the period row `ensureCreditPeriod` would create. */
+export interface PlannedCreditPeriod {
+  start: Date;
+  end: Date;
+  allowed: number;
+}
+
+type PeriodOrg = Pick<OrgRow, 'id' | 'plan' | 'cycleStart' | 'cycleEnd' | 'createdAt' | 'freeFirstMonthEnds'>;
+
 /**
- * The current period, created if missing. The caller must hold `lockOrg`.
+ * The period row `ensureCreditPeriod` would create for `now`, computed without writing anything.
+ * GET /api/org shows it while the organization has no row for the current period yet, so a new
+ * organization reads its real allowance and reset date instead of 0 credits left.
  *
  * Bounds: a paid plan whose cached Stripe cycle (`cycle_start`, `cycle_end`) holds `now` uses
  * that cycle. Otherwise periods are whole months from `cycle_start` (or signup), clamped to the
@@ -115,11 +142,7 @@ export async function currentCreditPeriod(db: Db, orgId: string, now: Date): Pro
  * Free allowance: 2 only in the first month after signup, before `free_first_month_ends` if set,
  * and only if the organization has had no period row before; 1 otherwise.
  */
-export async function ensureCreditPeriod(db: Db, org: OrgRow, now: Date): Promise<CreditRow> {
-  const existing = await currentCreditPeriod(db, org.id, now);
-  if (existing) {
-    return existing;
-  }
+export async function planCreditPeriod(db: Db, org: PeriodOrg, now: Date): Promise<PlannedCreditPeriod> {
   const plan = (org.plan ?? 'free') as Plan;
   let start: Date;
   let end: Date;
@@ -145,13 +168,7 @@ export async function ensureCreditPeriod(db: Db, org: OrgRow, now: Date): Promis
     isFirstPeriod: inSignupMonth && !previous,
     returningToFree: false,
   });
-  const [created] = await db.insert(schema.rfpCredits).values({
-    orgId: org.id,
-    periodStart: start,
-    periodEnd: end,
-    allowed,
-  }).returning();
-  return created;
+  return { start, end, allowed };
 }
 
 /**

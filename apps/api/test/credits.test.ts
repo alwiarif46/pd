@@ -96,12 +96,38 @@ describe.skipIf(Boolean(unavailable))('RFP credits and uploads', () => {
     }
   });
 
-  it('GET /api/org shows no period once the last one has ended', async () => {
+  type Shown = { id: string | null; periodStart: string; periodEnd: string; allowed: number; used: number; reserved: number };
+
+  it('GET /api/org shows the period an upload would open once the last one has ended, without writing it', async () => {
     const org = await newOrg('ended');
+    const endedAt = new Date(Date.now() - 30 * DAY);
     await withOrg(org.orgId, (db) => db.insert(schema.rfpCredits).values({
-      orgId: org.orgId, periodStart: new Date(Date.now() - 60 * DAY), periodEnd: new Date(Date.now() - 30 * DAY), allowed: 2,
+      orgId: org.orgId, periodStart: new Date(Date.now() - 60 * DAY), periodEnd: endedAt, allowed: 2,
     }));
-    expect((await org.call('GET', '/api/org')).json<{ credits: unknown }>().credits).toBeNull();
+    const shown = (await org.call('GET', '/api/org')).json<{ credits: Shown }>().credits;
+    expect(shown.id).toBeNull();
+    // Not the first period: the free plan allows 1.
+    expect(shown).toMatchObject({ allowed: 1, used: 0, reserved: 0 });
+    expect(new Date(shown.periodStart).getTime()).toBeGreaterThanOrEqual(endedAt.getTime());
+    expect(new Date(shown.periodEnd).getTime()).toBeGreaterThan(Date.now());
+    expect(await credits(org.orgId)).toHaveLength(1);
+  });
+
+  it('GET /api/org shows a new organization its first-month allowance before any upload, and the upload opens that period', async () => {
+    const org = await newOrg('projected');
+    const shown = (await org.call('GET', '/api/org')).json<{ credits: Shown }>().credits;
+    expect(shown).toMatchObject({ id: null, allowed: 2, used: 0, reserved: 0 });
+    expect(new Date(shown.periodStart).getTime()).toBeLessThanOrEqual(Date.now());
+    expect(new Date(shown.periodEnd).getTime()).toBeGreaterThan(Date.now());
+    expect(await credits(org.orgId)).toHaveLength(0);
+
+    expect((await start(org, await org.bid())).statusCode).toBe(201);
+    const [row] = await credits(org.orgId);
+    expect(row.allowed).toBe(shown.allowed);
+    expect(row.periodStart.toISOString()).toBe(shown.periodStart);
+    expect(row.periodEnd.toISOString()).toBe(shown.periodEnd);
+    const after = (await org.call('GET', '/api/org')).json<{ credits: Shown }>().credits;
+    expect(after).toMatchObject({ id: row.id, allowed: 2, reserved: 1 });
   });
 
   it('after a period expires, an upload opens the period that holds now, once', async () => {
