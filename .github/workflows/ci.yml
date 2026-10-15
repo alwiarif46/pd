@@ -34,6 +34,7 @@ jobs:
           cache: 'pnpm'
       - run: pnpm install
       - run: pnpm lint
+      - run: pnpm --filter @pd/web v0:check
 
   build:
     runs-on: ubuntu-latest

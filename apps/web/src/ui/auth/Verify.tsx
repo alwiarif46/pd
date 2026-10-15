@@ -12,7 +12,7 @@ import {
   formatPhone,
   phoneDigits,
 } from './AuthLayout';
-import type { VerifyProps } from '@/types';
+import type { VerifyProps } from './types';
 
 const RESEND_COOLDOWN_SECONDS = 30;
 
@@ -27,7 +27,9 @@ function StepIndicator({ step }: { step: VerifyProps['step'] }) {
     <ol aria-label="Progress" className="flex items-center gap-3">
       {steps.map((s, i) => (
         <li key={s.n} aria-current={s.state === 'current' ? 'step' : undefined} className="flex items-center gap-3">
-          {i > 0 && <span aria-hidden="true" className={`h-px w-8 ${s.state === 'upcoming' ? 'bg-line' : 'bg-primary'}`} />}
+          {i > 0 && (
+            <span aria-hidden="true" className={`h-px w-8 ${s.state === 'upcoming' ? 'bg-line' : 'bg-primary'}`} />
+          )}
           <span className="flex items-center gap-2">
             <span
               aria-hidden="true"
@@ -56,7 +58,16 @@ function StepIndicator({ step }: { step: VerifyProps['step'] }) {
   );
 }
 
-export function Verify({ email, phone, step, status, onSubmitCode, onResendEmail, onResendCode, onLogIn }: VerifyProps) {
+export function Verify({
+  email,
+  phone,
+  step,
+  status,
+  onSubmitCode,
+  onResendEmail,
+  onResendCode,
+  onLogIn,
+}: VerifyProps) {
   const uid = useId();
   const codeId = `${uid}-code`;
   const codeRef = useRef<HTMLInputElement>(null);
@@ -107,7 +118,8 @@ export function Verify({ email, phone, step, status, onSubmitCode, onResendEmail
       {step === 'email' && (
         <div className="flex flex-col gap-5">
           <p className="text-pretty text-sm leading-relaxed text-ink">
-            We sent a link to <span className="break-all font-medium">{email}</span>. Open it on this device to continue.
+            We sent a link to <span className="break-all font-medium">{email}</span>. Open it on this device to
+            continue.
           </p>
           <Button type="button" variant="outline" className="h-10 w-full" onClick={onResendEmail} disabled={submitting}>
             Resend email

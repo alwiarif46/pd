@@ -71,7 +71,7 @@ describe.skipIf(Boolean(unavailable))('GET jobs and amendment links', () => {
     const mine = await pendingJob(a);
     const other = await pendingJob(b);
     install({
-      waiting: { scan: [`scan:${other}`, `scan:${mine}`, 'scan:someone-else'] },
+      waiting: { scan: [`scan-${other}`, `scan-${mine}`, 'scan-someone-else'] },
       active: {},
       durations: {},
     });
@@ -82,15 +82,28 @@ describe.skipIf(Boolean(unavailable))('GET jobs and amendment links', () => {
     expect(row.etaSeconds).toBeNull();
   });
 
+  it('finds an ai stage job by the colon-free id, and by the old ai:* id still in a queue', async () => {
+    const current = await pendingJob(a, 'classify');
+    const legacy = await pendingJob(a, 'classify');
+    install({
+      waiting: { 'ai:compliance': [`ai-compliance-${current}`], 'ai:amendment': ['ai-amendment-x', `ai:amendment:${legacy}`] },
+      active: {},
+      durations: {},
+    });
+    const rows = await listJobs(a);
+    expect(rows.find((job) => job.id === current)).toMatchObject({ stage: 'ai:compliance', queuePosition: 1, queueDepth: 1 });
+    expect(rows.find((job) => job.id === legacy)).toMatchObject({ stage: 'ai:amendment', queuePosition: 2, queueDepth: 2 });
+  });
+
   it('gives a null ETA with fewer than five samples and a number with enough', async () => {
     const id = await pendingJob(a);
     const stages = ['scan', 'file', 'marking', 'classify', 'ai:overview', 'ai:dates', 'ai:compliance'];
     const few = Object.fromEntries(stages.map((stage) => [stage, [1000, 1000, 1000, 1000]]));
-    install({ waiting: { scan: [`scan:${id}`] }, active: {}, durations: few });
+    install({ waiting: { scan: [`scan-${id}`] }, active: {}, durations: few });
     expect((await listJobs(a)).find((job) => job.id === id)!.etaSeconds).toBeNull();
 
     const enough = Object.fromEntries(stages.map((stage) => [stage, [1000, 2000, 3000, 4000, 5000]]));
-    install({ waiting: { scan: [`scan:${id}`] }, active: {}, durations: enough });
+    install({ waiting: { scan: [`scan-${id}`] }, active: {}, durations: enough });
     // The document is a solicitation: scan, file, marking, classify and three ai stages, each 3 s;
     // position 1, concurrency 1 (no provider_settings rows or the minimum of them).
     const row = (await listJobs(a)).find((job) => job.id === id)!;
@@ -99,7 +112,7 @@ describe.skipIf(Boolean(unavailable))('GET jobs and amendment links', () => {
 
   it('leaves a running job without position and leaves finished jobs unchanged', async () => {
     const id = await pendingJob(a);
-    install({ waiting: {}, active: { file: [`file:${id}`] }, durations: {} });
+    install({ waiting: {}, active: { file: [`file-${id}`] }, durations: {} });
     const rows = await listJobs(a);
     const running = rows.find((job) => job.id === id)!;
     expect(running.stage).toBe('file');
