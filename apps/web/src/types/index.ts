@@ -36,3 +36,10 @@ export interface VerifyProps {
 }
 export interface ResetRequestProps { status: AuthStatus; onRequest: (email: string) => void; onLogIn: () => void }
 export interface ResetPasswordProps { status: AuthStatus; onSetPassword: (password: string) => void; onLogIn: () => void }
+
+/** 5.12: how a source-bearing row shows its amendment history. */
+export type AmendmentMark =
+  | { kind: 'original' }
+  | { kind: 'added'; amendmentNo: number }
+  | { kind: 'superseded'; amendmentNo: number; replacedById: string | null }
+  | { kind: 'withdrawn'; amendmentNo: number };

@@ -508,8 +508,8 @@ function Compliance({ bid, data, onOpen, onReload, onError }: Panel) {
                   <td>{row.sectionRef}</td>
                   <td>
                     {closed ? <s>{row.requirementText}</s> : row.requirementText}
-                    {row.supersedeStatus === 'superseded' ? <span className="tag superseded">Superseded by Amd {row.changedByAmendment ?? row.amendmentNo}</span> : null}
-                    {row.supersedeStatus === 'withdrawn' ? <span className="tag withdrawn">Withdrawn by Amd {row.changedByAmendment ?? row.amendmentNo}</span> : null}
+                    {row.supersedeStatus === 'superseded' ? <span className="tag superseded">{row.changedByAmendment ? `Superseded by Amd ${row.changedByAmendment}` : 'Superseded'}</span> : null}
+                    {row.supersedeStatus === 'withdrawn' ? <span className="tag withdrawn">{row.changedByAmendment ? `Withdrawn by Amd ${row.changedByAmendment}` : 'Withdrawn'}</span> : null}
                     {!closed && row.amendmentNo ? <span className="tag added">Added by Amd {row.amendmentNo}</span> : null}
                     {row.origin === 'user' ? <span className="tag">added by user</span> : null}
                     {row.supersedeStatus === 'superseded' && row.supersededByRowId ? (
