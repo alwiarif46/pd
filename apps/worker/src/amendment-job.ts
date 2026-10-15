@@ -115,7 +115,7 @@ async function readGate(db: Db, payload: JobPayload, lock: boolean): Promise<{ g
 }
 
 /** app_settings amendment_link_confidence (default 0.80). */
-async function readLinkConfidence(orgId: string): Promise<number> {
+export async function readLinkConfidence(orgId: string): Promise<number> {
   const [row] = await withOrg(orgId, (db) => db.select({ value: schema.appSettings.value }).from(schema.appSettings)
     .where(eq(schema.appSettings.key, SETTING_AMENDMENT_LINK_CONFIDENCE)));
   return amendmentLinkConfidence(row?.value);
@@ -146,7 +146,7 @@ async function activeRows(payload: JobPayload): Promise<ActiveRow[]> {
  * solicitation set that is not deleted (solicitation, amendments, attachments), plus this
  * amendment's own pages. A page classify has not tagged is classified by mapRows.
  */
-async function setPages(payload: JobPayload): Promise<(PageText & { role: PageRole | null })[]> {
+export async function setPages(payload: JobPayload): Promise<(PageText & { role: PageRole | null })[]> {
   const rows = await withOrg(payload.orgId, (db) => db.select({
     documentId: schema.pages.documentId,
     pageNo: schema.pages.pageNo,
