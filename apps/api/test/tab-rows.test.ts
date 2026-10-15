@@ -648,15 +648,15 @@ describe.skipIf(Boolean(unavailable))('tab rows', () => {
 
     it('links a draft to a review on create and patch, and records history', async () => {
       const draft = await liveDocument(a, 'draft', 'v2.docx');
-      const created = await asA('POST', rowsUrl('reviews'), { type: 'red', documentId: draft.id });
+      const created = await asA('POST', rowsUrl('reviews'), { type: 'red', draftDocumentId: draft.id });
       expect(created.statusCode).toBe(201);
       expect(created.json()).toMatchObject({ draftDocumentId: draft.id, draftFileName: 'v2.docx' });
       const bare = await asA('POST', rowsUrl('reviews'), { type: 'gold' });
       const url = rowUrl(a, 'reviews', bare.json<{ id: string }>().id);
-      expect((await asA('PATCH', url, { fields: { documentId: draft.id } })).statusCode).toBe(200);
+      expect((await asA('PATCH', url, { fields: { draftDocumentId: draft.id } })).statusCode).toBe(200);
       expect((await asA('PATCH', url, { fields: { status: 'in_progress' } })).statusCode).toBe(200);
       expect((await asA('GET', url)).json<{ row: { draftFileName: string | null } }>().row.draftFileName).toBe('v2.docx');
-      expect((await asA('PATCH', url, { fields: { documentId: null } })).statusCode).toBe(200);
+      expect((await asA('PATCH', url, { fields: { draftDocumentId: null } })).statusCode).toBe(200);
       const detail = (await asA('GET', url)).json<{
         row: { draftDocumentId: string | null; status: string };
         history: { field: string; oldValue: string | null; newValue: string | null }[];
@@ -671,11 +671,11 @@ describe.skipIf(Boolean(unavailable))('tab rows', () => {
     it('refuses a review link that is not a live draft of this bid', async () => {
       const review = await asA('POST', rowsUrl('reviews'), { type: 'pink' });
       const url = rowUrl(a, 'reviews', review.json<{ id: string }>().id);
-      for (const documentId of await badLinks('draft')) {
-        const create = await asA('POST', rowsUrl('reviews'), { type: 'pink', documentId });
-        expect(create.statusCode, `create ${documentId}`).toBe(400);
+      for (const draftDocumentId of await badLinks('draft')) {
+        const create = await asA('POST', rowsUrl('reviews'), { type: 'pink', draftDocumentId });
+        expect(create.statusCode, `create ${draftDocumentId}`).toBe(400);
         expect(create.json<{ error: string }>().error).toBe('Choose a draft uploaded to this bid');
-        expect((await asA('PATCH', url, { fields: { documentId } })).statusCode, `patch ${documentId}`).toBe(400);
+        expect((await asA('PATCH', url, { fields: { draftDocumentId } })).statusCode, `patch ${draftDocumentId}`).toBe(400);
       }
       expect((await asA('GET', url)).json<{ row: { draftDocumentId: string | null } }>().row.draftDocumentId).toBeNull();
     });

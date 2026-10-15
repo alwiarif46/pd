@@ -147,8 +147,8 @@ describe.skipIf(Boolean(unavailable)).each(MODES)('cross-tenant access through t
     expect(create.statusCode).toBe(400);
     expect(create.json<{ error: string }>().error).toBe('Choose a resume uploaded to this bid');
     expect((await asA('PATCH', `/api/bids/${a.bidId}/rows/candidates/${a.rows.candidates}`, { fields: { documentId: resume.id } })).statusCode).toBe(400);
-    expect((await asA('POST', rows('reviews'), { type: 'red', documentId: draft.id })).statusCode).toBe(400);
-    expect((await asA('PATCH', `/api/bids/${a.bidId}/rows/reviews/${a.rows.reviews}`, { fields: { documentId: draft.id } })).statusCode).toBe(400);
+    expect((await asA('POST', rows('reviews'), { type: 'red', draftDocumentId: draft.id })).statusCode).toBe(400);
+    expect((await asA('PATCH', `/api/bids/${a.bidId}/rows/reviews/${a.rows.reviews}`, { fields: { draftDocumentId: draft.id } })).statusCode).toBe(400);
   });
 
   it('returns 404 for the other organization documents', async () => {

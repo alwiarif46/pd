@@ -1210,7 +1210,7 @@ async function insertRow(
       }
       const status = input(REVIEW_STATUS, body.status);
       if (!status.ok) return status;
-      const draft = await linkedDocument(db, orgId, bidId, body.documentId, 'draft');
+      const draft = await linkedDocument(db, orgId, bidId, body.draftDocumentId, 'draft');
       if (!draft.ok) return draft;
       const [review] = await db.insert(schema.reviews).values({
         orgId,
@@ -1412,7 +1412,7 @@ async function patchRow(
     case 'reviews': {
       const status = input(REVIEW_STATUS, fields.status);
       if (!status.ok) return status;
-      const draft = await linkedDocument(db, orgId, bidId, fields.documentId, 'draft');
+      const draft = await linkedDocument(db, orgId, bidId, fields.draftDocumentId, 'draft');
       if (!draft.ok) return draft;
       await note('status', status.value);
       await note('draftDocumentId', draft.value);

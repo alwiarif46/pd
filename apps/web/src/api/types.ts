@@ -651,8 +651,8 @@ export interface RowPatchMap {
   candidates: { name?: string; role?: string; documentId?: string | null };
   /** Setting `result` marks a reviewer override; `{ reviewerOverride: false }` restores `aiResult`. */
   resume_matches: { result?: MatchResult; reviewerOverride?: boolean };
-  /** `documentId` links a draft uploaded to this bid; `null` unlinks it. */
-  reviews: { status?: ReviewStatus; scheduledAt?: string | null; documentId?: string | null };
+  /** `draftDocumentId` links a draft uploaded to this bid; `null` unlinks it. */
+  reviews: { status?: ReviewStatus; scheduledAt?: string | null; draftDocumentId?: string | null };
   review_assignments: { reviewerName?: string; sections?: string | null };
   review_findings: { disposition?: Disposition; text?: string };
   production_items: { done?: boolean; rule?: string; owner?: string | null };
@@ -699,7 +699,7 @@ export interface CreateRowBodyMap {
         disposition?: Disposition;
       }
     | { kind: 'assignment'; reviewId: string; reviewerName: string; sections?: string }
-    | { type: ReviewType; scheduledAt?: string; status?: ReviewStatus; documentId?: string };
+    | { type: ReviewType; scheduledAt?: string; status?: ReviewStatus; draftDocumentId?: string };
   production: { category: ProductionCategory; rule: string; owner?: string | null };
   orals: { category: OralsCategory; item: string; owner?: string | null; minutes?: number | null };
   lessons: { question: string; answer?: string; author?: string };
