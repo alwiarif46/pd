@@ -78,7 +78,7 @@
 - Upgrade from free: a new paid period starts on the upgrade date with the full Starter or Growth allowance. Credits used on the free plan do not count against it.
 - Starter to Growth mid-period: Stripe prorates the price, and the allowance rises to 20 for the current period, minus credits already used in it.
 - Downgrade or cancellation: takes effect at the end of the paid period. Paid tabs become read-only; nothing is deleted.
-- Seats after a move to free: the owner and the earliest-joined member keep access. Other members lose access until the owner removes members or upgrades again.
+- Seats after a move to free: the owner and the earliest-joined member keep access. Other members lose access until the owner removes members or upgrades again. In general, owners always hold a seat and take theirs first; members fill the rest of the plan's limit in the order they joined. Pending, unexpired invites count toward the limit when inviting.
 - Failed payment: Stripe retries while the subscription is `past_due`. After the final failure the subscription becomes `unpaid` or `canceled` and the organization moves to the free plan.
 - US sales tax: Shaavir checks its US sales against each state's economic-nexus thresholds every quarter. 🟨 **OPEN:** whether to turn on Stripe Tax, from launch or once a threshold is reached.
 
@@ -100,3 +100,4 @@
 | 13 Oct 2026 | Sales tax: quarterly nexus check; Stripe Tax stays an open option |
 | 13 Oct 2026 | Live file retention and archive per plan; prices provisional until Phase 6 |
 | 13 Oct 2026 | Admin tooling post-v1; Amaan edits plans, credits, and caps in the database |
+| 16 Oct 2026 | Seats: owners first, then members by join date; pending invites count toward the limit. Failed processing (scan, file, marking reject, classify, matrix) releases the reservation and leaves a retryable failed step; a file paused at the marking check keeps it until the user confirms or removes the file |
