@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# fake id: root for -u / -un, the real id otherwise
+if [[ "$1" == -u ]]; then echo "${FAKE_UID:-0}"; elif [[ "$1" == -un ]]; then echo root; else /usr/bin/id "$@"; fi

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# fake systemctl: logs. is-enabled says "not enabled"; is-active answers $FAKE_ACTIVE (default active)
+printf 'systemctl %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
+[[ "$1" == is-enabled ]] && exit 1
+[[ "$1" == is-active ]] && { [[ "${FAKE_ACTIVE:-1}" == 1 ]]; exit $?; }
+exit 0

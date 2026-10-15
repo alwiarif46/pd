@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# fake curl: argv to $FAKE_CALLS; writes $FAKE_CURL_BODY to -o FILE or stdout. Never touches the network.
+printf 'curl %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
+out=""; prev=""
+for a in "$@"; do [[ "$prev" == -o ]] && out="$a"; prev="$a"; done
+if [[ -n "$out" ]]; then printf '%s' "${FAKE_CURL_BODY:-}" >"$out"; else printf '%s' "${FAKE_CURL_BODY:-}"; fi
+exit 0

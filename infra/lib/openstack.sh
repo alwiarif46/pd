@@ -12,7 +12,7 @@
 # Credentials (secrets file, KEY=VALUE, never sourced; see security/secrets-inventory.md):
 #   preferred  OS_APPLICATION_CREDENTIAL_ID + OS_APPLICATION_CREDENTIAL_SECRET
 #              (Keystone application credential of the project's OpenStack user, created with an
-#              expiry; delete it after use, HUMAN-TODO H-35)
+#              expiry; delete it after use, HUMAN-TODO H-02)
 #   fallback   OS_USERNAME + OS_PASSWORD + OS_PROJECT_ID (the OpenStack user itself; *verify* that
 #              OVHcloud US accepts application credentials, otherwise use this)
 # The openstack CLI reads them from the environment, so no secret ever appears on a command line.
@@ -57,7 +57,7 @@ os_env() {
     pd_log "note: no OpenStack credential in the secrets file (needed for a real run: OS_APPLICATION_CREDENTIAL_ID/_SECRET)"
     return 0
   else
-    pd_die "no OpenStack credential: put OS_APPLICATION_CREDENTIAL_ID and OS_APPLICATION_CREDENTIAL_SECRET (or OS_USERNAME, OS_PASSWORD, OS_PROJECT_ID) in the secrets file (HUMAN-TODO H-01/H-03)"
+    pd_die "no OpenStack credential: put OS_APPLICATION_CREDENTIAL_ID and OS_APPLICATION_CREDENTIAL_SECRET (or OS_USERNAME, OS_PASSWORD, OS_PROJECT_ID) in the secrets file (HUMAN-TODO H-01/H-02)"
   fi
   have openstack || pd_die "openstack CLI not found on PATH (pip install python-openstackclient; infra/README.md)"
 }
@@ -80,6 +80,6 @@ os_check_project() {
   host="$(tenant_get tenant.hostname)"
   prefix="$(tenant_get drill.name_prefix pd-drill)"
   others="$(openstack server list -f value -c Name | tr -d '\r' | grep -vFx -- "$host" | grep -v -- "^$prefix-" || true)"
-  [[ -z "$others" ]] || pd_die "project $got also holds other servers ($(printf '%s' "$others" | tr '\n' ' ')): PD needs its own Public Cloud project (plan 01 section 2)."
+  [[ -z "$others" ]] || pd_die "project $got also holds other servers ($(printf '%s' "$others" | tr '\n' ' ')): PD needs its own Public Cloud project (plan 01)."
 }
 

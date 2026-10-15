@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+printf 'ssh %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"; cat >/dev/null; exit 0

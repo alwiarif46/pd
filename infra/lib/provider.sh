@@ -169,7 +169,7 @@ provider_pretenant() {
 }
 
 # provider_admin_ssh_check HOST NO_CHECK: the guard every `firewall-temp-ssh remove` runs first
-# (plan 01 section 3): HOST must resolve into the admin network and key-only SSH to it must work,
+# (plan 01): HOST must resolve into the admin network and key-only SSH to it must work,
 # otherwise the temporary rule stays (no lockout). NO_CHECK=1 skips it with a warning.
 provider_admin_ssh_check() {
   local host="$1" no_check="$2" admin tail_ip

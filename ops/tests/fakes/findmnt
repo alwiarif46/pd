@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# fake findmnt -no SOURCE <mnt>: the device of the encrypted mounts. FAKE_MOUNT_PDBACKUP / FAKE_MOUNT_PDDATA override
+# (set to an empty string = not mounted: no output, exit 1).
+printf 'findmnt %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
+m="${*: -1}"
+case "$m" in
+  *pdbackup*) v="${FAKE_MOUNT_PDBACKUP-/dev/mapper/pdbackup}" ;;
+  *pddata*) v="${FAKE_MOUNT_PDDATA-/dev/mapper/pddata}" ;;
+  *) v="" ;;
+esac
+[[ -n "$v" ]] || exit 1
+echo "$v"

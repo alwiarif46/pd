@@ -1,0 +1,93 @@
+#!/usr/sbin/nft -f
+# infra/server/host-firewall.nft - PD's host firewall TEMPLATE (docs/plans/01-infrastructure.md s3,
+# Drive D-135). Not loadable as it stands: infra/server/host-firewall.sh render (infra/lib/fwrender.py) fills
+# the __PD_*__ tokens from config/tenant.toml [network] and infra/server/cloudflare-ips.txt. The rendered
+# file is installed as /etc/pd/host-firewall.nft and loaded by pd-host-firewall.service (cloud-init does
+# both at first boot; infra/server/host-firewall.sh re-applies it).
+#
+# It owns ONE table (inet pd_fw) and never flushes the whole ruleset, so Docker's and Tailscale's own
+# tables survive a reload. Input is filtered (policy drop); forward and output only close the cloud
+# metadata service (169.254.169.254, which serves the cloud-init user-data with the admin password hash
+# and ADMIN_IP) to containers and non-root processes (Drive audit MEDIUM-2, D-144). All other container
+# traffic is left to Docker's own rules. Reloading recreates the table, which empties the bootstrap sets
+# (closes the first-boot SSH window).
+#
+# Public services: TCP 443 from Cloudflare's published ranges only (plan 01: the origin is reached
+# through the Cloudflare proxy with an origin certificate), or from anywhere when [network] cloudflare_only
+# is false. There is no port 80 and no certbot.
+table inet pd_fw
+delete table inet pd_fw
+table inet pd_fw {
+	# First-boot SSH from the admin's public IP only, with a timeout (cloud-init adds ADMIN_IP for
+	# [infra] bootstrap_ssh_hours). Elements are never written to disk: a reboot also closes the window.
+	set bootstrap_ssh4 {
+		type ipv4_addr
+		flags timeout
+	}
+	set bootstrap_ssh6 {
+		type ipv6_addr
+		flags timeout
+	}
+
+	# Optional static office addresses for SSH on the public interface ([network] admin_ssh_cidrs).
+	set admin_ssh4 {
+		type ipv4_addr
+		flags interval
+__PD_ADMIN_SSH4__
+	}
+	set admin_ssh6 {
+		type ipv6_addr
+		flags interval
+__PD_ADMIN_SSH6__
+	}
+
+	# Cloudflare's published ranges (infra/server/cloudflare-ips.txt).
+	set cloudflare4 {
+		type ipv4_addr
+		flags interval
+__PD_CLOUDFLARE4__
+	}
+	set cloudflare6 {
+		type ipv6_addr
+		flags interval
+__PD_CLOUDFLARE6__
+	}
+
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iifname "lo" accept
+		ct state established,related accept
+		ct state invalid drop
+		meta l4proto icmp accept
+		meta l4proto ipv6-icmp accept
+		# DHCP replies (IPv4 and IPv6) on the public interface
+		udp dport 68 accept
+		udp dport 546 accept
+		# SSH: admin network only (Headscale); public only from the timed bootstrap sets and the optional static list
+		iifname "tailscale0" tcp dport 22 accept
+		tcp dport 22 ip saddr @bootstrap_ssh4 accept
+		tcp dport 22 ip6 saddr @bootstrap_ssh6 accept
+		tcp dport 22 ip saddr @admin_ssh4 accept
+		tcp dport 22 ip6 saddr @admin_ssh6 accept
+		# containers reaching the host (the compose stack calling the public name)
+		iifname "docker0" accept
+		iifname "br-*" accept
+		# public service: HTTPS only (plan 01)
+__PD_HTTPS_RULES__
+		udp dport 41641 accept
+		counter comment "pd host firewall: dropped"
+	}
+
+	# Containers never reach the metadata service (runs before Docker's own filter chains).
+	chain forward {
+		type filter hook forward priority filter - 10; policy accept;
+		iifname "docker0" ip daddr 169.254.169.254 counter drop comment "pd: no metadata for containers"
+		iifname "br-*" ip daddr 169.254.169.254 counter drop comment "pd: no metadata for containers"
+	}
+
+	# On the host only root (cloud-init) may ask the metadata service.
+	chain output {
+		type filter hook output priority filter; policy accept;
+		ip daddr 169.254.169.254 meta skuid != 0 counter reject comment "pd: metadata for root only"
+	}
+}

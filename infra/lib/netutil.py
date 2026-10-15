@@ -7,6 +7,7 @@ network is 100.64.0.0/10 / fd7a:115c:a1e0::/48) for every provider adapter and t
 
 Subcommands:
   cidr <ip>               validate an admin IP and print it as /32 or /128 (rejects non-public)
+  cf-net <cidr> <4|6>     validate one Cloudflare range (a public network, not a default route) and print it
   tailnet-addr <host>     resolve host (or accept an IP) and print the first address inside
                           100.64.0.0/10 or fd7a:115c:a1e0::/48; exit 1 (message on stderr) if none
 """
@@ -50,6 +51,30 @@ def admin_cidr(raw: str) -> str:
     return f"{addr}/{32 if addr.version == 4 else 128}"
 
 
+def cloudflare_net(raw: str, version: int) -> str:
+    """Validate one entry of infra/server/cloudflare-ips.txt: a public network of the given IP version,
+    not a default route and not tiny; raise ValueError with the reason otherwise."""
+    text = raw.strip()
+    net = ipaddress.ip_network(text, strict=True)
+    if net.version != version:
+        raise ValueError(f"{text}: expected an IPv{version} network")
+    lo, hi = (8, 32) if version == 4 else (29, 64)
+    if not lo <= net.prefixlen <= hi:
+        raise ValueError(f"{text}: prefix length /{net.prefixlen} outside /{lo}../{hi}")
+    if not net.network_address.is_global:
+        raise ValueError(f"{text}: not a public network")
+    return str(net)
+
+
+def cmd_cf_net(raw: str, version: str) -> int:
+    try:
+        print(cloudflare_net(raw, int(version)))
+    except ValueError as exc:
+        print(f"refusing {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_cidr(raw: str) -> int:
     try:
         print(admin_cidr(raw))
@@ -61,6 +86,8 @@ def cmd_cidr(raw: str) -> int:
 
 
 def main(argv: list[str]) -> int:
+    if len(argv) == 3 and argv[0] == "cf-net":
+        return cmd_cf_net(argv[1], argv[2])
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
         return 2

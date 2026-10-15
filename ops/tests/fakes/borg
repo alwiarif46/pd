@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# fake borg for the backup/restore/drill tests. Logs argv (never stdin, never the passphrase) to $FAKE_CALLS and the
+# NAMES of BORG_* variables to $FAKE_CALLS.env. A passphrase in the environment (BORG_PASSPHRASE) is a test failure:
+# the scripts must use BORG_PASSCOMMAND.
+printf 'borg %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
+env | grep -o '^BORG_[A-Z_]*' | sort | tr '\n' ' ' >>"${FAKE_CALLS:-/dev/null}.env"; echo >>"${FAKE_CALLS:-/dev/null}.env"
+sub=""
+for a in "$@"; do case "$a" in -*) ;; *) sub="$a"; break ;; esac; done
+case "$sub" in
+  create) bytes="$(wc -c)"; echo "$bytes" >"${FAKE_STATE:-/tmp}/borg-create-bytes"; echo "Archive created" ;;
+  init) echo "Repository initialised" ;;
+  key) [[ "${*: -1}" != :* ]] && printf 'FAKE BORG KEY EXPORT\n' >"${*: -1}" ;;
+  list) printf '%s\n' "${FAKE_BORG_LIST:-pd-2026-10-16T01:00:00}" ;;
+  extract) printf 'FAKE-PGDUMP\n' ;;
+  prune | compact | check | info) : ;;
+esac
+exit "${FAKE_BORG_EXIT:-0}"

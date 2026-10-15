@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# fake git for deploy.sh tests: logs, changes nothing
+printf 'git %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
+[[ "$1" == rev-parse ]] && echo 0123456789abcdef0123456789abcdef01234567
+exit 0

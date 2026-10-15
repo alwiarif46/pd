@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# fake install (tests are not root): drops -o/-g, applies -m best-effort
+args=(); skip=""; mode=""; last=""
+for a in "$@"; do
+  if [[ -n "$skip" ]]; then [[ "$skip" == m ]] && mode="$a"; skip=""; continue; fi
+  case "$a" in -o|-g) skip=x ;; -m) skip=m ;; *) args+=("$a"); last="$a" ;; esac
+done
+/usr/bin/install "${args[@]}" || exit $?
+[[ -n "$mode" && -n "$last" && -e "$last" ]] && chmod "$mode" "$last" 2>/dev/null
+exit 0

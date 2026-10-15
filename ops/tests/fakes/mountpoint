@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# fake mountpoint: mounted unless FAKE_MOUNT_PDBACKUP / FAKE_MOUNT_PDDATA is set to an empty string
+m="${*: -1}"
+case "$m" in
+  *pdbackup*) [[ -n "${FAKE_MOUNT_PDBACKUP-x}" ]] ;;
+  *pddata*) [[ -n "${FAKE_MOUNT_PDDATA-x}" ]] ;;
+  *) exit 0 ;;
+esac

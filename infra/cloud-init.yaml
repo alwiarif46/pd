@@ -1,0 +1,84 @@
+#cloud-config
+# Template for the PD base server (docs/plans/01-infrastructure.md). PLACEHOLDERS ONLY - never put a real hash or key here.
+# Render with infra/render-cloud-init.py: it fills the hostname token from config/tenant.toml, the
+# SSH public key from SSH_PUBKEY_PATH, a password hash supplied at run time, the host firewall files
+# (infra/server/host-firewall.nft + pd-host-firewall.service, rendered by host-firewall.sh) and the first-boot SSH element
+# (ADMIN_IP for [infra] bootstrap_ssh_hours), and writes the result OUTSIDE the repo.
+# Providers keep user-data readable to their project members: nothing secret goes in here except the
+# pdadmin password HASH.
+hostname: __PD_HOSTNAME__
+timezone: Etc/UTC
+users:
+  - name: pdadmin
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) ALL"          # password required for sudo
+    lock_passwd: false
+    # Generate locally: mkpasswd -m sha-512   (store the plain password in the password manager)
+    # Without this, sudo is unusable after first boot and root is disabled = lockout.
+    hashed_passwd: "$6$REPLACE_WITH_HASH"
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAA... amaan   # replace with Amaan's public key
+disable_root: true
+ssh_pwauth: false
+package_update: true
+package_upgrade: true
+packages:
+  - cryptsetup
+  - nftables
+  - nginx
+  - borgbackup
+  - rclone
+  - fail2ban
+  - unattended-upgrades
+  - apt-listchanges
+  - jq
+  - curl
+  - ca-certificates
+  - gnupg
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-pd.conf
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+      AllowUsers pdadmin
+      MaxAuthTries 3
+      LoginGraceTime 30
+      X11Forwarding no
+      AllowAgentForwarding no
+  - path: /etc/apt/apt.conf.d/52pd-unattended
+    content: |
+      Unattended-Upgrade::Allowed-Origins {
+        "${distro_id}:${distro_codename}-security";
+      };
+      Unattended-Upgrade::Automatic-Reboot "false";
+      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+  # Host firewall (Drive D-135): filled in by render-cloud-init.py from infra/server/ (rules from host-firewall.nft,
+  # Cloudflare ranges from cloudflare-ips.txt, [network] from the tenant file)
+  - path: /etc/pd/host-firewall.nft
+    permissions: "0600"
+    content: |
+      __PD_HOST_FIREWALL_NFT__
+  - path: /etc/pd/cloudflare-ips.txt
+    permissions: "0644"
+    content: |
+      __PD_CLOUDFLARE_IPS__
+  - path: /etc/systemd/system/pd-host-firewall.service
+    permissions: "0644"
+    content: |
+      __PD_HOST_FIREWALL_UNIT__
+runcmd:
+  # Host firewall first: public SSH only from ADMIN_IP, only for the bootstrap hours (then tailnet only)
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, pd-host-firewall.service]
+  - __PD_BOOTSTRAP_SSH__
+  - systemctl restart ssh
+  - systemctl enable --now unattended-upgrades
+  - mkdir -p /etc/pd && chmod 700 /etc/pd
+  # 4 GB swap as an OOM safety net, low swappiness
+  - fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+  - echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  - echo 'vm.swappiness=10' > /etc/sysctl.d/60-pd.conf
+  - sysctl --system
