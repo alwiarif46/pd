@@ -101,10 +101,10 @@ export async function registerJobs(app: FastifyInstance): Promise<void> {
       return {
         code: 200,
         body: { id: created.id },
-        queue: {
+        queue: [{
           jobId: created.id,
           enqueue: () => (job.type === 'scan' ? enqueueScan(payload) : enqueueClassify(payload)),
-        },
+        }],
       };
     });
     await queueAfterCommit(orgId, outcome);

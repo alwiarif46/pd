@@ -239,24 +239,27 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
   });
 
   it('a key override and a bid delete that collide do not deadlock', async () => {
-    const tenant = await createTenant(app, 'override-vs-delete');
-    const documentId = await withOrg(tenant.orgId, async (db) => {
-      const [document] = await db.insert(schema.documents).values({
-        orgId: tenant.orgId, bidId: tenant.bidId, fileName: 'a.pdf', mime: 'application/pdf', sizeBytes: 5,
-        sha256: randomUUID(), kind: 'amendment', liveStatus: 'live',
-      }).returning();
-      await db.insert(schema.amendments).values({ orgId: tenant.orgId, bidId: tenant.bidId, documentId: document.id, amendmentNo: 4, solicitationKeyFound: false, status: 'processing' });
-      return document.id;
-    });
-    const call = as(app, tenant.token);
-    const { waiting, results } = await race(tenant.orgId, 'select id from bids where id = $1 for update', [tenant.bidId], 2, () => [
-      call('POST', `/api/documents/${documentId}/key-override`, { reason: 'race' }),
-      call('DELETE', `/api/bids/${tenant.bidId}`),
-    ]);
-    expect(waiting).toBe(2);
-    const [override, deleted] = results.map((result) => (result as PromiseFulfilledResult<{ statusCode: number; body: string }>).value);
-    expect(deleted.statusCode, deleted.body).toBe(200);
-    expect([200, 404], override.body).toContain(override.statusCode);
+    for (let round = 0; round < 3; round += 1) {
+      const { tenant } = await setup(`override-vs-delete-${round}`, 'reserved');
+      const documentId = await withOrg(tenant.orgId, async (db) => {
+        const [document] = await db.insert(schema.documents).values({
+          orgId: tenant.orgId, bidId: tenant.bidId, fileName: 'a.pdf', mime: 'application/pdf', sizeBytes: 5,
+          sha256: randomUUID(), kind: 'amendment', liveStatus: 'live', keyStatus: 'not_found',
+        }).returning();
+        await db.insert(schema.amendments).values({ orgId: tenant.orgId, bidId: tenant.bidId, documentId: document.id, amendmentNo: 4, solicitationKeyFound: false, status: 'held' });
+        return document.id;
+      });
+      const call = as(app, tenant.token);
+      // Both lock the amendment's document first (lock order documents -> bids -> amendments).
+      const { waiting, results } = await race(tenant.orgId, 'select id from documents where id = $1 for update', [documentId], 2, () => [
+        call('POST', `/api/documents/${documentId}/key-override`, { reason: 'race' }),
+        call('DELETE', `/api/bids/${tenant.bidId}`),
+      ]);
+      expect(waiting).toBe(2);
+      const [override, deleted] = results.map((result) => (result as PromiseFulfilledResult<{ statusCode: number; body: string }>).value);
+      expect(deleted.statusCode, deleted.body).toBe(200);
+      expect([200, 404], override.body).toContain(override.statusCode);
+    }
   });
 
   it('attachments and amendments wait for the solicitation: refused at upload, skipped by the worker', async () => {

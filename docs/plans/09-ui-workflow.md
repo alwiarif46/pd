@@ -375,6 +375,7 @@ Documents:
 - Table: Name, Kind, Amendment, Pages ("~N" with "Page estimated" when `pagesEstimated`), Size, Uploaded, Live until, Status, Marking, Actions. Status text: "Processing" with "Queue position N", "Live", "Failed" with the reason, "Archived", "Restore requested", "Restoring (a short wait)", "Restored until [date]", "Deleted".
 - Marking prompt for a `blocked` file (uses `MarkingPrompt`, 5.12): "This file carries the marking [CUI] on page 2. AI processing is paused. Confirm the file is public or approved for third-party processing." Buttons "Confirm file is public" and "Remove file".
 - `keyCheck` `mismatch` on an amendment: "The solicitation number on this amendment does not match the bid." The owner sees "Override" (dialog with a required reason and "N overrides left"); a member sees "Ask the bid owner to override." `overridden` shows "Accepted by override".
+- The API's `DocumentDto` also carries `keyReason` (`mismatch`: another solicitation number was found; `not_found`: no number was found; `bid_key_pending`: the bid has no solicitation number yet, and the amendment is rechecked when one is saved in Bid settings; null otherwise) and `keyFound` (the number the check found, or null). They are not part of the `Doc` contract above; the container can use them in the mismatch message. A held amendment runs no AI step until it matches or the owner overrides it (04 s3.1). An override of a `bid_key_pending` amendment is refused with 409 `set_bid_number_first` ("This bid has no solicitation number yet. Set it in Bid settings instead of overriding: that is free, and the amendment is checked again automatically."); the container can offer Bid settings instead of "Override" for that reason. A bid number with no digit (a word) never matches an amendment, so its amendments always need an override.
 - Actions per row: "Open" (live or restored), "Restore" (archived), "Delete" (`ConfirmDialog`: "Delete [file name]? The rows and quotes it produced stay. Its MB is freed.").
 
 Bid settings:
@@ -562,7 +563,6 @@ interface SourceViewerProps {
 
 ### 5.19 API gaps (container supplies until the API adds them)
 - Upload refusals arrive as API errors; the container maps them to the 05 s3.10 messages (5.2, 5.11).
-- Amendment key check: the worker does not run it yet, so `DocumentDto.keyCheck` is not set from the amendment's text (06 s4, 5.11).
 - Seats after a move to free: not enforced; every member keeps access. 06 s5 (the owner and the earliest-joined member keep access) needs the API to apply it (5.14, `UpgradeDialog`).
 - Retention and restore: no worker archives files at their live-until date or moves a restore from `restore_requested` through `restoring` to `restored`, so documents stay in the state the API set (07 s2, 5.11).
 
@@ -627,3 +627,5 @@ Each chat ends the same way: v0 pushes to the `v0-ui` branch, you merge it to `m
 | 14 Oct 2026 | Source viewer: the container renders the PDF page with the highlight (`pageView`); v0 builds the frame and the text, archived, and deleted modes |
 | 14 Oct 2026 | Order of v0 chats set to 12 chats (s6); prompts in `docs/v0-prompts.md`; API gaps listed in 5.19 |
 | 15 Oct 2026 | 5.19 trimmed: Members, Billing, Processing, Documents, Bids, Compliance, Outline, Resumes, Reviews, Production and Orals, Row history, Amendment links, and Account are in the API. Open: the worker amendment key check, seats after a move to free, the retention and restore worker |
+| 15 Oct 2026 | Worker amendment key check built (04 s3.1): removed from 5.19; 5.11 notes `DocumentDto.keyReason` and `keyFound` (API and web types only, not the v0 `Doc` contract) |
+| 15 Oct 2026 | 5.11: override of a `bid_key_pending` amendment refused with `set_bid_number_first`; a bid number with no digit never matches |

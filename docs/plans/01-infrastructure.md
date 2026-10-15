@@ -131,6 +131,9 @@ Restore test, once a month: restore the latest base backup and WAL (or the lates
   ```
 
   Then run `deploy.sh` again (or restart `api` and `worker`). To rotate: change `PD_APP_PASSWORD` in `.env`, run the same `ALTER ROLE`, restart `api` and `worker`. `PD_APP_PASSWORD` must differ from `POSTGRES_PASSWORD`, and the value must not contain a single quote. Until it is set, the api and worker fail to log in and exit.
+- **Cut-over: migration 0008 (amendment key check).** Before 0008, classify sent an amendment straight to the `ai:amendment` queue; after it, the key check creates the `amendments` row and only then queues `ai:amendment`, and the `ai:amendment` step skips an amendment with no row. An amendment caught between the two (classified before the deploy, its `ai:amendment` job not yet run) would stay unprocessed. Do one of these:
+  1. Before deploying, stop new uploads and let the `ai:amendment` queue drain (no waiting or active jobs), then deploy.
+  2. After deploying, run the one-off `apps/worker/scripts/requeue-amendments.ts` with the worker's environment. For each organization named with `--org <uuid>` (row-level security shows one at a time; list the ids from a superuser `psql` session), it finds every amendment that is not deleted, finished extraction (`extract_status = 'ready'`), is not waiting on a marking confirmation, and has no `amendments` row. It is a dry run by default; with `--apply` it inserts a `classify` job row for each and queues it, so the key check runs. Rerunning it is safe: the key check is idempotent.
 - Two environments: `staging` and `production`. The 8 GB server already has about 5.6 GB allocated to production containers (section 2.2), so a staging copy does not fit on it. If there is a staging server, it is a separate small VPS. 🟨 **OPEN:** whether to run a separate staging VPS.
 
 ## 7. Monthly running cost (estimate, provisional)
@@ -193,3 +196,4 @@ Billing (06 s5) works once these are done in the Stripe dashboard, in test mode 
 | 13 Oct 2026 | AI cost figures marked provisional until Phase 1 measurements |
 | 13 Oct 2026 | Error tracking service must scrub request bodies |
 | 15 Oct 2026 | Stripe dashboard setup recorded (section 8): two monthly prices, restricted-key permissions, webhook events and API version, Portal catalog limited to Starter and Growth, end-of-period downgrade and cancel, Stripe Tax off |
+| 15 Oct 2026 | Cut-over for migration 0008 (section 6): drain `ai:amendment` before the deploy, or run `requeue-amendments.ts` after it |
