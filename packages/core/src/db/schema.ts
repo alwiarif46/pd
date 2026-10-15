@@ -1,6 +1,7 @@
 import { type AnyPgColumn, index, pgTable, uniqueIndex, uuid, text, timestamp, boolean, integer, jsonb, decimal } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type { ActivityKind, ActivityOrigin, ReviewColor } from '../schedule';
+import type { DateKey, FactKey, TabsStatus } from '../amendment-tabs';
 
 /** documents.key_status values (migration 0008). */
 export type KeyStatus = 'match' | 'mismatch' | 'not_found' | 'bid_key_pending' | 'overridden';
@@ -246,6 +247,10 @@ export const amendments = pgTable('amendments', {
   datesChanged: jsonb('dates_changed'),
   // The bid key the check compared against; the AI write goes ahead only while the bid has it.
   matchedKey: text('matched_key'),
+  // Step 8, the bid facts and dates (CHECK amendments_tabs_status_check, migration 0011):
+  // 'pending' once the compliance apply queued it, 'applied', or 'failed' until a retry; null when
+  // step 8 never queued (amendments applied before 0011).
+  tabsStatus: text('tabs_status').$type<TabsStatus>(),
 }, (table) => ({
   // One amendments row per document (migration 0008 dedupes first); the key check upserts on it.
   document: uniqueIndex('amendments_document_uq').on(table.documentId),
@@ -428,7 +433,9 @@ const sourceColumns = {
   sourceQuote: text('source_quote'),
   quoteVerified: boolean('quote_verified').notNull().default(false),
   amendmentNo: integer('amendment_no').notNull().default(0),
-  supersedeStatus: text('supersede_status').$type<'active' | 'superseded' | 'withdrawn'>(),
+  // 'proposed' (bid_facts and schedule_activities only, PR5): an amendment's replacement for a row
+  // a user touched, not part of the tab until the user inserts it (packages/core amendment-tabs.ts).
+  supersedeStatus: text('supersede_status').$type<'active' | 'superseded' | 'withdrawn' | 'proposed'>(),
   supersededByRowId: uuid('superseded_by_row_id'),
   changedByAmendment: integer('changed_by_amendment'),
   origin: text('origin').$type<'ai' | 'user'>(),
@@ -444,7 +451,11 @@ export const bidFacts = pgTable('bid_facts', {
   value: text('value').notNull(),
   ...sourceColumns,
   confirmed: boolean('confirmed').notNull().default(false),
-});
+  // CHECK bid_facts_fact_key_check (migration 0011): the FACT_KEYS list; factKeyOf(field).
+  factKey: text('fact_key').notNull().default('other').$type<FactKey>(),
+}, (table) => ({
+  bidFactKeyIdx: index('bid_facts_bid_id_fact_key_idx').on(table.bidId, table.factKey),
+}));
 
 export const kickoffItems = pgTable('kickoff_items', {
   ...baseColumns,
@@ -478,7 +489,12 @@ export const scheduleActivities = pgTable('schedule_activities', {
   // CHECK schedule_activities_review_color_check (REVIEW_COLORS) and
   // schedule_activities_review_color_kind_check (only a 'review' has a color), migration 0010.
   reviewColor: text('review_color').$type<ReviewColor>(),
-});
+  // CHECK schedule_activities_date_key_check (migration 0011): the DATE_KEYS list. Only a dated AI
+  // row has a key other than 'other' (classifyDateHit).
+  dateKey: text('date_key').notNull().default('other').$type<DateKey>(),
+}, (table) => ({
+  bidDateKeyIdx: index('schedule_activities_bid_id_date_key_idx').on(table.bidId, table.dateKey),
+}));
 
 export const complianceRows = pgTable('compliance_rows', {
   ...baseColumns,
