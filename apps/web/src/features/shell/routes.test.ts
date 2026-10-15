@@ -5,6 +5,8 @@ describe('parseRoute', () => {
   it.each([
     ['#/login', { kind: 'auth' }],
     ['#/signup', { kind: 'auth' }],
+    ['#/invite', { kind: 'invite' }],
+    ['#/invite?token=x', { kind: 'invite' }],
     ['#/verify?token=abc', { kind: 'auth' }],
     ['#/reset?token=abc', { kind: 'auth' }],
     ['#/bids', { kind: 'page', page: 'bids' }],
@@ -19,6 +21,11 @@ describe('parseRoute', () => {
     ['#/bids/a%20b/documents?row=', { kind: 'tab', bidId: 'a b', tab: 'documents', rowId: null }],
   ] as [string, AppRoute][])('%s', (hash, route) => {
     expect(parseRoute(hash, true)).toEqual(route);
+  });
+
+  it.each(['#/invite', '#/invite?token=x'])('%s is the invite route signed out too', (hash) => {
+    expect(parseRoute(hash, false)).toEqual({ kind: 'invite' });
+    expect(hrefFor({ kind: 'invite' })).toBe('#/invite');
   });
 
   it('sends an empty or unknown hash to the bids list when signed in, to log in otherwise', () => {

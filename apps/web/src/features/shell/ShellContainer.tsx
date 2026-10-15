@@ -10,6 +10,7 @@ import { UpgradeDialog } from '@/ui/shell/UpgradeDialog';
 import { Account, BidsHome, NewBid, Organization, Privacy } from '@/screens/Outside';
 import { Workspace } from '@/screens/Workspace';
 import { summarizeOrg, type OrgSummary } from '@/features/shared/credits';
+import { hasPendingInvite } from '@/features/membership/pending-invite';
 import { messageOf } from '@/features/shared/messages';
 import { TabFrameContainer } from '@/features/tab-frame/TabFrameContainer';
 import { tabSignals } from '@/features/tab-frame/derive';
@@ -40,7 +41,7 @@ type BidState = { bidId: string; data: BidData | null; error: string | null; fai
 type ConfirmState = { open: boolean; options: ConfirmOptions; key: number };
 
 interface Props {
-  route: Exclude<AppRoute, { kind: 'auth' }>;
+  route: Exclude<AppRoute, { kind: 'auth' } | { kind: 'invite' }>;
   /** Test seam; defaults to the typed client. */
   api?: ShellApi;
   /** Test seam: leaves the app for Stripe. Defaults to `window.location.assign`. */
@@ -158,6 +159,12 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
     window.addEventListener('focus', refresh);
     return () => window.removeEventListener('focus', refresh);
   }, [refresh]);
+
+  // Signed in without an organization while an invite is waiting (signed in from another tab): join it.
+  const noOrg = shell.kind === 'no_org';
+  useEffect(() => {
+    if (noOrg && hasPendingInvite()) go('#/invite');
+  }, [noOrg]);
 
   const openUpgrade = useCallback((reason: UpgradeReason) => setUpgrade({ open: true, reason }), []);
 

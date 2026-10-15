@@ -3,6 +3,8 @@ import { isSignedIn, onUnauthorized, setToken } from '@/api';
 import { Toaster } from '@/components/ui/sonner';
 import { Privacy } from '@/screens/Outside';
 import { AuthContainer } from '@/features/auth/AuthContainer';
+import { InviteContainer } from '@/features/membership/InviteContainer';
+import { hasPendingInvite } from '@/features/membership/pending-invite';
 import { LegacyFrame } from './LegacyFrame';
 import { parseRoute } from './routes';
 import { ShellContainer } from './ShellContainer';
@@ -39,11 +41,14 @@ export function AppRoot() {
   const publicPrivacy = route.kind === 'page' && route.page === 'privacy';
 
   let body;
-  if (route.kind === 'auth' || (!signedIn && !publicPrivacy)) {
+  if (route.kind === 'invite') {
+    body = <InviteContainer signedIn={signedIn} />;
+  } else if (route.kind === 'auth' || (!signedIn && !publicPrivacy)) {
     body = (
       <AuthContainer
         onSignedIn={() => {
-          window.location.hash = '#/bids';
+          // A person who came from an invite link goes back to it to join.
+          window.location.hash = hasPendingInvite() ? '#/invite' : '#/bids';
         }}
       />
     );
