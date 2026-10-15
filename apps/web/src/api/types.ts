@@ -31,6 +31,25 @@ export type ReviewColor = 'blue' | 'pink' | 'red' | 'green' | 'gold' | 'white_gl
 /** `schedule_activities.origin`: 'template' rows came from a schedule template. */
 export type ActivityOrigin = 'ai' | 'user' | 'template';
 export type AdjustMode = 'shift' | 'scale' | 'keep';
+/** `bid_facts.fact_key` (migration 0011 CHECK; packages/core FACT_KEYS): an amendment's fact on a key replaces the earlier ones. */
+export type FactKey =
+  | 'agency'
+  | 'solicitation_number'
+  | 'naics'
+  | 'set_aside'
+  | 'contract_type'
+  | 'pop'
+  | 'place'
+  | 'submission_method'
+  | 'contracting_officer'
+  | 'other';
+/** `schedule_activities.date_key` (migration 0011 CHECK; packages/core DATE_KEYS). */
+export type DateKey = 'proposal_due' | 'questions_due' | 'site_visit' | 'orals' | 'other';
+/**
+ * `supersede_status`. 'proposed' (bid facts and activities only): an amendment's replacement for a
+ * row a user touched; tab lists leave it out and offer it under `proposals` until it is inserted.
+ */
+export type SupersedeStatus = 'active' | 'superseded' | 'withdrawn' | 'proposed';
 export type RowTable =
   | 'bid_facts'
   | 'kickoff_items'
@@ -74,7 +93,7 @@ export interface SourceColumnsDto {
   sourceQuote: string | null;
   quoteVerified: boolean;
   amendmentNo: number;
-  supersedeStatus: 'active' | 'superseded' | 'withdrawn' | null;
+  supersedeStatus: SupersedeStatus | null;
   supersededByRowId: string | null;
   changedByAmendment: number | null;
   origin: 'ai' | 'user' | null;
@@ -416,7 +435,10 @@ export interface AmendmentLinkDto extends OrgScopedDto {
  * POST /api/amendment-links/:id/confirm and /reject. Decisions are final: the same decision again
  * answers 200; the other is 409 `link_already_decided`. Confirm is 409 `row_already_closed` when
  * the old row is no longer active and `new_row_missing` when the replacing row is gone.
- * `amendmentStatus` is `applied` once no proposal is left.
+ * `amendmentStatus` is `applied` once no proposal is left (tab proposals count too, PR5).
+ * Confirm of a fact or activity link (`rowTable` 'bid_facts' or 'schedule_activities') is the
+ * proposal's "Insert": the proposed row joins the tab and supersedes the old row; when the old row
+ * was removed meanwhile, the row is still inserted.
  */
 export interface AmendmentDecisionDto {
   ok: true;
@@ -432,6 +454,40 @@ export interface BidFactDto extends BidScopedDto, SourceColumnsDto {
   field: string;
   value: string;
   confirmed: boolean;
+  factKey: FactKey;
+}
+
+/**
+ * An open amendment proposal on the overview or schedule tab (PR5): the replacement an amendment
+ * proposes for a fact or activity a user added, confirmed, or edited. "Insert" is
+ * confirmAmendmentLink(linkId): the row joins the tab and supersedes `oldRowId`; "Dismiss" is
+ * rejectAmendmentLink(linkId). `row` is not in the tab's list until inserted.
+ */
+export interface TabProposalDto<T> {
+  linkId: string;
+  amendmentId: string;
+  amendmentNo: number | null;
+  /** The row it would replace; null when that row was removed (insert still works). */
+  oldRowId: string | null;
+  /** The amendment text behind the change. */
+  sourcePage: number | null;
+  sourceQuote: string | null;
+  row: T;
+}
+
+/**
+ * The schedule tab's pending date change (09 s5.11, PR5): an amendment moved the proposal due
+ * date. Answer it with adjustSchedule(bidId, { mode, amendmentId }): that applies nextDue to the
+ * bid (the worker never does) and resolves it. `previousDue` is the bid's due date in force (null
+ * when the bid has none: only 'keep' applies).
+ */
+export interface PendingDateChangeDto {
+  amendmentId: string;
+  amendmentNo: number | null;
+  previousDue: string | null;
+  nextDue: string;
+  sourcePage: number | null;
+  sourceQuote: string | null;
 }
 
 export interface KickoffItemDto extends BidScopedDto {
@@ -459,6 +515,7 @@ export interface ScheduleActivityDto extends BidScopedDto, Omit<SourceColumnsDto
   note: string | null;
   status: string | null;
   locked: boolean;
+  dateKey: DateKey;
 }
 
 export interface ComplianceRowDto extends BidScopedDto, SourceColumnsDto {
@@ -613,9 +670,18 @@ export interface MoveOutlineInput {
 // ---------------------------------------------------------------------------
 
 export interface TabPayloadMap {
-  overview: { facts: BidFactDto[]; kickoff: KickoffItemDto[] };
-  /** Activities by start date (undated last), and the bid's "Workdays only" setting. */
-  schedule: { activities: ScheduleActivityDto[]; workdaysOnly: boolean };
+  /** `facts` leaves out the facts an amendment only proposed; they are in `proposals`. */
+  overview: { facts: BidFactDto[]; kickoff: KickoffItemDto[]; proposals: TabProposalDto<BidFactDto>[] };
+  /**
+   * Activities by start date (undated last; proposed rows left out), the bid's "Workdays only"
+   * setting, the open amendment proposals, and the amendment date change waiting for the prompt.
+   */
+  schedule: {
+    activities: ScheduleActivityDto[];
+    workdaysOnly: boolean;
+    proposals: TabProposalDto<ScheduleActivityDto>[];
+    pendingDateChange: PendingDateChangeDto | null;
+  };
   compliance: { rows: ComplianceRowDto[] };
   outline: { items: OutlineItemDto[] };
   resumes: { requirements: PersonnelRequirementDto[]; candidates: CandidateDto[]; matches: ResumeMatchDto[] };
@@ -760,13 +826,23 @@ export interface CreatedRowMap {
   lessons: LessonDto;
 }
 
-/** POST /api/bids/:id/schedule/adjust. previousDue and nextDue ('YYYY-MM-DD') are required for shift and scale. */
+/**
+ * POST /api/bids/:id/schedule/adjust. previousDue and nextDue ('YYYY-MM-DD') are required for
+ * shift and scale, unless `amendmentId` is sent.
+ */
 export interface AdjustScheduleInput {
   mode: AdjustMode;
   previousDue?: string;
   nextDue?: string;
   /** Overrides the bid's setting for this call only. */
   workdaysOnly?: boolean;
+  /**
+   * Answers that amendment's date change (the schedule tab's `pendingDateChange`): the dates come
+   * from it, and the bid's due date is set to its nextDue. `ApiError` 404 when the amendment has no
+   * date change, 409 `date_change_resolved` when it was already answered, 400 `invalid_date` for
+   * shift or scale when the bid has no due date.
+   */
+  amendmentId?: string;
 }
 
 /** One activity the adjust moved; days are 'YYYY-MM-DD'. */
@@ -791,6 +867,9 @@ export interface AdjustScheduleDto {
   delta: number;
   moved: number;
   moves: ScheduleMoveDto[];
+  /** With `amendmentId`: the amendment answered and the bid's new due date. */
+  amendmentId?: string;
+  dueDate?: string;
 }
 
 /** POST /api/bids/:id/tabs/schedule/seed. 409 `due_date_required` when the bid has no due date. */

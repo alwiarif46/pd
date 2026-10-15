@@ -4,6 +4,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import type * as api from '@/api';
 import type * as ui from '@/types';
 import type * as core from '@pd/core/schedule';
+import type * as tabs from '@pd/core/amendment-tabs';
 
 describe('@/types matches @/api', () => {
   it('has the same unions', () => {
@@ -46,6 +47,15 @@ describe('@/types matches @/api', () => {
     expectTypeOf<ui.DateChangeMode>().toEqualTypeOf<core.AdjustMode>();
     expectTypeOf<ui.ScheduleTemplateId>().toEqualTypeOf<core.ScheduleTemplateId>();
     expectTypeOf<ui.ScheduleHoliday>().toEqualTypeOf<core.Holiday>();
+    expect(true).toBe(true);
+  });
+
+  it('matches the amendment tab keys in @pd/core/amendment-tabs (PR5)', () => {
+    expectTypeOf<api.FactKey>().toEqualTypeOf<tabs.FactKey>();
+    expectTypeOf<api.DateKey>().toEqualTypeOf<tabs.DateKey>();
+    expectTypeOf<api.PendingDateChangeDto['previousDue']>().toEqualTypeOf<tabs.DateChange['previousDue']>();
+    expectTypeOf<api.PendingDateChangeDto['nextDue']>().toEqualTypeOf<tabs.DateChange['nextDue']>();
+    expectTypeOf<Extract<api.SupersedeStatus, 'proposed'>>().toEqualTypeOf<typeof tabs.PROPOSED>();
     expect(true).toBe(true);
   });
 

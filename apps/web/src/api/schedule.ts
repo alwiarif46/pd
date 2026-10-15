@@ -4,7 +4,10 @@ import type { AdjustScheduleDto, AdjustScheduleInput, SeedScheduleDto, SeedSched
 /**
  * Moves the unlocked activities after a due-date change (shift, scale, or keep), counting
  * workdays when the bid's setting (or `input.workdaysOnly`) is on. Does not change the bid's due
- * date. `ApiError` 400 (`invalid_date`) when shift or scale lacks a date.
+ * date, except with `input.amendmentId`: that answers the amendment's date change (the schedule
+ * tab's `pendingDateChange`), sets the bid's due date to its nextDue, and resolves it. `ApiError`
+ * 400 (`invalid_date`) when shift or scale lacks a date; with an amendmentId, 404 when it has no
+ * date change and 409 `date_change_resolved` when it was already answered.
  */
 export function adjustSchedule(bidId: string, input: AdjustScheduleInput, opts?: CallOptions): Promise<AdjustScheduleDto> {
   return request(`/api/bids/${seg(bidId)}/schedule/adjust`, { method: 'POST', json: input, signal: opts?.signal });
