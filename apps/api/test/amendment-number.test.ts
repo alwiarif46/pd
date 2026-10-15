@@ -377,7 +377,11 @@ describe.skipIf(Boolean(unavailable))('amendment numbers', () => {
           { orgId: tenant.orgId, amendmentId: amendment.id, rowTable: 'compliance_rows', oldRowId: closed.id, newRowId: added.id, action: 'supersede', status: 'auto' },
           { orgId: tenant.orgId, amendmentId: amendment.id, rowTable: 'compliance_rows', oldRowId: untouched.id, action: 'withdraw', status: 'proposed' },
         ]);
-        return { added: added.id, closed: closed.id, untouched: untouched.id };
+        // Promoted by hand from the amendment's "check these": keeps 0.
+        const [promoted] = await db.insert(schema.complianceRows).values({
+          orgId: tenant.orgId, bidId: tenant.bidId, reqId: 'user-1', requirementText: 'Promoted', documentId, amendmentNo: 0, origin: 'user',
+        }).returning();
+        return { added: added.id, closed: closed.id, untouched: untouched.id, promoted: promoted.id };
       });
       const { call, userId } = await memberCall(tenant);
       const response = await call('PATCH', `/api/documents/${documentId}/amendment-no`, { amendmentNo: 6 });
@@ -389,6 +393,7 @@ describe.skipIf(Boolean(unavailable))('amendment numbers', () => {
       expect(byId.get(ids.added)).toMatchObject({ amendmentNo: 6 });
       expect(byId.get(ids.closed)).toMatchObject({ changedByAmendment: 6, amendmentNo: 0 });
       expect(byId.get(ids.untouched)).toMatchObject({ changedByAmendment: null, supersedeStatus: 'active' });
+      expect(byId.get(ids.promoted)).toMatchObject({ amendmentNo: 0 });
       const history = await withOrg(tenant.orgId, (db) => db.select().from(schema.rowHistory).where(eq(schema.rowHistory.userId, userId)));
       expect(history.map((entry) => [entry.rowId, entry.field, entry.oldValue, entry.newValue]).sort()).toEqual([
         [ids.added, 'amendment_no', '1', '6'],

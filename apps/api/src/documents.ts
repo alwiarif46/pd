@@ -437,7 +437,9 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       const history: (typeof schema.rowHistory.$inferInsert)[] = [];
       for (const row of rows) {
         const change: { amendmentNo?: number; changedByAmendment?: number } = {};
-        if (row.documentId === documentId && row.amendmentNo !== amendmentNo) {
+        // Rows the amendment added carry its number; a row promoted by hand from its "check these"
+        // list keeps 0.
+        if (row.documentId === documentId && row.amendmentNo > 0 && row.amendmentNo !== amendmentNo) {
           change.amendmentNo = amendmentNo;
           history.push({
             orgId, rowTable: 'compliance_rows', rowId: row.id, userId: auth.userId, field: 'amendment_no',
