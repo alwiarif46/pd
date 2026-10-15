@@ -16,7 +16,7 @@ import { ShellContext, type ConfirmOptions, type ShellContextValue } from './bid
 import {
   jobsKey,
   loadBid,
-  loadingShellBid,
+  placeholderShellBid,
   loadShell,
   needsPolling,
   POLL_MS,
@@ -330,7 +330,7 @@ export function ShellContainer({ route, api = shellApi }: Props) {
   return (
     <ShellContext.Provider value={ctx}>
       <AppShell
-        bid={bidId ? (bidDto ? toShellBid(bidDto) : loadingShellBid(bidId)) : null}
+        bid={bidId ? (bidDto ? toShellBid(bidDto) : placeholderShellBid(bidId, bidError !== null)) : null}
         bids={switcherBids}
         activeTab={tab}
         activePage={activePageOf(route)}

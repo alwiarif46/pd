@@ -106,9 +106,9 @@ export function toShellBid(bid: BidDto): ShellBid {
   };
 }
 
-/** A placeholder while the bid loads, so the shell keeps its sidebar. */
-export function loadingShellBid(bidId: string): ShellBid {
-  return { id: bidId, name: 'Loading bid', agency: null, dueDate: null, dueTime: null, timeZone: null };
+/** A placeholder while the bid loads (or when it could not be loaded), so the shell keeps its sidebar. */
+export function placeholderShellBid(bidId: string, failed = false): ShellBid {
+  return { id: bidId, name: failed ? 'Bid not available' : 'Loading bid', agency: null, dueDate: null, dueTime: null, timeZone: null };
 }
 
 export function userOf(me: Pick<MeDto, 'name' | 'email'> | null): { name: string; email: string } {
