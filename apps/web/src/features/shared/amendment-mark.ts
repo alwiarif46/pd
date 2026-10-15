@@ -23,3 +23,6 @@ export function amendmentMark(row: MarkSource, rowIds: ReadonlySet<string>): Ame
   }
   return { kind: 'original' };
 }
+
+/** The shared name later screens use (moved here from features/compliance in the shell PR). */
+export const toAmendmentMark = amendmentMark;
