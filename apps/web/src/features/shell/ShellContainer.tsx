@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import { isAbortError } from '@/api';
+import { isAbortError, onSeatLocked } from '@/api';
 import { Button } from '@/components/ui/button';
 import type { OutsidePage, Tab, UpgradeReason } from '@/types';
 import { EmptyState } from '@/ui/common/EmptyState';
@@ -10,6 +10,7 @@ import { UpgradeDialog } from '@/ui/shell/UpgradeDialog';
 import { Account, BidsHome, NewBid, Organization, Privacy } from '@/screens/Outside';
 import { Workspace } from '@/screens/Workspace';
 import { summarizeOrg, type OrgSummary } from '@/features/shared/credits';
+import { SeatLocked } from '@/features/membership/ui/SeatLocked';
 import { hasPendingInvite } from '@/features/membership/pending-invite';
 import { messageOf } from '@/features/shared/messages';
 import { TabFrameContainer } from '@/features/tab-frame/TabFrameContainer';
@@ -79,6 +80,10 @@ function PageFrame({ children }: { children: ReactNode }) {
 export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Props) {
   const [shell, setShell] = useState<ShellState>({ kind: 'loading' });
   const [shellVersion, setShellVersion] = useState(0);
+  const [checking, setChecking] = useState(false);
+  // Read by the seat-locked listener (below); written only in effects and callbacks.
+  const shellKind = useRef<ShellState['kind']>('loading');
+  const shellLoading = useRef(false);
   const [bidState, setBidState] = useState<BidState | null>(null);
   const [bidVersion, setBidVersion] = useState(0);
   const [upgrade, setUpgrade] = useState<{ open: boolean; reason: UpgradeReason }>({ open: false, reason: 'plan' });
@@ -97,17 +102,35 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
   // new bid then joins the switcher). A failed reload keeps what is shown.
   useEffect(() => {
     const abort = new AbortController();
+    shellLoading.current = true;
     loadShell(api, abort.signal).then(
       (data) => {
-        if (!abort.signal.aborted) setShell(data);
+        if (abort.signal.aborted) return;
+        shellLoading.current = false;
+        shellKind.current = data.kind;
+        setShell(data);
+        setChecking(false);
       },
       (error: unknown) => {
         if (abort.signal.aborted || isAbortError(error)) return;
-        setShell((prev) => (prev.kind === 'ready' ? prev : { kind: 'error', message: messageOf(error) }));
+        shellLoading.current = false;
+        setChecking(false);
+        setShell((prev) => (prev.kind === 'ready' || prev.kind === 'seat_locked' ? prev : { kind: 'error', message: messageOf(error) }));
       },
     );
     return () => abort.abort();
   }, [api, shellVersion, bidId]);
+
+  // A member who loses their seat while the app is open: the next request answers 403 seat_locked, and the
+  // shell reloads once to show the seat-locked screen. Not while it is loading or already locked: the reload's
+  // own 403 would trigger this again, endlessly.
+  useEffect(
+    () =>
+      onSeatLocked(() => {
+        if (shellKind.current === 'ready' && !shellLoading.current) setShellVersion((n) => n + 1);
+      }),
+    [],
+  );
 
   // The open bid. Requests for a bid the user has left are aborted. A failed reload keeps the data shown
   // and counts the failure, which re-arms polling with a longer wait.
@@ -282,6 +305,21 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
           Try again
         </Button>
       </div>
+    );
+  }
+
+  if (shell.kind === 'seat_locked') {
+    return (
+      <SeatLocked
+        email={shell.me?.email ?? ''}
+        message={shell.message}
+        checking={checking}
+        onCheckAgain={() => {
+          setChecking(true);
+          refresh();
+        }}
+        onSignOut={signOut}
+      />
     );
   }
 

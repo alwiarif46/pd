@@ -2,7 +2,7 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, getToken, setToken } from '@/api';
+import { ApiError, getToken, notifySeatLocked, setToken } from '@/api';
 import { bidDto, creditDto, docDto, jobDto, linkDto, meDto, orgPayload, organizationDto } from '@/test/fixtures';
 import { jsonResponse } from '@/test/fetch';
 import { TabFrameContainer } from '@/features/tab-frame/TabFrameContainer';
@@ -253,6 +253,73 @@ describe('ShellContainer', () => {
     render(<ShellContainer route={{ kind: 'page', page: 'bids' }} api={api} />);
     expect(await screen.findByRole('button', { name: 'Account menu for Dana Reyes' })).toBeTruthy();
     expect(screen.queryByRole('navigation', { name: 'Bid tabs' })).toBeNull();
+  });
+});
+
+describe('ShellContainer seat-locked member', () => {
+  const locked = () => new ApiError('Your plan has no seat for you.', 403, 'seat_locked');
+  const bids = { kind: 'page', page: 'bids' } as const;
+
+  it('draws the seat-locked screen full page, without the shell navigation', async () => {
+    const api = mockApi({ getOrg: vi.fn(async () => Promise.reject(locked())) });
+    render(<ShellContainer route={bids} api={api} />);
+    expect(await screen.findByRole('heading', { name: 'You have no seat right now' })).toBeTruthy();
+    expect(screen.getByText('Your plan has no seat for you.')).toBeTruthy();
+    expect(screen.getByText('Signed in as dana@northbridge.example.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Account menu for Dana Reyes' })).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'Bid tabs' })).toBeNull();
+  });
+
+  it('Check again reloads the organization and returns to the app when a seat is free', async () => {
+    const getOrg = vi.fn().mockRejectedValueOnce(locked()).mockResolvedValue(orgPayload());
+    render(<ShellContainer route={bids} api={mockApi({ getOrg })} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }));
+    expect(await screen.findByRole('button', { name: 'Account menu for Dana Reyes' })).toBeTruthy();
+    expect(getOrg).toHaveBeenCalledTimes(2);
+  });
+
+  it('Check again keeps the screen when there is still no seat', async () => {
+    const getOrg = vi.fn(async () => Promise.reject(locked()));
+    render(<ShellContainer route={bids} api={mockApi({ getOrg })} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(getOrg).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('button', { name: 'Check again' })).toBeTruthy();
+  });
+
+  it('Sign out calls the API and goes to log in', async () => {
+    const api = mockApi({ getOrg: vi.fn(async () => Promise.reject(locked())) });
+    render(<ShellContainer route={bids} api={api} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    expect(api.logOut).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(window.location.hash).toBe('#/login'));
+  });
+
+  it('a plain 403 still means no organization', async () => {
+    const api = mockApi({ getOrg: vi.fn(async () => Promise.reject(new ApiError('No organization', 403))) });
+    render(<ShellContainer route={bids} api={api} />);
+    expect(await screen.findByRole('button', { name: 'Account menu for Dana Reyes' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'You have no seat right now' })).toBeNull();
+  });
+
+  it('reloads once, without looping, when a seat is lost while the app is open', async () => {
+    let lost = false;
+    const getOrg = vi.fn(async () => {
+      if (!lost) return orgPayload();
+      // The api client tells listeners about every 403 seat_locked, as the real request core does.
+      notifySeatLocked();
+      return Promise.reject(locked());
+    });
+    render(<ShellContainer route={bids} api={mockApi({ getOrg })} />);
+    expect(await screen.findByRole('button', { name: 'Account menu for Dana Reyes' })).toBeTruthy();
+    expect(getOrg).toHaveBeenCalledTimes(1);
+    lost = true;
+    act(() => notifySeatLocked());
+    expect(await screen.findByRole('heading', { name: 'You have no seat right now' })).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(getOrg).toHaveBeenCalledTimes(2);
+    act(() => notifySeatLocked());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(getOrg).toHaveBeenCalledTimes(2);
   });
 });
 
