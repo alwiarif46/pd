@@ -12,14 +12,19 @@ import {
   isAdjustMode,
   isIsoDate,
   isReviewColor,
+  isUuid,
+  lockBidSchedule,
   planScheduleAdjust,
+  readDateChange,
   schema,
   toIsoDate,
   type ActivityKind,
   type AdjustPlan,
   type ReviewColor,
 } from '@pd/core';
+import { pendingDateChange, tabProposals } from './amendment-tabs.js';
 import { requireAuth } from './context.js';
+import { lockBid } from './credits.js';
 import { apiError, ERROR_MESSAGES, type ErrorCode } from './errors.js';
 import { type Db, findBid, inOrg } from './scope.js';
 import type { Result } from './tabs.js';
@@ -30,10 +35,17 @@ import type { Result } from './tabs.js';
  * the shared rules in packages/core schedule.ts with the bid's "Workdays only" setting
  * (bids.schedule_workdays_only), so the web preview and the server agree.
  *
- * Locking: seed and adjust take a per-bid advisory lock (outside the credit lock order in
- * credits.ts; no other path takes it), so two of them never interleave. Adjust moves a row only
- * while it is still unlocked (a conditional UPDATE), so a lock set meanwhile wins; the locked
- * submission that is the due date itself is the one exception.
+ * Locking: seed, adjust, and the worker's amendment tabs write (step 8) take the bid's schedule
+ * lock (packages/core lockBidSchedule, an advisory lock taken before any row lock, outside the
+ * credit lock order in credits.ts), so none of them interleave. Adjust moves a row only while it
+ * is still unlocked (a conditional UPDATE), so a lock set meanwhile wins; the locked submission
+ * that is the due date itself is the one exception. Adjust with an amendmentId then locks the bid
+ * and the amendment (credits.ts order) to apply and resolve the amendment's date change.
+ *
+ * Amendments (PR5): rows an amendment proposes (supersede_status 'proposed') are not activities
+ * until the user inserts them: the tab lists them under `proposals`, and adjust never moves them.
+ * Superseded and withdrawn rows stay listed (crossed out in the UI) but adjust never moves them
+ * either.
  */
 
 type ActivityRow = typeof schema.scheduleActivities.$inferSelect;
@@ -77,12 +89,17 @@ const OUT_OF_WINDOW = 'That change would move activities outside the years 1900 
 const END_BEFORE_START = 'The end date is before the start date.';
 
 async function lockSchedule(db: Db, bidId: string): Promise<void> {
-  await db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`schedule:${bidId}`}, 0))`);
+  await lockBidSchedule(db, bidId);
 }
 
+/** The bid's activities, without the rows an amendment only proposed. */
 function activities(db: Db, orgId: string, bidId: string) {
   return db.select().from(schema.scheduleActivities)
-    .where(and(eq(schema.scheduleActivities.bidId, bidId), eq(schema.scheduleActivities.orgId, orgId)))
+    .where(and(
+      eq(schema.scheduleActivities.bidId, bidId),
+      eq(schema.scheduleActivities.orgId, orgId),
+      sql`${schema.scheduleActivities.supersedeStatus} is distinct from 'proposed'`,
+    ))
     .orderBy(
       sql`${schema.scheduleActivities.startDate} asc nulls last`,
       asc(schema.scheduleActivities.createdAt),
@@ -90,9 +107,23 @@ function activities(db: Db, orgId: string, bidId: string) {
     );
 }
 
-/** GET /api/bids/:id/tabs/schedule: the activities (by start date, undated last) and the bid's setting. */
+/**
+ * GET /api/bids/:id/tabs/schedule: the activities (by start date, undated last), the bid's
+ * setting, the open amendment proposals (each inserted by confirming its link), and the pending
+ * date change an amendment made (null when none), which the date-change prompt answers.
+ */
 export async function scheduleTab(db: Db, orgId: string, bid: BidRow) {
-  return { activities: await activities(db, orgId, bid.id), workdaysOnly: bid.scheduleWorkdaysOnly };
+  return {
+    activities: await activities(db, orgId, bid.id),
+    workdaysOnly: bid.scheduleWorkdaysOnly,
+    proposals: await tabProposals(db, orgId, bid.id, 'schedule_activities'),
+    pendingDateChange: await pendingDateChange(db, orgId, bid),
+  };
+}
+
+/** Rows adjust may move: not superseded, withdrawn, or proposed by an amendment. */
+function inForce(row: ActivityRow): boolean {
+  return row.supersedeStatus === null || row.supersedeStatus === 'active';
 }
 
 // ---------------------------------------------------------------------------
@@ -303,12 +334,21 @@ export async function registerSchedule(app: FastifyInstance): Promise<void> {
    * Scale stretches from the bid's start date and shifts instead without one (`mode` says
    * which was done). Locked rows stay, except that in every mode (keep too) a locked 'submission'
    * starting on previousDue is the due date itself and moves to nextDue (`followsDue` in its
-   * move). The bid's due date is not changed here.
+   * move). Superseded, withdrawn, and proposed rows never move. The bid's due date is not changed
+   * here, unless:
+   *
+   * amendmentId (optional): the answer to that amendment's date change (the schedule tab's
+   * pendingDateChange). nextDue is then the amendment's and previousDue the bid's due date in force
+   * (the amendment's previousDue when the bid has none; any sent are ignored), the bid's due date
+   * is set to nextDue (the worker never changes it), and the change, and any
+   * lower-numbered amendment's change still open, are resolved. 404 when the amendment is not on
+   * this bid or has no date change; 409 `date_change_resolved` when it was already answered; 400
+   * `invalid_date` for shift or scale when the bid had no due date to move from (keep applies).
    */
   app.post('/api/bids/:id/schedule/adjust', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
     const id = (request.params as { id: string }).id;
-    const body = (request.body ?? {}) as { mode?: unknown; previousDue?: unknown; nextDue?: unknown; workdaysOnly?: unknown };
+    const body = (request.body ?? {}) as { mode?: unknown; previousDue?: unknown; nextDue?: unknown; workdaysOnly?: unknown; amendmentId?: unknown };
     if (!isAdjustMode(body.mode)) {
       return reply.code(400).send({ error: 'Choose shift, scale, or keep' });
     }
@@ -316,10 +356,15 @@ export async function registerSchedule(app: FastifyInstance): Promise<void> {
     if (body.workdaysOnly !== undefined && typeof body.workdaysOnly !== 'boolean') {
       return reply.code(400).send({ error: 'Send workdaysOnly as true or false.' });
     }
-    const previousDue = readDay(body.previousDue);
-    const nextDue = readDay(body.nextDue);
-    const datesSent = typeof previousDue === 'string' && typeof nextDue === 'string';
-    if (previousDue === false || nextDue === false || (mode !== 'keep' && !datesSent)) {
+    const amendmentId = body.amendmentId;
+    if (amendmentId !== undefined && amendmentId !== null && !isUuid(amendmentId)) {
+      return reply.code(404).send({ error: 'Amendment not found' });
+    }
+    const answering = typeof amendmentId === 'string';
+    const sentPrevious = readDay(body.previousDue);
+    const sentNext = readDay(body.nextDue);
+    const sentDates = typeof sentPrevious === 'string' && typeof sentNext === 'string';
+    if (!answering && (sentPrevious === false || sentNext === false || (mode !== 'keep' && !sentDates))) {
       return reply.code(400).send(apiError('invalid_date', 'Send previousDue and nextDue as YYYY-MM-DD dates.'));
     }
     const workdaysOverride = body.workdaysOnly;
@@ -330,7 +375,36 @@ export async function registerSchedule(app: FastifyInstance): Promise<void> {
       }
       const workdaysOnly = workdaysOverride ?? bid.scheduleWorkdaysOnly;
       await lockSchedule(db, bid.id);
-      const rows = await activities(db, orgId, bid.id);
+      let previousDue = sentDates ? sentPrevious as string : null;
+      let nextDue = sentDates ? sentNext as string : null;
+      let amendmentNo: number | null = null;
+      if (answering) {
+        // Lock order (credits.ts): bid, then amendment. Read again under the locks.
+        const [lockedBid] = await lockBid(db, orgId, bid.id);
+        const [amendment] = await db.select().from(schema.amendments).where(and(
+          eq(schema.amendments.id, amendmentId as string),
+          eq(schema.amendments.bidId, bid.id),
+          eq(schema.amendments.orgId, orgId),
+        )).for('update');
+        const change = amendment ? readDateChange(amendment.datesChanged) : null;
+        if (!amendment || !change) {
+          return respond(404, { error: 'This amendment has no date change' });
+        }
+        if (change.resolvedAt !== null) {
+          return respond(409, apiError('date_change_resolved'));
+        }
+        // The schedule moves from the due date in force now: the one the amendment saw may have
+        // moved since (another amendment's change answered, or Bid settings).
+        const currentDue = lockedBid?.dueDate ? toIsoDate(lockedBid.dueDate) : change.previousDue;
+        if (mode !== 'keep' && currentDue === null) {
+          return respond(400, apiError('invalid_date', 'The bid had no due date to move from. Keep the dates instead.'));
+        }
+        previousDue = currentDue;
+        nextDue = change.nextDue;
+        amendmentNo = amendment.amendmentNo;
+      }
+      const datesSent = previousDue !== null && nextDue !== null;
+      const rows = (await activities(db, orgId, bid.id)).filter(inForce);
       let plan: AdjustPlan;
       try {
         plan = planScheduleAdjust(rows.map((row) => ({
@@ -342,8 +416,8 @@ export async function registerSchedule(app: FastifyInstance): Promise<void> {
         })), {
           mode,
           // keep without dates: nothing moves whatever these are.
-          previousDue: datesSent ? previousDue : '2000-01-01',
-          nextDue: datesSent ? nextDue : '2000-01-01',
+          previousDue: datesSent ? previousDue! : '2000-01-01',
+          nextDue: datesSent ? nextDue! : '2000-01-01',
           anchor: storedDay(bid.startDate),
           workdaysOnly,
         });
@@ -369,7 +443,28 @@ export async function registerSchedule(app: FastifyInstance): Promise<void> {
         )).returning({ id: schema.scheduleActivities.id });
         if (row) moved.push(move);
       }
+      if (answering && nextDue !== null) {
+        // The prompt applies the amendment's due date (the worker never does), and the change is
+        // answered, with any lower-numbered amendment's change it outdates.
+        const now = new Date();
+        await db.update(schema.bids).set({ dueDate: fromIsoDate(nextDue), updatedAt: now })
+          .where(and(eq(schema.bids.id, bid.id), eq(schema.bids.orgId, orgId)));
+        const resolved = { resolvedAt: now.toISOString(), resolvedMode: plan.mode };
+        await db.update(schema.amendments).set({
+          datesChanged: sql`${schema.amendments.datesChanged} || ${JSON.stringify(resolved)}::jsonb`,
+          updatedAt: now,
+        }).where(and(
+          eq(schema.amendments.bidId, bid.id),
+          eq(schema.amendments.orgId, orgId),
+          sql`${schema.amendments.datesChanged} is not null`,
+          sql`${schema.amendments.datesChanged}->>'resolvedAt' is null`,
+          amendmentNo === null
+            ? eq(schema.amendments.id, amendmentId as string)
+            : sql`(${schema.amendments.id} = ${amendmentId} or ${schema.amendments.amendmentNo} < ${amendmentNo})`,
+        ));
+      }
       return {
+        ...(answering ? { amendmentId: amendmentId as string, dueDate: nextDue } : {}),
         ok: true as const,
         requestedMode: plan.requestedMode,
         mode: plan.mode,

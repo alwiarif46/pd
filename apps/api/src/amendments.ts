@@ -2,6 +2,7 @@ import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { isUuid, schema } from '@pd/core';
 import { requireAuth } from './context.js';
+import { confirmTabLink, isTabRowTable } from './amendment-tabs.js';
 import { lockBid, shareOrg } from './credits.js';
 import { apiError } from './errors.js';
 import { findBid, inOrg } from './scope.js';
@@ -10,7 +11,9 @@ export async function registerAmendments(app: FastifyInstance): Promise<void> {
   /**
    * The bid's amendment links, each with its amendment's number, the rows it names (null when a
    * row is gone), and sourcePage and sourceQuote: the amendment text behind a supersede or
-   * withdraw (null on add links and on links written before migration 0009).
+   * withdraw (null on add links and on links written before migration 0009). Links of the bid
+   * facts and the schedule (step 8, PR5) name their rows too: a fact as its field and value, an
+   * activity as its label and start day.
    */
   app.get('/api/bids/:id/amendment-links', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
@@ -31,9 +34,10 @@ export async function registerAmendments(app: FastifyInstance): Promise<void> {
         inArray(schema.amendmentLinks.amendmentId, amendments.map((amendment) => amendment.id)),
         eq(schema.amendmentLinks.orgId, orgId),
       ));
-      const rowIds = [...new Set(links.flatMap((link) => (
-        link.rowTable === 'compliance_rows' ? [link.oldRowId, link.newRowId] : []
+      const idsOf = (table: string) => [...new Set(links.flatMap((link) => (
+        link.rowTable === table ? [link.oldRowId, link.newRowId] : []
       )).filter((id): id is string => Boolean(id)))];
+      const rowIds = idsOf('compliance_rows');
       // Only rows of this organization and this bid: a link that names any other row gets null.
       const rows = rowIds.length === 0 ? [] : await db.select({
         id: schema.complianceRows.id,
@@ -45,16 +49,47 @@ export async function registerAmendments(app: FastifyInstance): Promise<void> {
         eq(schema.complianceRows.bidId, bidId),
         eq(schema.complianceRows.orgId, orgId),
       ));
-      const byId = new Map(rows.map((row) => [row.id, {
+      const byId = new Map(rows.map((row) => [`compliance_rows:${row.id}`, {
         rowId: row.id,
         label: row.reqId,
         text: row.requirementText,
         sourcePage: row.sourcePage,
       }]));
+      const factIds = idsOf('bid_facts');
+      const facts = factIds.length === 0 ? [] : await db.select({
+        id: schema.bidFacts.id,
+        field: schema.bidFacts.field,
+        value: schema.bidFacts.value,
+        sourcePage: schema.bidFacts.sourcePage,
+      }).from(schema.bidFacts).where(and(
+        inArray(schema.bidFacts.id, factIds),
+        eq(schema.bidFacts.bidId, bidId),
+        eq(schema.bidFacts.orgId, orgId),
+      ));
+      for (const fact of facts) {
+        byId.set(`bid_facts:${fact.id}`, { rowId: fact.id, label: fact.field, text: fact.value, sourcePage: fact.sourcePage });
+      }
+      const activityIds = idsOf('schedule_activities');
+      const activities = activityIds.length === 0 ? [] : await db.select({
+        id: schema.scheduleActivities.id,
+        label: schema.scheduleActivities.label,
+        startDate: schema.scheduleActivities.startDate,
+        sourcePage: schema.scheduleActivities.sourcePage,
+      }).from(schema.scheduleActivities).where(and(
+        inArray(schema.scheduleActivities.id, activityIds),
+        eq(schema.scheduleActivities.bidId, bidId),
+        eq(schema.scheduleActivities.orgId, orgId),
+      ));
+      for (const activity of activities) {
+        byId.set(`schedule_activities:${activity.id}`, {
+          rowId: activity.id,
+          label: activity.label,
+          text: activity.startDate ? activity.startDate.toISOString().slice(0, 10) : '',
+          sourcePage: activity.sourcePage,
+        });
+      }
       const numbers = new Map(amendments.map((amendment) => [amendment.id, amendment.amendmentNo]));
-      const lookup = (link: { rowTable: string }, id: string | null) => (
-        link.rowTable === 'compliance_rows' && id ? byId.get(id) ?? null : null
-      );
+      const lookup = (link: { rowTable: string }, id: string | null) => (id ? byId.get(`${link.rowTable}:${id}`) ?? null : null);
       return links.map((link) => ({
         ...link,
         amendmentNo: numbers.get(link.amendmentId) ?? null,
@@ -121,7 +156,13 @@ async function decide(
       return respond(409, apiError('link_already_decided'));
     }
     const now = new Date();
-    if (status === 'confirmed' && link.rowTable === 'compliance_rows' && link.oldRowId && (link.action === 'supersede' || link.action === 'withdraw')) {
+    if (status === 'confirmed' && isTabRowTable(link.rowTable) && link.action === 'supersede') {
+      // Insert of an amendment's proposed fact or date (step 8): the proposed row joins the tab.
+      const confirmed = await confirmTabLink(db, orgId, userId, bid.id, link.rowTable, link, amendment.amendmentNo);
+      if (confirmed !== 'ok') {
+        return respond(409, apiError(confirmed));
+      }
+    } else if (status === 'confirmed' && link.rowTable === 'compliance_rows' && link.oldRowId && (link.action === 'supersede' || link.action === 'withdraw')) {
       const ids = [link.oldRowId, ...(link.action === 'supersede' && link.newRowId ? [link.newRowId] : [])];
       const rows = await db.select({
         id: schema.complianceRows.id,
