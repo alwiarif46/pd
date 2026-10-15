@@ -1,4 +1,5 @@
 import { Queue } from 'bullmq';
+import { queueJobId } from '@pd/core';
 import { redisOptions, type JobPayload } from './redis.js';
 
 const queues = new Map<string, Queue<JobPayload>>();
@@ -14,5 +15,5 @@ export function getQueue(name: string): Queue<JobPayload> {
 }
 
 export async function enqueue(name: string, payload: JobPayload): Promise<void> {
-  await getQueue(name).add(name, payload, { jobId: `${name}:${payload.jobId}` });
+  await getQueue(name).add(name, payload, { jobId: queueJobId(name, payload.jobId) });
 }
