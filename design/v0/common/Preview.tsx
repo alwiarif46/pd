@@ -16,6 +16,10 @@ export default function Preview() {
   const [lastAction, setLastAction] = useState('None yet');
   const action = (name: string) => setLastAction(name);
   const tab = tabs[0];
+  const setState = (next: string) => {
+    setActive(next);
+    setLastAction('None yet');
+  };
 
   return (
     <div className="flex min-h-screen flex-col gap-6 bg-canvas p-4 font-sans text-ink sm:p-8">
@@ -30,7 +34,7 @@ export default function Preview() {
               key={state}
               type="button"
               aria-pressed={active === state}
-              onClick={() => setActive(state)}
+              onClick={() => setState(state)}
               className="rounded-md border border-line bg-paper px-3 py-2 text-sm capitalize focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary data-[active=true]:bg-primary data-[active=true]:text-primary-foreground"
               data-active={active === state}
             >
