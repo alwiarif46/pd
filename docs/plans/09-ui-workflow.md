@@ -561,20 +561,10 @@ interface SourceViewerProps {
 - The viewing token and its quiet renewal are the container's job; the ui never sees a URL.
 
 ### 5.19 API gaps (container supplies until the API adds them)
-- Members: `MembershipDto` has `userId` and `role` only; name and email are missing (5.14).
-- Billing: no Stripe Checkout or Customer Portal call in the client; `billingAvailable` false until it exists. Seat limit is a container constant from 06 s2 (5.14, `UpgradeDialog`).
-- Processing: `JobDto` has `queuePosition` and `queueDepth` but no expected wait; `etaSeconds` is null or a container estimate. Step labels come from the job type (5.12).
-- Documents: no `restore_requested` live status and no restored-until date on `DocumentDto` (07 s2 `archive_objects.restored_until`); no amendment key-check result (`keyCheck`); no page number for a marking; the overrides-per-bid limit is a container constant (06 s4, open). `restoreDocument` returns a status the container holds (5.11).
 - Upload refusals arrive as API errors; the container maps them to the 05 s3.10 messages (5.2, 5.11).
-- Compliance: no endpoint for "check these" pre-scan hits without a row; `status` and `reqType` are untyped strings to map; `page_estimated` and `ocr` flags come from the document's `extractMethod`; `quote_unverified` from `quoteVerified` (5.4).
-- Outline: `RowPatchMap.outline_items` has no `parentId` or position, so `onMove` has no API yet (5.5).
-- Resumes: `CandidateDto` has no processing status or upload date (derive from its document and job); the AI's original match result is not kept, so a reviewer cannot reset an override (5.6).
-- Reviews: `ReviewFindingDto` has no author; `disposition` is an untyped string; `ReviewDto` has the draft document id, not its name (5.7).
-- Production and Orals: `owner` (both) and `minutes` (Orals) are not in the DTOs or row patches (5.8, 5.9).
-- Row history: `RowHistoryDto` has `userId`, not a name (5.17).
-- Amendment links: `AmendmentLinkDto` has `amendmentId`, not the number, and no row text; the container joins them from the tab rows (5.12).
-- Account: `MePatch` takes a new password without the current one (5.15).
-- Bids: `BidDto.status` is an untyped string; the default files-live-until date is not on `BidDto` (5.2, 5.11).
+- Amendment key check: the worker does not run it yet, so `DocumentDto.keyCheck` is not set from the amendment's text (06 s4, 5.11).
+- Seats after a move to free: not enforced; every member keeps access. 06 s5 (the owner and the earliest-joined member keep access) needs the API to apply it (5.14, `UpgradeDialog`).
+- Retention and restore: no worker archives files at their live-until date or moves a restore from `restore_requested` through `restoring` to `restored`, so documents stay in the state the API set (07 s2, 5.11).
 
 ## 6. Order of v0 chats
 
@@ -636,3 +626,4 @@ Each chat ends the same way: v0 pushes to the `v0-ui` branch, you merge it to `m
 | 14 Oct 2026 | Account: email and phone are read-only in v1 (support changes them); password change asks for the current password |
 | 14 Oct 2026 | Source viewer: the container renders the PDF page with the highlight (`pageView`); v0 builds the frame and the text, archived, and deleted modes |
 | 14 Oct 2026 | Order of v0 chats set to 12 chats (s6); prompts in `docs/v0-prompts.md`; API gaps listed in 5.19 |
+| 15 Oct 2026 | 5.19 trimmed: Members, Billing, Processing, Documents, Bids, Compliance, Outline, Resumes, Reviews, Production and Orals, Row history, Amendment links, and Account are in the API. Open: the worker amendment key check, seats after a move to free, the retention and restore worker |
