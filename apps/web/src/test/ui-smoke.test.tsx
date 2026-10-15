@@ -195,9 +195,9 @@ describe('shell', () => {
         <p>Tab content</p>
       </AppShell>,
     );
-    expect(within(screen.getByRole('button', { name: 'Documents' })).getByLabelText('processing')).toBeTruthy();
-    expect(within(screen.getByRole('button', { name: 'Compliance' })).getByLabelText('failed')).toBeTruthy();
-    expect(within(screen.getByRole('button', { name: 'Schedule' })).getByLabelText('waiting')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Documents, Processing' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Compliance, Failed' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Schedule, Needs you' })).toBeTruthy();
   });
 
   it('opens the tab list in a sheet from the Menu button', async () => {
@@ -233,6 +233,18 @@ describe('shell', () => {
     );
     expect(screen.getByRole('button', { name: 'Organization' })).toBeTruthy();
     expect(screen.getByText('Detail')).toBeTruthy();
+    // The narrow-screen sheet starts closed, so the page stays reachable.
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('opens the row detail sheet from its button', async () => {
+    render(
+      <AppShell {...base} bid={null} activeTab={null} activePage="bids" oralsEnabled plan="growth" detail={<p>Detail</p>}>
+        <p>Page</p>
+      </AppShell>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'View row detail' }));
+    expect(within(await screen.findByRole('dialog')).getByText('Detail')).toBeTruthy();
   });
 
   it('renders the dialogs open', () => {
