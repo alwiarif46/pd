@@ -2,6 +2,7 @@
 # fake docker for the ops tests: logs argv to $FAKE_CALLS (and the stdin size of exec/run), answers the few
 # queries the scripts make from FAKE_* env. The real Docker is never reached.
 printf 'docker %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
+printf 'env PD_IMAGE_PREFIX=%s PD_IMAGE_TAG=%s PD_HOSTING_SUBPROCESSOR=%s PD_BACKUP_SUBPROCESSOR=%s PD_DATA_ROOT=%s\n' "${PD_IMAGE_PREFIX:-}" "${PD_IMAGE_TAG:-}" "${PD_HOSTING_SUBPROCESSOR:-}" "${PD_BACKUP_SUBPROCESSOR:-}" "${PD_DATA_ROOT:-}" >>"${FAKE_CALLS:-/dev/null}.env"
 args=" $* "
 case "$1" in
   compose)
@@ -31,7 +32,7 @@ case "$1" in
           *) : ;;
         esac
         cat >/dev/null 2>&1 || true ;;
-      *" pg_restore "*) cat >/dev/null ;;
+      *" pg_restore "*) cat >/dev/null; exit "${FAKE_PGRESTORE_EXIT:-0}" ;;
     esac
     exit 0 ;;
   rm | stop | start | pull | build | ps | logs | image) exit 0 ;;

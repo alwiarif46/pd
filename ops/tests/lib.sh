@@ -13,6 +13,15 @@
 # Provides: ok bad skip summary, PASS FAIL SKIPPED counters, REPO, TMP, PY, ORIG_PATH, guard_fakes, guard_no_luksformat.
 
 exec </dev/null
+# TMP is also an environment variable on Windows (the user's real temp directory): never trust an inherited value.
+TMP=""
+# cleanup_tmp: remove only a directory this harness created with mktemp -d (name tmp.XXXXXXXXXX). Anything else is left alone.
+cleanup_tmp() {
+  case "${TMP:-}" in
+    */tmp.??????????) [[ -d "$TMP" ]] && rm -rf "$TMP" ;;
+  esac
+  return 0
+}
 PASS=0 FAIL=0 SKIPPED=0
 ok()   { PASS=$((PASS + 1)); printf 'PASS  %s\n' "$1"; }
 bad()  { FAIL=$((FAIL + 1)); printf 'FAIL  %s\n' "$1"; [[ -n "${2:-}" ]] && printf '      %s\n' "$2"; return 0; }
@@ -35,7 +44,8 @@ find_python() {
 harness_init() {
   REPO="$1"
   TMP="$(mktemp -d)"
-  trap 'rm -rf "$TMP"' EXIT
+  case "$TMP" in */tmp.??????????) ;; *) echo "ABORT: mktemp -d returned an unexpected path ($TMP)"; TMP=""; exit 1 ;; esac
+  trap cleanup_tmp EXIT
   ORIG_PATH="$PATH"
   PY="$(find_python)" || { echo "SKIP  whole suite: no working Python 3.11+ on this machine (install python3 or run in CI)"; exit 0; }
   export FAKE_PY="$PY"

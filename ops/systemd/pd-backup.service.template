@@ -1,0 +1,12 @@
+# /etc/systemd/system/pd-backup.service - rendered by ops/install.sh. Hourly encrypted database backup.
+[Unit]
+Description=PD database backup (pg_dump -> Borg on /mnt/pdbackup -> B2)
+Requires=docker.service
+After=docker.service mnt-pdbackup.mount
+RequiresMountsFor=/mnt/pddata /mnt/pdbackup
+
+[Service]
+Type=oneshot
+ExecStart={{PROJECT_DIR}}/infra/scripts/backup.sh
+Nice=10
+TimeoutStartSec=3h
