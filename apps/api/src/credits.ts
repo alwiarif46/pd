@@ -1,6 +1,6 @@
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { and, desc, eq, gt, gte, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, isNotNull, lte, ne, sql } from 'drizzle-orm';
 import { periodAllowance, periodContaining, type Plan, schema } from '@pd/core';
 import type { Db } from './scope.js';
 
@@ -24,7 +24,16 @@ import type { Db } from './scope.js';
  *   amendment) and PATCH of the number (organization key share, document, bid, amendment, rows).
  *   The worker's amendment write (apps/worker/src/amendment-job.ts) takes organization key
  *   share, document, its check_these rows, bid, amendment, then the old rows its links close (by
- *   id); the matrix write takes document, check_these, bid (for req id allocation), credit. Link
+ *   id); the matrix write takes organization key share, document, check_these, bid (for req id
+ *   allocation), credit. The worker's credit gate (apps/worker/src/credit-gate.ts: classify of the
+ *   solicitation set, and the matrix run before its AI call), when the credit looks missing,
+ *   takes organization key share, document, bid, and writes a held job row under them; a failed pipeline step
+ *   (apps/worker/src/steps.ts) takes organization key share, writes its failed job row, then
+ *   releases a solicitation's reservation (bid, credit). The job retry route and the worker's kick
+ *   of held files first take each document's job lock (packages/core lockDocumentJobs: an
+ *   advisory lock, not a row lock, taken before any row lock, several in document id order); the
+ *   retry then takes the organization and the bid. Locks on several documents (bid delete, the
+ *   kick) go by id. Link
  *   confirm and reject take organization key share, bid, amendment, link, rows (by id). Row
  *   delete and merge of compliance rows lock the check_these hits promoted to the removed rows,
  *   then the bid, then the amendments of proposals to the removed rows (one ordered statement),
@@ -236,6 +245,42 @@ export async function releaseBidCredit(db: Db, orgId: string, bidId: string, cre
     gt(schema.rfpCredits.reserved, 0),
   ));
   return true;
+}
+
+/**
+ * A solicitation's job never reached the queue after the request reserved the bid's credit for it
+ * (a retry, or an upload complete): nothing will settle that reservation, so it goes back, but
+ * only while it is still this file's alone. Under the bid lock, it is kept when the bid's credit
+ * is no longer reserved, or when another live solicitation document of the bid, or an open
+ * solicitation upload session that reserved, may be relying on it (the reservation may have been
+ * released and taken again meanwhile; a credit id names the period, not the reservation, so it
+ * cannot tell them apart). Those files settle it themselves, as on document delete. True when
+ * released.
+ */
+export async function releaseUnsharedReservation(db: Db, orgId: string, bidId: string, documentId: string): Promise<boolean> {
+  const [bid] = await lockBid(db, orgId, bidId);
+  if (bid?.creditStatus !== 'reserved') {
+    return false;
+  }
+  const [sibling] = await db.select({ id: schema.documents.id }).from(schema.documents).where(and(
+    eq(schema.documents.bidId, bidId),
+    eq(schema.documents.orgId, orgId),
+    eq(schema.documents.kind, 'solicitation'),
+    ne(schema.documents.id, documentId),
+    notDeleted(),
+  )).limit(1);
+  const [session] = await db.select({ id: schema.uploadSessions.id }).from(schema.uploadSessions).where(and(
+    eq(schema.uploadSessions.bidId, bidId),
+    eq(schema.uploadSessions.orgId, orgId),
+    eq(schema.uploadSessions.kind, 'solicitation'),
+    eq(schema.uploadSessions.status, 'open'),
+    isNotNull(schema.uploadSessions.creditId),
+    gt(schema.uploadSessions.expiresAt, new Date()),
+  )).limit(1);
+  if (sibling || session) {
+    return false;
+  }
+  return releaseBidCredit(db, orgId, bidId);
 }
 
 /**

@@ -566,7 +566,6 @@ interface SourceViewerProps {
 
 ### 5.19 API gaps (container supplies until the API adds them)
 - Upload refusals arrive as API errors; the container maps them to the 05 s3.10 messages (5.2, 5.11).
-- Seats after a move to free: not enforced; every member keeps access. 06 s5 (the owner and the earliest-joined member keep access) needs the API to apply it (5.14, `UpgradeDialog`).
 - Retention and restore: no worker archives files at their live-until date or moves a restore from `restore_requested` through `restoring` to `restored`, so documents stay in the state the API set (07 s2, 5.11).
 
 ## 6. Order of v0 chats
@@ -634,3 +633,4 @@ Each chat ends the same way: v0 pushes to the `v0-ui` branch, you merge it to `m
 | 15 Oct 2026 | 5.11: override of a `bid_key_pending` amendment refused with `set_bid_number_first`; a bid number with no digit never matches |
 | 15 Oct 2026 | 5.11: amendment number contract additions documented (`amendmentNoAssumed`, `amendmentNoFound`, `needsNumber`, `onSetAmendmentNo`, number field on "Add amendment"); API and web types done, UI not built yet |
 | 15 Oct 2026 | 5.12: amendment links carry `sourcePage` and `sourceQuote`; adds are never proposed; decisions final with 409 codes; `AmendmentMark` container mapping written (no "Amd 0" fallback) |
+| 16 Oct 2026 | Seats after a move to free enforced by the API (06 s5): removed from 5.19. A member past the plan's seats gets 403 `seat_locked` on every org route; `GET /api/org/members` returns `seatLocked` per member (API and web types only, UI not built yet: 5.14, `UpgradeDialog`) |

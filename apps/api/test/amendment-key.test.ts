@@ -151,7 +151,8 @@ describe.skipIf(Boolean(unavailable))('amendment solicitation key check', () => 
 
   async function memberCall(tenant: Tenant) {
     const member = await createUser('amend-member');
-    await withOrg(tenant.orgId, (db) => db.insert(schema.memberships).values({ orgId: tenant.orgId, userId: member.userId, role: 'member' }));
+    // Joined before createTenant's member, so it holds the free plan's second seat (06 s5).
+    await withOrg(tenant.orgId, (db) => db.insert(schema.memberships).values({ orgId: tenant.orgId, userId: member.userId, role: 'member', createdAt: new Date(0) }));
     return as(app, member.token);
   }
 
@@ -267,7 +268,9 @@ describe.skipIf(Boolean(unavailable))('amendment solicitation key check', () => 
     const documentId = await amendmentDoc(tenant, `Solicitation No. ${BID_NUMBER}`);
     queueDown.value = true;
     try {
-      await expect(classify.processClassify(payload(tenant, documentId))).rejects.toThrow('redis down');
+      // Through the worker's failure wrapper, as in production: still one failed row, not two.
+      const { guardStep } = await import('../../worker/src/steps.js');
+      await expect(guardStep('classify', classify.processClassify)(payload(tenant, documentId))).rejects.toThrow('redis down');
     } finally {
       queueDown.value = false;
     }

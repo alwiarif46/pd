@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import type { FastifyReply } from 'fastify';
 import { isUuid, schema, withOrg } from '@pd/core';
+import { releaseUnsharedReservation } from './credits.js';
 
 export type Db = Parameters<Parameters<typeof withOrg>[1]>[0];
 
@@ -63,6 +64,12 @@ export interface Outcome {
 export interface QueuedJob {
   jobId: string;
   enqueue: () => Promise<void>;
+  /**
+   * A solicitation whose request reserved the bid's credit for this job (an upload complete or a
+   * retry). If the queue call fails, the job never runs and so never settles it: the reservation
+   * goes back while it is still this file's alone (releaseUnsharedReservation).
+   */
+  release?: { bidId: string; documentId: string };
 }
 
 /**
@@ -71,7 +78,7 @@ export interface QueuedJob {
  */
 export async function queueAfterCommit(orgId: string, outcome: Outcome): Promise<void> {
   let failure: { error: unknown } | null = null;
-  for (const { jobId, enqueue } of outcome.queue ?? []) {
+  for (const { jobId, enqueue, release } of outcome.queue ?? []) {
     try {
       await enqueue();
     } catch (error) {
@@ -82,6 +89,11 @@ export async function queueAfterCommit(orgId: string, outcome: Outcome): Promise
           error: 'The step could not be queued. Retry it.',
           updatedAt: new Date(),
         }).where(and(eq(schema.jobs.id, jobId), eq(schema.jobs.orgId, orgId)));
+        // Lock order bid, credit: a reservation already settled, or shared with another file of
+        // the bid, is left alone; the retry of the failed job reserves again if it needs to.
+        if (release) {
+          await releaseUnsharedReservation(db, orgId, release.bidId, release.documentId);
+        }
       });
     }
   }

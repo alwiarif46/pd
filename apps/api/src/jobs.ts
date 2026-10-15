@@ -1,8 +1,8 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { isUuid, schema, withOrg } from '@pd/core';
+import { isUuid, lockDocumentJobs, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
-import { lockBid, lockOrg, reserveForBid } from './credits.js';
+import { lockBid, lockOrg, reserveForBid, shareOrg } from './credits.js';
 import { apiError } from './errors.js';
 import { findBid, findDocument, type Outcome, queueAfterCommit } from './scope.js';
 import { queueInfo } from './queue-stats.js';
@@ -67,11 +67,33 @@ export async function registerJobs(app: FastifyInstance): Promise<void> {
       if (!document?.storagePath) {
         return { code: 404, body: { error: 'The file is no longer available' } };
       }
+      // The document's job lock (an advisory lock held until COMMIT, taken before any row lock)
+      // serialises retries of one file with each other and with the worker's kick of a held file,
+      // which takes it too: only a retry of the document's newest unfinished or failed step runs,
+      // so a double click, or a retry racing the kick, never runs one file twice. It is not a row
+      // lock, so it adds nothing to the row lock order (credits.ts).
+      await lockDocumentJobs(db, document.id);
+      // Lock order: organization (FOR UPDATE when a credit may be reserved, else the key share the
+      // job insert needs), bid, credit (credits.ts).
+      const org = document.kind === 'solicitation' ? await lockOrg(db, orgId) : null;
+      if (document.kind !== 'solicitation') {
+        await shareOrg(db, orgId);
+      }
+      // A newer completed step does not count: there would be nothing left to retry.
+      const [newer] = await db.select({ id: schema.jobs.id }).from(schema.jobs).where(and(
+        eq(schema.jobs.documentId, document.id),
+        eq(schema.jobs.orgId, orgId),
+        ne(schema.jobs.status, 'completed'),
+        // Compared in the database: created_at has microseconds, a JS Date only milliseconds.
+        sql`${schema.jobs.createdAt} > (select created_at from jobs where id = ${job.id})`,
+      )).limit(1);
+      if (newer) {
+        return { code: 409, body: apiError('retry_superseded') };
+      }
       // A failed run released the solicitation's credit (06 s4). Rerunning it builds the matrix
       // again, so it needs a credit again: reserve one before queueing, or refuse with 402.
-      // Lock order: organization, bid, credit (as everywhere else).
+      let reserved = false;
       if (document.kind === 'solicitation') {
-        const org = await lockOrg(db, orgId);
         const [bid] = await lockBid(db, orgId, job.bidId);
         if (!org || !bid) {
           return { code: 404, body: { error: 'Job not found' } };
@@ -81,6 +103,7 @@ export async function registerJobs(app: FastifyInstance): Promise<void> {
           if (!creditId) {
             return { code: 402, body: apiError('out_of_credits') };
           }
+          reserved = true;
         }
       }
       const [created] = await db.insert(schema.jobs).values({
@@ -104,6 +127,8 @@ export async function registerJobs(app: FastifyInstance): Promise<void> {
         queue: [{
           jobId: created.id,
           enqueue: () => (job.type === 'scan' ? enqueueScan(payload) : enqueueClassify(payload)),
+          // The credit this retry reserved goes back if its job never reaches the queue.
+          release: reserved ? { bidId: job.bidId, documentId: job.documentId } : undefined,
         }],
       };
     });

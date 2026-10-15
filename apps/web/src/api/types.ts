@@ -181,6 +181,12 @@ export interface OrgMemberDto {
   joinedAt: string;
   /** The signed-in user. */
   isYou: boolean;
+  /**
+   * The plan has no seat for this member (06 s5, after a move to a smaller plan): owners first, then
+   * members in the order they joined, hold the seats. A seat-locked member is refused everywhere
+   * with 403 `seat_locked` until the owner removes members or upgrades. Never true for an owner.
+   */
+  seatLocked: boolean;
 }
 
 export type PaidPlan = Exclude<Plan, 'free'>;

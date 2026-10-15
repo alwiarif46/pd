@@ -10,7 +10,10 @@ import {
   type PreScanHit,
 } from '@pd/ai';
 import { inferActivityKind, schema, withOrg } from '@pd/core';
-import { kickAmendments } from './kick.js';
+import { checkCredit, heldUnlessCredited } from './credit-gate.js';
+import { shareOrg } from './key-check.js';
+import { kickAmendments, kickHeldDocuments } from './kick.js';
+import { writeDocumentDates, writeDocumentFacts } from './ai-rows.js';
 import { allocateReqIds } from './req-ids.js';
 import type { JobPayload } from './redis.js';
 
@@ -73,15 +76,19 @@ export async function recordRun(input: {
 
 export type Db = Parameters<Parameters<typeof withOrg>[1]>[0];
 
-async function settleCredit(orgId: string, bidId: string, action: 'consume' | 'release'): Promise<void> {
-  await withOrg(orgId, (db) => settleCreditIn(db, orgId, bidId, action));
+/**
+ * Consumes or releases the bid's reservation in its own transaction (see settleCreditIn). True
+ * when this call settled it; false when the bid holds no reservation (already settled).
+ */
+export async function settleCredit(orgId: string, bidId: string, action: 'consume' | 'release'): Promise<boolean> {
+  return withOrg(orgId, (db) => settleCreditIn(db, orgId, bidId, action));
 }
 
 /**
  * settleCredit inside the caller's transaction. Takes the bid row, then the credit row. True when
  * this call settled the reservation.
  */
-async function settleCreditIn(db: Db, orgId: string, bidId: string, action: 'consume' | 'release'): Promise<boolean> {
+export async function settleCreditIn(db: Db, orgId: string, bidId: string, action: 'consume' | 'release'): Promise<boolean> {
   {
     // Claim the reservation with a conditional update: only one settler (this job, a retry, the
     // api releasing an abandoned upload, or a bid delete) flips it, and only that one touches
@@ -170,14 +177,14 @@ export async function processCompliance(payload: JobPayload): Promise<void> {
   const settlesCredit = payload.kind === 'solicitation';
   let consumed = false;
   try {
-    // A solicitation the user deleted before its matrix was built is not processed: the api
-    // released its credit, so building the matrix now would give it away for free. The credit
-    // is left alone here: if another solicitation of the bid is still live, its own run settles
-    // it; if not, the api already released it.
-    const [document] = await withOrg(payload.orgId, (db) => db.select({ liveStatus: schema.documents.liveStatus })
-      .from(schema.documents)
-      .where(and(eq(schema.documents.id, payload.documentId), eq(schema.documents.orgId, payload.orgId))));
-    if (!document || document.liveStatus === 'deleted') {
+    // Checked before any AI is spent, and again under the locks below. A solicitation the user
+    // deleted before its matrix was built is not processed: the api released its credit, so
+    // building the matrix now would give it away for free. The credit is left alone here: if
+    // another solicitation of the bid is still live, its own run settles it; if not, the api
+    // already released it. A file whose bid holds no credit is stopped with a failed classify row
+    // (credit-gate.ts): a solicitation whose credit a failed sibling file released is retried by
+    // the user (the retry reserves again); an attachment waits for the solicitation's matrix.
+    if (await checkCredit(payload) !== 'go') {
       return;
     }
     const pages = await loadPages(payload.orgId, payload.documentId);
@@ -185,10 +192,13 @@ export async function processCompliance(payload: JobPayload): Promise<void> {
     // Rows, "check these" hits, the run record, and the credit consume commit together, so a
     // crash between them cannot leave rows without a consumed credit or a credit still reserved
     // for a built matrix. The document is re-checked under a row lock in the same transaction
-    // (lock order: document, check_these, bid, credit): a delete that committed meanwhile wins,
-    // and nothing is written. The bid is locked so req ids continue the bid's existing ones
-    // without colliding with an amendment run or another attachment's run.
+    // (lock order: organization key share, document, check_these, bid, credit): a delete that
+    // committed meanwhile wins, and nothing is written. The bid is locked so req ids continue the
+    // bid's existing ones without colliding with an amendment run or another attachment's run.
+    // The organization is key-shared first because the rows, the run record and a held job row
+    // inserted after the bid lock take that lock for their foreign key (credits.ts shareOrg).
     consumed = await withOrg(payload.orgId, async (db): Promise<boolean> => {
+      await shareOrg(db, payload.orgId);
       const [current] = await db.select({ liveStatus: schema.documents.liveStatus })
         .from(schema.documents)
         .where(and(eq(schema.documents.id, payload.documentId), eq(schema.documents.orgId, payload.orgId)))
@@ -203,13 +213,26 @@ export async function processCompliance(payload: JobPayload): Promise<void> {
       const [bid] = await db.select({ creditStatus: schema.bids.creditStatus }).from(schema.bids)
         .where(and(eq(schema.bids.id, payload.bidId), eq(schema.bids.orgId, payload.orgId)))
         .for('update');
-      // An attachment's rows join the matrix only while the bid's solicitation holds a credit.
-      if (!bid || (!settlesCredit && bid.creditStatus !== 'reserved' && bid.creditStatus !== 'consumed')) {
+      // Rows join the matrix only while the bid's solicitation holds a credit. For an attachment
+      // that is the set's credit; for a solicitation it guards against a sibling solicitation file
+      // that failed and released the bid's reservation while this run was building: writing the
+      // matrix now would give it away for free. Either way a failed classify row is left instead.
+      if (!bid || await heldUnlessCredited(db, payload, bid.creditStatus) !== 'go') {
         return false;
       }
       await replaceCheckThese(db, payload, result.checkThese ?? []);
-      const reqIds = await allocateReqIds(db, payload.orgId, payload.bidId, result.requirements);
-      const rows = result.requirements.map((row, index) => ({ row, reqId: reqIds[index] }));
+      // A second run of a document whose matrix rows are already written (a duplicate job, a
+      // retry of a file that went through) adds no rows: they would duplicate its requirements.
+      // The existing rows are kept, not replaced: users edit them, promote hits to them, and
+      // amendments link to and supersede them. Checked under the document lock taken above.
+      const [written] = await db.select({ id: schema.complianceRows.id }).from(schema.complianceRows).where(and(
+        eq(schema.complianceRows.documentId, payload.documentId),
+        eq(schema.complianceRows.orgId, payload.orgId),
+        eq(schema.complianceRows.origin, 'ai'),
+      )).limit(1);
+      const requirements = written ? [] : result.requirements;
+      const reqIds = await allocateReqIds(db, payload.orgId, payload.bidId, requirements);
+      const rows = requirements.map((row, index) => ({ row, reqId: reqIds[index] }));
       for (const chunk of chunks(rows)) {
         await db.insert(schema.complianceRows).values(chunk.map(({ row, reqId }) => ({
           orgId: payload.orgId,
@@ -254,8 +277,10 @@ export async function processCompliance(payload: JobPayload): Promise<void> {
     }
     throw error;
   }
-  // The matrix is built: amendments that waited for it (04 s3.1, matrix first) may run now.
+  // The matrix is built: amendments that waited for it (04 s3.1, matrix first) may run now, and
+  // attachments and amendments held while the bid had no credit go through classify again.
   if (consumed) {
+    await kickHeldDocuments(payload.orgId, payload.bidId);
     await kickAmendments(payload.orgId, payload.bidId);
   }
 }
@@ -294,11 +319,8 @@ export async function processOverview(payload: JobPayload): Promise<void> {
       origin: 'ai' as const,
     }];
   });
-  await withOrg(payload.orgId, async (db) => {
-    if (facts.length > 0) {
-      await db.insert(schema.bidFacts).values(facts);
-    }
-  });
+  // A rerun (retry, or a kick of a held file) adds only facts the document does not have yet.
+  await writeDocumentFacts(payload, facts);
   await recordRun({
     orgId: payload.orgId,
     bidId: payload.bidId,
@@ -323,20 +345,19 @@ export async function processDates(payload: JobPayload): Promise<void> {
   // As migration 0010 backfilled AI dates: the label's kind, else a milestone.
   const label = 'Date from solicitation';
   const inferred = inferActivityKind(label);
-  await withOrg(payload.orgId, async (db) => {
-    await db.insert(schema.scheduleActivities).values(hits.map((hit) => ({
-      orgId: payload.orgId,
-      bidId: payload.bidId,
-      label,
-      kind: inferred.kind === 'custom' ? 'milestone' as const : inferred.kind,
-      reviewColor: inferred.reviewColor,
-      locked: true,
-      documentId: payload.documentId,
-      sourcePage: hit.pageNo,
-      sourceQuote: hit.text,
-      quoteVerified: true,
-      origin: 'ai' as const,
-      note: hit.text,
-    })));
-  });
+  // A rerun adds only dates the document does not have yet, and never changes existing rows.
+  await writeDocumentDates(payload, hits.map((hit) => ({
+    orgId: payload.orgId,
+    bidId: payload.bidId,
+    label,
+    kind: inferred.kind === 'custom' ? 'milestone' as const : inferred.kind,
+    reviewColor: inferred.reviewColor,
+    locked: true,
+    documentId: payload.documentId,
+    sourcePage: hit.pageNo,
+    sourceQuote: hit.text,
+    quoteVerified: true,
+    origin: 'ai' as const,
+    note: hit.text,
+  })));
 }

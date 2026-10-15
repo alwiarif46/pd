@@ -5,6 +5,9 @@ import { enqueue } from './enqueue.js';
 import { expectOneRow } from './rows.js';
 import type { JobPayload } from './redis.js';
 
+/** The error of a file rejected for a classified marking; the failed job row shows it as is. */
+export const MARKING_REJECTED = 'Classified marking found. The file was rejected.';
+
 /** The lowest page among the markings found, or null when there are none (5.11 MarkingState). */
 export function lowestMarkingPage(markings: { page: number }[]): number | null {
   return markings.length === 0 ? null : Math.min(...markings.map((marking) => marking.page));
@@ -43,7 +46,7 @@ export async function processMarking(payload: JobPayload): Promise<void> {
   });
 
   if (decision === 'reject') {
-    throw new Error('Classified marking found. The file was rejected.');
+    throw new Error(MARKING_REJECTED);
   }
   if (decision === 'clear') {
     await enqueue('classify', payload);

@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { activeModel } from '@pd/ai';
-import { isUuid, mbCapForPlan, PLAN_LIMITS, type Plan, schema, userMemberships, withOrg } from '@pd/core';
+import { isUuid, mbCapForPlan, type Plan, schema, seatHolders, seatLimitFor, userMemberships, withOrg } from '@pd/core';
 import { billingAvailable, registerBilling } from './billing.js';
 import { requireAuth, requireUser } from './context.js';
 import { BODY_REQUIRED, readBody, text } from './body.js';
-import { currentCreditPeriod, expireAbandonedUploads, planCreditPeriod, removeChunkDirs } from './credits.js';
+import { currentCreditPeriod, expireAbandonedUploads, lockOrg, planCreditPeriod, removeChunkDirs } from './credits.js';
+import { apiError } from './errors.js';
 import { inOrg } from './scope.js';
 import { hashToken, isWorkEmail, newToken, sendOutOfBand } from './security.js';
 
@@ -38,7 +39,7 @@ interface ProjectedCredits {
 }
 
 function seatLimit(plan: Plan): number {
-  return PLAN_LIMITS[plan].maxUsers;
+  return seatLimitFor(plan);
 }
 
 export async function registerOrg(app: FastifyInstance): Promise<void> {
@@ -169,7 +170,10 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
         .innerJoin(schema.users, eq(schema.users.id, schema.memberships.userId))
         .where(eq(schema.memberships.orgId, orgId))
         .orderBy(schema.memberships.createdAt, schema.memberships.id);
-      return rows.map((row) => ({ ...row, isYou: row.userId === auth.userId }));
+      // Seats after a move to a smaller plan (06 s5): the members past the plan's seats are listed
+      // with seatLocked, so the owner sees who has lost access.
+      const seats = new Map((await seatHolders(db, orgId)).map((seat) => [seat.userId, seat.seatLocked]));
+      return rows.map((row) => ({ ...row, isYou: row.userId === auth.userId, seatLocked: seats.get(row.userId) ?? false }));
     });
   });
 
@@ -189,10 +193,30 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     // Delivered only after COMMIT, so the link never names an invite that rolled back.
     let issued = null as string | null;
     const result = await inOrg(reply, auth.orgId!, async (db, respond) => {
-      const [org] = await db.select().from(schema.organizations).where(eq(schema.organizations.id, auth.orgId!));
-      const members = await db.select().from(schema.memberships).where(eq(schema.memberships.orgId, auth.orgId!));
+      // The organization row is locked so two invites at once cannot both take the last seat.
+      const org = await lockOrg(db, auth.orgId!);
+      const members = await db.select({ id: schema.memberships.id }).from(schema.memberships).where(eq(schema.memberships.orgId, auth.orgId!));
+      // An invite not yet accepted and not expired holds a seat too (06 s2: invites beyond the
+      // limit are blocked). There is no invite-accept route yet; when one is built it must check
+      // the seat again, since an invite can outlive a move to a smaller plan.
+      const [pending] = await db.select({ count: sql<number>`count(*)::int` }).from(schema.invites).where(and(
+        eq(schema.invites.orgId, auth.orgId!),
+        isNull(schema.invites.acceptedAt),
+        gt(schema.invites.expiresAt, new Date()),
+      ));
+      // One open invite per email: a second would hold a second seat for one person. Checked under
+      // the organization lock, so two invites to one email at once cannot both pass.
+      const [open] = await db.select({ id: schema.invites.id }).from(schema.invites).where(and(
+        eq(schema.invites.orgId, auth.orgId!),
+        eq(schema.invites.email, email),
+        isNull(schema.invites.acceptedAt),
+        gt(schema.invites.expiresAt, new Date()),
+      )).limit(1);
+      if (open) {
+        return respond(409, apiError('invite_pending'));
+      }
       const plan = (org?.plan ?? 'free') as Plan;
-      if (members.length >= seatLimit(plan)) {
+      if (members.length + (pending?.count ?? 0) >= seatLimit(plan)) {
         return respond(402, { error: 'This plan has no seats left' });
       }
       const token = newToken();

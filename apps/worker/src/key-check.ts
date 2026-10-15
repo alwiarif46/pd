@@ -9,6 +9,7 @@ import {
 } from '@pd/ai';
 import { amendmentNoTaken, nextAmendmentNo, normalizeSolicitationKey, schema, withOrg } from '@pd/core';
 import { enqueue } from './enqueue.js';
+import { failStepIn, HELD_FOR_CREDIT } from './rows.js';
 import type { JobPayload } from './redis.js';
 
 type Db = Parameters<Parameters<typeof withOrg>[1]>[0];
@@ -24,7 +25,9 @@ const PENDING = 'PENDING';
 /**
  * The amendment solicitation-number check (04 s3.1 step 1, 06 s4), run after text extraction and
  * classify and before any AI step. Decision table:
- * - document missing or deleted, or the bid's credit not reserved or consumed: no write, stop;
+ * - document missing or deleted: no write, stop;
+ * - the bid's credit not reserved or consumed: a failed classify row (HELD_FOR_CREDIT), stop; the
+ *   solicitation's matrix reruns it when it consumes a credit (kickHeldDocuments);
  * - amendment already applied or needs_confirmation (a rerun): unchanged, stop (never re-diff);
  * - owner override: status processing, key_status overridden, queue ai:amendment;
  * - bid key PENDING: held, key_status bid_key_pending (rechecked when PATCH sets the key);
@@ -102,7 +105,11 @@ async function decide(
     eq(schema.bids.id, document.bidId),
     eq(schema.bids.orgId, payload.orgId),
   )).for('update');
-  if (!bid || (bid.creditStatus !== 'reserved' && bid.creditStatus !== 'consumed')) {
+  if (!bid) {
+    return 'stopped';
+  }
+  if (bid.creditStatus !== 'reserved' && bid.creditStatus !== 'consumed') {
+    await failStepIn(db, payload, 'classify', HELD_FOR_CREDIT);
     return 'stopped';
   }
   const [existing] = await db.select().from(schema.amendments).where(and(

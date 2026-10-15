@@ -7,6 +7,7 @@ import { processFile } from './file-job.js';
 import { processMarking } from './marking-job.js';
 import { redisOptions, type JobPayload } from './redis.js';
 import { processScan } from './scan.js';
+import { guardStep } from './steps.js';
 
 // Tenant isolation depends on row-level security, which a superuser or BYPASSRLS role
 // skips. Check before taking any job; only PD_ALLOW_BYPASS_RLS=1 turns the refusal into
@@ -25,11 +26,13 @@ function start(name: string, handler: (payload: JobPayload) => Promise<void>): W
 }
 
 const workers = [
-  start('scan', processScan),
-  start('file', processFile),
-  start('marking', processMarking),
-  start('classify', processClassify),
-  start('ai:compliance', processCompliance),
+  // A throw in these steps leaves a failed job row the user can retry and releases a
+  // solicitation's reservation (steps.ts). The AI steps for overview and dates settle no credit.
+  start('scan', guardStep('scan', processScan)),
+  start('file', guardStep('file', processFile)),
+  start('marking', guardStep('marking', processMarking)),
+  start('classify', guardStep('classify', processClassify)),
+  start('ai:compliance', guardStep('ai:compliance', processCompliance)),
   start('ai:dates', processDates),
   start('ai:overview', processOverview),
   start('ai:amendment', async (payload) => {
