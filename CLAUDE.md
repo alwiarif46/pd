@@ -24,6 +24,7 @@
 - Dark variants apply only under a `.dark` class, which the app does not set.
 - `@/` maps to `apps/web/src`.
 - Commands: `pnpm --filter @pd/web dev | typecheck | build`.
+- Local stack: `pnpm dev:db` (embedded Postgres in `.dev/pg`, or `PD_DEV_DB_ROOT`), then `pnpm dev:api` (port 3001; sign-up, reset and invite codes print to its console).
 
 ## Conventions
 - TypeScript strict. Shared types live in `apps/web/src/types` and `packages/core`.

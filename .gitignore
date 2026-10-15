@@ -44,3 +44,6 @@ coverage/
 # Plan versions
 plans/.versions/
 docs/plans/.versions/
+
+# Local dev database (pnpm dev:db)
+.dev/
