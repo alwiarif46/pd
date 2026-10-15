@@ -26,8 +26,10 @@ import type { Db } from './scope.js';
  *   share, document, its check_these rows, bid, amendment, then the old rows its links close (by
  *   id); the matrix write takes document, check_these, bid (for req id allocation), credit. Link
  *   confirm and reject take organization key share, bid, amendment, link, rows (by id). Row
- *   delete and merge lock the amendments of proposals to the removed row (by id), then update
- *   those links, then rows; they take no bid lock.
+ *   delete and merge of compliance rows lock the check_these hits promoted to the removed rows,
+ *   then the bid, then the amendments of proposals to the removed rows (one ordered statement),
+ *   then update those links, then rows: holding the bid serialises them with every other writer
+ *   that closes or links rows.
  *   check_these: the worker's matrix write replaces a document's hits under the document lock,
  *   and promote locks the document (FOR SHARE) before the hit (check-these.ts).
  *   One exception: upload complete claims its own unexpired session before the org lock (so
