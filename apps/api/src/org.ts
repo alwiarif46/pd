@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
+import { activeModel } from '@pd/ai';
 import { isUuid, mbCapForPlan, PLAN_LIMITS, type Plan, schema, userMemberships, withOrg } from '@pd/core';
 import { billingAvailable, registerBilling } from './billing.js';
 import { requireAuth, requireUser } from './context.js';
@@ -125,12 +126,12 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     return result;
   });
 
-  app.get('/api/about/processing', { preHandler: requireAuth }, async () => {
-    const provider = process.env.AI_PROVIDER || 'deepinfra';
-    const model = process.env.AI_MODEL || 'the configured model';
+  // Public: the privacy page reads it signed out. It reads only the environment and a static list,
+  // never the database or `request.auth`, so it cannot reach any organization's data.
+  app.get('/api/about/processing', async () => {
     return {
-      provider,
-      model,
+      provider: process.env.AI_PROVIDER || 'deepinfra',
+      model: activeModel(),
       subprocessors: ['DeepInfra', 'Anthropic', 'Telnyx', 'Stripe'],
       privacyPath: '/#/privacy',
     };

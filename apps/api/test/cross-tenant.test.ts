@@ -137,6 +137,20 @@ describe.skipIf(Boolean(unavailable)).each(MODES)('cross-tenant access through t
     expect(outline.statusCode).toBe(400);
   });
 
+  it('refuses the other organization documents as a resume or draft link', async () => {
+    const [resume, draft] = await withOrg(b.orgId, (db) => db.insert(schema.documents).values((['resume', 'draft'] as const).map((kind) => ({
+      orgId: b.orgId, bidId: b.bidId, fileName: `${kind}.pdf`, mime: 'application/pdf', sizeBytes: 5,
+      sha256: `${kind}-${b.orgId}`, kind, storagePath: `docs/${kind}-${b.orgId}.pdf`, liveStatus: 'live' as const,
+    }))).returning());
+    const rows = (tab: string) => `/api/bids/${a.bidId}/tabs/${tab}/rows`;
+    const create = await asA('POST', rows('resumes'), { kind: 'candidate', name: 'x', role: 'y', documentId: resume.id });
+    expect(create.statusCode).toBe(400);
+    expect(create.json<{ error: string }>().error).toBe('Choose a resume uploaded to this bid');
+    expect((await asA('PATCH', `/api/bids/${a.bidId}/rows/candidates/${a.rows.candidates}`, { fields: { documentId: resume.id } })).statusCode).toBe(400);
+    expect((await asA('POST', rows('reviews'), { type: 'red', draftDocumentId: draft.id })).statusCode).toBe(400);
+    expect((await asA('PATCH', `/api/bids/${a.bidId}/rows/reviews/${a.rows.reviews}`, { fields: { draftDocumentId: draft.id } })).statusCode).toBe(400);
+  });
+
   it('returns 404 for the other organization documents', async () => {
     expect((await asA('GET', `/api/bids/${b.bidId}/documents`)).statusCode).toBe(404);
     expect((await asA('GET', `/api/documents/${b.documentId}/view-token`)).statusCode).toBe(404);

@@ -647,10 +647,12 @@ export interface RowPatchMap {
     dueDate?: string | null;
   };
   personnel_requirements: { role?: string; requirement?: string };
-  candidates: { name?: string; role?: string };
+  /** `documentId` links a resume uploaded to this bid; `null` unlinks it. */
+  candidates: { name?: string; role?: string; documentId?: string | null };
   /** Setting `result` marks a reviewer override; `{ reviewerOverride: false }` restores `aiResult`. */
   resume_matches: { result?: MatchResult; reviewerOverride?: boolean };
-  reviews: { status?: ReviewStatus; scheduledAt?: string | null };
+  /** `draftDocumentId` links a draft uploaded to this bid; `null` unlinks it. */
+  reviews: { status?: ReviewStatus; scheduledAt?: string | null; draftDocumentId?: string | null };
   review_assignments: { reviewerName?: string; sections?: string | null };
   review_findings: { disposition?: Disposition; text?: string };
   production_items: { done?: boolean; rule?: string; owner?: string | null };
@@ -684,7 +686,7 @@ export interface CreateRowBodyMap {
     status?: OutlineStatus;
   };
   resumes:
-    | { kind: 'candidate'; name: string; role: string }
+    | { kind: 'candidate'; name: string; role: string; documentId?: string }
     | { kind: 'match'; candidateId: string; requirementId: string; result?: MatchResult }
     | { role: string; requirement: string; kind?: PersonnelKind };
   reviews:
@@ -697,7 +699,7 @@ export interface CreateRowBodyMap {
         disposition?: Disposition;
       }
     | { kind: 'assignment'; reviewId: string; reviewerName: string; sections?: string }
-    | { type: ReviewType; scheduledAt?: string; status?: ReviewStatus };
+    | { type: ReviewType; scheduledAt?: string; status?: ReviewStatus; draftDocumentId?: string };
   production: { category: ProductionCategory; rule: string; owner?: string | null };
   orals: { category: OralsCategory; item: string; owner?: string | null; minutes?: number | null };
   lessons: { question: string; answer?: string; author?: string };

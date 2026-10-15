@@ -1,5 +1,6 @@
 import { and, asc, eq, gt, isNotNull, sql } from 'drizzle-orm';
 import {
+  activeModel,
   buildSystemPrompt,
   extractComplianceMatrix,
   getProvider,
@@ -19,7 +20,7 @@ export function providerForJob() {
     provider: getProvider(name),
     config: {
       providerName: name,
-      model: process.env.AI_MODEL || process.env.DEEPINFRA_MODEL || 'Qwen/Qwen2.5-72B-Instruct',
+      model: activeModel(),
       maxOutputTokens: 4000,
     },
   };

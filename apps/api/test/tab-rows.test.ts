@@ -585,6 +585,102 @@ describe.skipIf(Boolean(unavailable))('tab rows', () => {
     });
   });
 
+  describe('document links', () => {
+    const rowsUrl = (tab: string) => `/api/bids/${a.bidId}/tabs/${tab}/rows`;
+
+    /** Documents that are not a valid link for `kind`: wrong kind, deleted, of another bid, of another org, not a UUID, not a string. */
+    async function badLinks(kind: 'resume' | 'draft') {
+      const other = kind === 'resume' ? 'draft' : 'resume';
+      const deleted = await liveDocument(a, kind, 'gone.pdf');
+      await withOrg(a.orgId, (db) => db.update(schema.documents).set({ liveStatus: 'deleted' }).where(eq(schema.documents.id, deleted.id)));
+      const otherBid = await withOrg(a.orgId, async (db) => {
+        const [bid] = await db.insert(schema.bids).values({ orgId: a.orgId, name: 'Other bid', bidType: 'federal', solicitationNumber: 'OTHER-1', solicitationKey: 'other-1' }).returning();
+        const [row] = await db.insert(schema.documents).values({
+          orgId: a.orgId, bidId: bid.id, fileName: 'x.pdf', mime: 'application/pdf', sizeBytes: 5,
+          sha256: randomUUID(), kind, storagePath: `docs/${randomUUID()}.pdf`, liveStatus: 'live',
+        }).returning();
+        return row;
+      });
+      return [
+        (await liveDocument(a, other)).id,
+        deleted.id,
+        otherBid.id,
+        (await liveDocument(b, kind)).id,
+        'not-a-uuid',
+        42,
+      ];
+    }
+
+    it('links a resume to a candidate on create and patch, and records history', async () => {
+      const resume = await liveDocument(a, 'resume', 'lee.pdf');
+      const created = await asA('POST', rowsUrl('resumes'), { kind: 'candidate', name: 'Lee', role: 'PM', documentId: resume.id });
+      expect(created.statusCode).toBe(201);
+      expect(created.json()).toMatchObject({ documentId: resume.id });
+      const bare = await asA('POST', rowsUrl('resumes'), { kind: 'candidate', name: 'Kim', role: 'PM' });
+      expect(bare.json()).toMatchObject({ documentId: null });
+      const url = rowUrl(a, 'candidates', bare.json<{ id: string }>().id);
+      expect((await asA('PATCH', url, { fields: { documentId: resume.id } })).statusCode).toBe(200);
+      expect((await asA('PATCH', url, { fields: { name: 'Kim R.' } })).statusCode).toBe(200);
+      expect((await asA('GET', url)).json<{ row: { documentId: string | null } }>().row.documentId).toBe(resume.id);
+      expect((await asA('PATCH', url, { fields: { documentId: null } })).statusCode).toBe(200);
+      const detail = (await asA('GET', url)).json<{
+        row: { documentId: string | null };
+        history: { field: string; oldValue: string | null; newValue: string | null }[];
+      }>();
+      expect(detail.row.documentId).toBeNull();
+      expect(detail.history.map((entry) => [entry.field, entry.oldValue, entry.newValue])).toEqual(expect.arrayContaining([
+        ['documentId', null, resume.id],
+        ['documentId', resume.id, null],
+      ]));
+    });
+
+    it('refuses a candidate link that is not a live resume of this bid', async () => {
+      const candidate = await asA('POST', rowsUrl('resumes'), { kind: 'candidate', name: 'Ray', role: 'PM' });
+      const url = rowUrl(a, 'candidates', candidate.json<{ id: string }>().id);
+      for (const documentId of await badLinks('resume')) {
+        const create = await asA('POST', rowsUrl('resumes'), { kind: 'candidate', name: 'Ray', role: 'PM', documentId });
+        expect(create.statusCode, `create ${documentId}`).toBe(400);
+        expect(create.json<{ error: string }>().error).toBe('Choose a resume uploaded to this bid');
+        expect((await asA('PATCH', url, { fields: { documentId } })).statusCode, `patch ${documentId}`).toBe(400);
+      }
+      expect((await asA('GET', url)).json<{ row: { documentId: string | null } }>().row.documentId).toBeNull();
+    });
+
+    it('links a draft to a review on create and patch, and records history', async () => {
+      const draft = await liveDocument(a, 'draft', 'v2.docx');
+      const created = await asA('POST', rowsUrl('reviews'), { type: 'red', draftDocumentId: draft.id });
+      expect(created.statusCode).toBe(201);
+      expect(created.json()).toMatchObject({ draftDocumentId: draft.id, draftFileName: 'v2.docx' });
+      const bare = await asA('POST', rowsUrl('reviews'), { type: 'gold' });
+      const url = rowUrl(a, 'reviews', bare.json<{ id: string }>().id);
+      expect((await asA('PATCH', url, { fields: { draftDocumentId: draft.id } })).statusCode).toBe(200);
+      expect((await asA('PATCH', url, { fields: { status: 'in_progress' } })).statusCode).toBe(200);
+      expect((await asA('GET', url)).json<{ row: { draftFileName: string | null } }>().row.draftFileName).toBe('v2.docx');
+      expect((await asA('PATCH', url, { fields: { draftDocumentId: null } })).statusCode).toBe(200);
+      const detail = (await asA('GET', url)).json<{
+        row: { draftDocumentId: string | null; status: string };
+        history: { field: string; oldValue: string | null; newValue: string | null }[];
+      }>();
+      expect(detail.row).toMatchObject({ draftDocumentId: null, status: 'in_progress' });
+      expect(detail.history.map((entry) => [entry.field, entry.oldValue, entry.newValue])).toEqual(expect.arrayContaining([
+        ['draftDocumentId', null, draft.id],
+        ['draftDocumentId', draft.id, null],
+      ]));
+    });
+
+    it('refuses a review link that is not a live draft of this bid', async () => {
+      const review = await asA('POST', rowsUrl('reviews'), { type: 'pink' });
+      const url = rowUrl(a, 'reviews', review.json<{ id: string }>().id);
+      for (const draftDocumentId of await badLinks('draft')) {
+        const create = await asA('POST', rowsUrl('reviews'), { type: 'pink', draftDocumentId });
+        expect(create.statusCode, `create ${draftDocumentId}`).toBe(400);
+        expect(create.json<{ error: string }>().error).toBe('Choose a draft uploaded to this bid');
+        expect((await asA('PATCH', url, { fields: { draftDocumentId } })).statusCode, `patch ${draftDocumentId}`).toBe(400);
+      }
+      expect((await asA('GET', url)).json<{ row: { draftDocumentId: string | null } }>().row.draftDocumentId).toBeNull();
+    });
+  });
+
   describe('reviews', () => {
     it('plans new reviews, names the draft, and validates status', async () => {
       const draft = await liveDocument(a, 'draft', 'red-team-draft.docx');

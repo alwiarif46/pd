@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { isUuid, schema } from '@pd/core';
 import { registerCheckThese } from './check-these.js';
 import { requireAuth } from './context.js';
-import { type Db, findBid, inOrg } from './scope.js';
+import { type Db, findBid, findDocument, inOrg } from './scope.js';
 
 const TABS = [
   'overview',
@@ -202,6 +202,33 @@ async function history(
     newValue: newValue == null ? null : String(newValue),
     changedAt: new Date(),
   });
+}
+
+const NOT_ON_BID = {
+  resume: 'Choose a resume uploaded to this bid',
+  draft: 'Choose a draft uploaded to this bid',
+} as const;
+
+/**
+ * Reads a document link sent by a client: undefined (not sent) and null (clear) pass through; an
+ * id must be a live document of this bid and kind. A document of another organization is not
+ * visible through `orgId`, so it gets the same answer as one that does not exist.
+ */
+async function linkedDocument(
+  db: Db,
+  orgId: string,
+  bidId: string,
+  value: unknown,
+  kind: keyof typeof NOT_ON_BID,
+): Promise<Result<string | null | undefined>> {
+  if (value === undefined || value === null) {
+    return ok(value);
+  }
+  const document = typeof value === 'string' ? await findDocument(db, orgId, value) : null;
+  if (!document || document.bidId !== bidId || document.kind !== kind || document.liveStatus === 'deleted') {
+    return fail(400, NOT_ON_BID[kind]);
+  }
+  return ok(document.id);
 }
 
 /**
@@ -1110,11 +1137,14 @@ async function insertRow(
     }
     case 'resumes': {
       if (body.kind === 'candidate' && text(body.name) && text(body.role)) {
+        const resume = await linkedDocument(db, orgId, bidId, body.documentId, 'resume');
+        if (!resume.ok) return resume;
         const [row] = await db.insert(schema.candidates).values({
           orgId,
           bidId,
           name: text(body.name)!,
           role: text(body.role)!,
+          documentId: resume.value ?? null,
         }).returning();
         return created('candidates', row);
       }
@@ -1180,10 +1210,13 @@ async function insertRow(
       }
       const status = input(REVIEW_STATUS, body.status);
       if (!status.ok) return status;
+      const draft = await linkedDocument(db, orgId, bidId, body.draftDocumentId, 'draft');
+      if (!draft.ok) return draft;
       const [review] = await db.insert(schema.reviews).values({
         orgId,
         bidId,
         type: body.type,
+        draftDocumentId: draft.value ?? null,
         scheduledAt: when(body.scheduledAt),
         status: status.value ?? 'planned',
       }).returning();
@@ -1338,13 +1371,18 @@ async function patchRow(
         updatedAt: new Date(),
       }).where(and(eq(schema.personnelRequirements.id, rowId), eq(schema.personnelRequirements.orgId, orgId)));
       return ok(true);
-    case 'candidates':
+    case 'candidates': {
+      const resume = await linkedDocument(db, orgId, bidId, fields.documentId, 'resume');
+      if (!resume.ok) return resume;
+      await note('documentId', resume.value);
       await db.update(schema.candidates).set({
         name: fields.name === undefined ? String(record.name) : (text(fields.name) ?? String(record.name)),
         role: fields.role === undefined ? String(record.role) : (text(fields.role) ?? String(record.role)),
+        documentId: resume.value === undefined ? (record.documentId as string | null) : resume.value,
         updatedAt: new Date(),
       }).where(and(eq(schema.candidates.id, rowId), eq(schema.candidates.orgId, orgId)));
       return ok(true);
+    }
     case 'resume_matches': {
       // Setting a result is a reviewer override. {reviewerOverride: false} undoes it: the AI's
       // own result comes back, or 'unknown' when there is none.
@@ -1374,9 +1412,13 @@ async function patchRow(
     case 'reviews': {
       const status = input(REVIEW_STATUS, fields.status);
       if (!status.ok) return status;
+      const draft = await linkedDocument(db, orgId, bidId, fields.draftDocumentId, 'draft');
+      if (!draft.ok) return draft;
       await note('status', status.value);
+      await note('draftDocumentId', draft.value);
       await db.update(schema.reviews).set({
         status: status.value ?? (record.status as (typeof REVIEW_STATUSES)[number]),
+        draftDocumentId: draft.value === undefined ? (record.draftDocumentId as string | null) : draft.value,
         scheduledAt: fields.scheduledAt === undefined ? (record.scheduledAt as Date | null) : when(fields.scheduledAt),
         updatedAt: new Date(),
       }).where(and(eq(schema.reviews.id, rowId), eq(schema.reviews.orgId, orgId)));
