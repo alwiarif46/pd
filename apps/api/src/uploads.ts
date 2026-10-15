@@ -386,7 +386,10 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       }
       // An amendment's typed number is checked again under the bid lock (the same order as the
       // solicitation branch: session, organization, bid): another upload, the worker's key check
-      // or PATCH of a number may have taken it since the session started.
+      // or PATCH of a number may have taken it since the session started. On 409
+      // amendment_no_taken the session is reopened with its number unchanged, so completing it
+      // again is refused for as long as the number is taken: the client starts a new session with
+      // another number (or none). The number is not dropped silently.
       const amendmentNo = session.kind === 'amendment' ? session.amendmentNo : null;
       if (session.kind === 'amendment') {
         const org = await lockOrg(db, orgId);

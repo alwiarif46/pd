@@ -3,6 +3,8 @@ import { inject } from 'vitest';
 
 /** Backends of this database (other than the holder) blocked on a lock right now. */
 async function lockWaiters(holder: pg.Client): Promise<number> {
+  // A short pause between polls, so the loop does not spin on the holder connection.
+  await new Promise((resolve) => setTimeout(resolve, 10));
   await holder.query('select pg_stat_clear_snapshot()');
   const result = await holder.query<{ n: number }>(
     "select count(*)::int as n from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid() and wait_event_type = 'Lock'",
