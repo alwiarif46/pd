@@ -175,7 +175,7 @@ export interface BidDto extends OrgScopedDto {
   bidType: BidType;
   solicitationNumber: string;
   solicitationKey: string;
-  status: string;
+  status: BidStatus;
   startDate: string | null;
   dueDate: string | null;
   dueTime: string | null;
@@ -186,6 +186,12 @@ export interface BidDto extends OrgScopedDto {
   creditStatus: 'reserved' | 'consumed' | 'released' | null;
   keyOverridesUsed: number;
   retentionExtendedUntil: string | null;
+  /** 03 s39 without an extension: paid, the later of latest non-resume upload + 90 days and due + 90; free, latest upload + 90; null if neither. */
+  defaultLiveUntil: string | null;
+  /** The later of `defaultLiveUntil` and `retentionExtendedUntil` (paid plans; free ignores the extension). */
+  filesLiveUntil: string | null;
+  /** Amendment key overrides left on this bid (limit from app_settings, default 2). */
+  keyOverridesLeft: number;
 }
 
 export interface CreateBidInput {
@@ -205,7 +211,12 @@ export interface BidPatch {
   timeZone?: string | null;
   oralsEnabled?: boolean;
   retentionExtendedUntil?: string | null;
+  /** Any other value is refused with 400. */
+  status?: BidStatus;
 }
+
+/** `bids.status` (09 s5.2); the database holds only these values. New bids start in `planning`. */
+export type BidStatus = 'planning' | 'writing' | 'submitted' | 'closed';
 
 // ---------------------------------------------------------------------------
 // Uploads and documents
@@ -244,8 +255,14 @@ export interface DocumentDto extends BidScopedDto {
   extractStatus: string | null;
   markingFound: string[] | null;
   markingStatus: 'none' | 'blocked' | 'confirmed' | null;
+  /** The lowest page a marking was found on, or null. */
+  markingPage: number | null;
+  /** Computed by the 03 s39 rule (plan, upload date, due date, extension); null for a deleted file. */
   liveUntil: string | null;
-  liveStatus: 'live' | 'archived' | 'restoring' | 'restored' | 'deleted' | null;
+  liveStatus: DocumentLiveStatus | null;
+  /** The latest `restored_until` of the file's restored, unpurged archive copies, or null. */
+  restoredUntil: string | null;
+  keyCheck: KeyCheck;
 }
 
 export interface ViewTokenDto {
@@ -269,6 +286,26 @@ export interface DocumentPagesDto {
   pages: PageDto[];
 }
 
+export type DocumentLiveStatus = 'live' | 'archived' | 'restore_requested' | 'restoring' | 'restored' | 'deleted';
+
+/**
+ * The amendment key check (09 s5.11): `not_applicable` for anything but an amendment; `mismatch`
+ * when the solicitation number was not found and no override was given; `overridden` after an
+ * owner override; otherwise `ok`.
+ */
+export type KeyCheck = 'not_applicable' | 'ok' | 'mismatch' | 'overridden';
+
+/** POST /api/documents/:id/restore. A repeat while a restore is pending returns the current state. */
+export interface RestoreDocumentDto {
+  status: 'restore_requested' | 'restoring' | 'restored';
+}
+
+export interface KeyOverrideDto {
+  ok: true;
+  amendmentId: string;
+  remaining: number;
+}
+
 // ---------------------------------------------------------------------------
 // Jobs and amendments
 // ---------------------------------------------------------------------------
@@ -284,10 +321,25 @@ export interface JobDto extends OrgScopedDto {
   startedAt: string | null;
   finishedAt: string | null;
   queueDepth: number;
+  /** The pipeline queue holding the job, or null when it is in none. */
+  stage: string | null;
+  /** Seconds until the job is expected to finish; null without enough history. */
+  etaSeconds: number | null;
+}
+
+/** A compliance row an amendment link points at. */
+export interface AmendmentRowRef {
+  rowId: string;
+  label: string;
+  text: string;
+  sourcePage: number | null;
 }
 
 export interface AmendmentLinkDto extends OrgScopedDto {
   amendmentId: string;
+  amendmentNo: number | null;
+  oldRow: AmendmentRowRef | null;
+  newRow: AmendmentRowRef | null;
   rowTable: string;
   oldRowId: string | null;
   newRowId: string | null;
@@ -336,7 +388,7 @@ export interface ComplianceRowDto extends BidScopedDto, SourceColumnsDto {
   evalRef: string | null;
   responseSection: string | null;
   owner: string | null;
-  status: string | null;
+  status: RowStatus;
 }
 
 export interface OutlineItemDto extends BidScopedDto, SourceColumnsDto {
@@ -346,8 +398,10 @@ export interface OutlineItemDto extends BidScopedDto, SourceColumnsDto {
   pageLimit: number | null;
   sourceRef: string | null;
   writer: string | null;
-  status: string | null;
+  status: OutlineStatus;
   dueDate: string | null;
+  /** Order among siblings (same parent), 0..n-1. The tab returns items sorted by it. */
+  position: number;
 }
 
 export interface PersonnelRequirementDto extends BidScopedDto, SourceColumnsDto {
@@ -360,6 +414,12 @@ export interface CandidateDto extends BidScopedDto {
   name: string;
   role: string;
   documentId: string | null;
+  /** From the latest job on the resume: failed, pending or running (processing), else ready. */
+  status: CandidateStatus;
+  /** When the resume was uploaded; null with no resume. */
+  uploadedAt: string | null;
+  /** The resume document was deleted (90-day rule); evidence quotes are gone. */
+  resumeDeleted: boolean;
 }
 
 export interface ResumeMatchDto extends OrgScopedDto {
@@ -369,13 +429,17 @@ export interface ResumeMatchDto extends OrgScopedDto {
   evidenceQuote: string | null;
   evidencePage: number | null;
   reviewerOverride: boolean;
+  /** The AI's own result, restored by `{ reviewerOverride: false }`; null when there is none. */
+  aiResult: MatchResult | null;
 }
 
 export interface ReviewDto extends BidScopedDto {
   type: ReviewType;
   draftDocumentId: string | null;
   scheduledAt: string | null;
-  status: string | null;
+  status: ReviewStatus;
+  /** The draft document's file name. */
+  draftFileName: string | null;
 }
 
 export interface ReviewAssignmentDto extends OrgScopedDto {
@@ -394,19 +458,30 @@ export interface ReviewFindingDto extends OrgScopedDto {
   sourcePageEnd: number | null;
   sourceQuote: string | null;
   origin: 'ai' | 'user' | null;
-  disposition: string | null;
+  disposition: Disposition;
+  /** The user who added the finding by hand; null for AI findings. */
+  authorUserId: string | null;
+  /** That user's name, or email when the name is not set; null for AI findings. */
+  author: string | null;
 }
 
-export interface ProductionItemDto extends BidScopedDto, SourceColumnsDto {
-  category: string;
+export interface ProductionItemDto extends BidScopedDto, Omit<SourceColumnsDto, 'origin'> {
+  category: ProductionCategory;
   rule: string;
   done: boolean;
+  owner: string | null;
+  /** 'standard' for the seeded checklist. */
+  origin: ChecklistOrigin | null;
 }
 
-export interface OralsItemDto extends BidScopedDto, SourceColumnsDto {
-  category: string;
+export interface OralsItemDto extends BidScopedDto, Omit<SourceColumnsDto, 'origin'> {
+  category: OralsCategory;
   item: string;
   done: boolean;
+  owner: string | null;
+  minutes: number | null;
+  /** 'standard' for the seeded checklist. */
+  origin: ChecklistOrigin | null;
 }
 
 export interface LessonDto extends BidScopedDto {
@@ -423,6 +498,32 @@ export interface RowHistoryDto extends OrgScopedDto {
   oldValue: string | null;
   newValue: string | null;
   changedAt: string;
+  /** users.name, or email when the name is not set; null for changes no user made. */
+  userName: string | null;
+}
+
+export type RowStatus = 'open' | 'assigned' | 'drafted' | 'done';
+export type OutlineStatus = 'not_started' | 'in_progress' | 'review' | 'done';
+export type CandidateStatus = 'processing' | 'ready' | 'failed';
+export type ReviewStatus = 'planned' | 'in_progress' | 'done';
+export type Disposition = 'open' | 'accepted' | 'rejected' | 'done';
+export type ProductionCategory = 'format' | 'files' | 'submission' | 'copies' | 'other';
+export type OralsCategory = 'rules' | 'prep' | 'session';
+export type ChecklistOrigin = 'ai' | 'user' | 'standard';
+
+/** A pre-scan sentence no compliance row quotes (GET /api/bids/:id/check-these). */
+export interface CheckTheseDto {
+  id: string;
+  documentId: string;
+  sentence: string;
+  page: number;
+}
+
+/** POST /api/bids/:id/outline/move. `parentId` null makes the item a volume; `index` is clamped. */
+export interface MoveOutlineInput {
+  id: string;
+  parentId: string | null;
+  index: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -478,24 +579,26 @@ export interface RowPatchMap {
   compliance_rows: {
     requirementText?: string;
     owner?: string | null;
-    status?: string | null;
+    status?: RowStatus;
     responseSection?: string | null;
   };
   outline_items: {
     title?: string;
     writer?: string | null;
-    status?: string | null;
-    pageLimit?: number;
+    status?: OutlineStatus;
+    pageLimit?: number | null;
     dueDate?: string | null;
   };
   personnel_requirements: { role?: string; requirement?: string };
   candidates: { name?: string; role?: string };
+  /** Setting `result` marks a reviewer override; `{ reviewerOverride: false }` restores `aiResult`. */
   resume_matches: { result?: MatchResult; reviewerOverride?: boolean };
-  reviews: { status?: string | null; scheduledAt?: string | null };
+  reviews: { status?: ReviewStatus; scheduledAt?: string | null };
   review_assignments: { reviewerName?: string; sections?: string | null };
-  review_findings: { disposition?: string | null; text?: string };
-  production_items: { done?: boolean; rule?: string };
-  orals_items: { done?: boolean; item?: string };
+  review_findings: { disposition?: Disposition; text?: string };
+  production_items: { done?: boolean; rule?: string; owner?: string | null };
+  /** `minutes` is a whole number, 0 or more, or null. */
+  orals_items: { done?: boolean; item?: string; owner?: string | null; minutes?: number | null };
   lessons: { answer?: string; author?: string | null };
 }
 
@@ -507,7 +610,7 @@ export interface CreateComplianceRowInput {
   sectionRef?: string;
   reqType?: ReqType;
   owner?: string;
-  status?: string;
+  status?: RowStatus;
 }
 
 /** Exactly what the server's `insertRow` accepts, per tab. */
@@ -519,20 +622,27 @@ export interface CreateRowBodyMap {
     title: string;
     number?: string;
     parentId?: string;
-    pageLimit?: number;
+    pageLimit?: number | null;
     writer?: string;
-    status?: string;
+    status?: OutlineStatus;
   };
   resumes:
     | { kind: 'candidate'; name: string; role: string }
     | { kind: 'match'; candidateId: string; requirementId: string; result?: MatchResult }
     | { role: string; requirement: string; kind?: PersonnelKind };
   reviews:
-    | { kind: 'finding'; reviewId: string; text: string; findingKind?: FindingKind; evalFactor?: string }
+    | {
+        kind: 'finding';
+        reviewId: string;
+        text: string;
+        findingKind?: FindingKind;
+        evalFactor?: string;
+        disposition?: Disposition;
+      }
     | { kind: 'assignment'; reviewId: string; reviewerName: string; sections?: string }
-    | { type: ReviewType; scheduledAt?: string };
-  production: { category: string; rule: string };
-  orals: { category: string; item: string };
+    | { type: ReviewType; scheduledAt?: string; status?: ReviewStatus };
+  production: { category: ProductionCategory; rule: string; owner?: string | null };
+  orals: { category: OralsCategory; item: string; owner?: string | null; minutes?: number | null };
   lessons: { question: string; answer?: string; author?: string };
 }
 

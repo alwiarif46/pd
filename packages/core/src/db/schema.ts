@@ -133,7 +133,8 @@ export const bids = pgTable('bids', {
   bidType: text('bid_type').notNull().$type<'federal' | 'sled'>(),
   solicitationNumber: text('solicitation_number').notNull(),
   solicitationKey: text('solicitation_key').notNull(),
-  status: text('status').notNull(),
+  // CHECK bids_status_check (migration 0005, hand-written) allows only these values.
+  status: text('status').notNull().default('planning').$type<'planning' | 'writing' | 'submitted' | 'closed'>(),
   startDate: timestamp('start_date'),
   dueDate: timestamp('due_date'),
   dueTime: text('due_time'),
@@ -166,8 +167,12 @@ export const documents = pgTable('documents', {
   extractStatus: text('extract_status'),
   markingFound: jsonb('marking_found').$type<string[]>(),
   markingStatus: text('marking_status').$type<'none' | 'blocked' | 'confirmed'>(),
+  // The lowest page a marking was found on (the marking step writes it), or null.
+  markingPage: integer('marking_page'),
+  // Not written yet: the api computes the live-until date it shows (packages/core retention.ts);
+  // the retention job will store it here.
   liveUntil: timestamp('live_until'),
-  liveStatus: text('live_status').$type<'live' | 'archived' | 'restoring' | 'restored' | 'deleted'>(),
+  liveStatus: text('live_status').$type<'live' | 'archived' | 'restore_requested' | 'restoring' | 'restored' | 'deleted'>(),
 });
 
 export const uploadSessions = pgTable('upload_sessions', {
@@ -428,7 +433,8 @@ export const complianceRows = pgTable('compliance_rows', {
   evalRef: text('eval_ref'),
   responseSection: text('response_section'),
   owner: text('owner'),
-  status: text('status'),
+  // CHECK (open, assigned, drafted, done) in migration 0006.
+  status: text('status').notNull().default('open').$type<'open' | 'assigned' | 'drafted' | 'done'>(),
 });
 
 export const outlineItems = pgTable('outline_items', {
@@ -442,8 +448,11 @@ export const outlineItems = pgTable('outline_items', {
   sourceRef: text('source_ref'),
   ...sourceColumns,
   writer: text('writer'),
-  status: text('status'),
+  // CHECK (not_started, in_progress, review, done) in migration 0006.
+  status: text('status').notNull().default('not_started').$type<'not_started' | 'in_progress' | 'review' | 'done'>(),
   dueDate: timestamp('due_date'),
+  /** Order among siblings (same bid and parent), 0..n-1. Kept contiguous by the move route. */
+  position: integer('position').notNull().default(0),
 });
 
 export const personnelRequirements = pgTable('personnel_requirements', {
@@ -471,6 +480,8 @@ export const resumeMatches = pgTable('resume_matches', {
   candidateId: uuid('candidate_id').notNull().references(() => candidates.id, { onDelete: 'cascade' }),
   requirementId: uuid('requirement_id').notNull().references(() => personnelRequirements.id, { onDelete: 'cascade' }),
   result: text('result').notNull().$type<'meets' | 'partial' | 'gap' | 'unknown'>(),
+  /** The AI's own result, kept so a reviewer override can be undone. Null when there is none. */
+  aiResult: text('ai_result').$type<'meets' | 'partial' | 'gap' | 'unknown'>(),
   evidenceQuote: text('evidence_quote'),
   evidencePage: integer('evidence_page'),
   reviewerOverride: boolean('reviewer_override').notNull().default(false),
@@ -483,7 +494,8 @@ export const reviews = pgTable('reviews', {
   type: text('type').notNull().$type<'pink' | 'red' | 'green' | 'gold' | 'other'>(),
   draftDocumentId: uuid('draft_document_id').references(() => documents.id, { onDelete: 'set null' }),
   scheduledAt: timestamp('scheduled_at'),
-  status: text('status'),
+  // CHECK (planned, in_progress, done) in migration 0006.
+  status: text('status').notNull().default('planned').$type<'planned' | 'in_progress' | 'done'>(),
 });
 
 export const reviewAssignments = pgTable('review_assignments', {
@@ -506,27 +518,40 @@ export const reviewFindings = pgTable('review_findings', {
   sourcePageEnd: integer('source_page_end'),
   sourceQuote: text('source_quote'),
   origin: text('origin').$type<'ai' | 'user'>(),
-  disposition: text('disposition'),
+  // CHECK (open, accepted, rejected, done) in migration 0006.
+  disposition: text('disposition').notNull().default('open').$type<'open' | 'accepted' | 'rejected' | 'done'>(),
+  /** The user who added the finding by hand; null for AI findings. */
+  authorUserId: uuid('author_user_id').references(() => users.id, { onDelete: 'set null' }),
 });
 
 export const productionItems = pgTable('production_items', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
   bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
-  category: text('category').notNull(),
+  // CHECK (format, files, submission, copies, other) in migration 0006.
+  category: text('category').notNull().$type<'format' | 'files' | 'submission' | 'copies' | 'other'>(),
   rule: text('rule').notNull(),
   ...sourceColumns,
+  // Seeded checklist rows are 'standard'.
+  origin: text('origin').$type<'ai' | 'user' | 'standard'>(),
   done: boolean('done').notNull().default(false),
+  owner: text('owner'),
 });
 
 export const oralsItems = pgTable('orals_items', {
   ...baseColumns,
   orgId: uuid('org_id').notNull().references(() => organizations.id),
   bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
-  category: text('category').notNull(),
+  // CHECK (rules, prep, session) in migration 0006.
+  category: text('category').notNull().$type<'rules' | 'prep' | 'session'>(),
   item: text('item').notNull(),
   ...sourceColumns,
+  // Seeded checklist rows are 'standard'.
+  origin: text('origin').$type<'ai' | 'user' | 'standard'>(),
   done: boolean('done').notNull().default(false),
+  owner: text('owner'),
+  // CHECK (minutes >= 0) in migration 0006.
+  minutes: integer('minutes'),
 });
 
 export const lessons = pgTable('lessons', {
@@ -549,3 +574,28 @@ export const rowHistory = pgTable('row_history', {
   newValue: text('new_value'),
   changedAt: timestamp('changed_at').notNull(),
 });
+
+// =============================================================================
+// Compliance pre-scan hits ("check these", 05 s3.4)
+// =============================================================================
+
+/**
+ * Requirement-like sentences the pre-scan found that no compliance row quotes. The worker
+ * replaces a document's open hits in the transaction that writes its rows; the user promotes a
+ * hit to a compliance row or dismisses it. CHECK on status in migration 0006.
+ */
+export const checkThese = pgTable('check_these', {
+  ...baseColumns,
+  orgId: uuid('org_id').notNull().references(() => organizations.id),
+  bidId: uuid('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
+  documentId: uuid('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
+  sentence: text('sentence').notNull(),
+  pageNo: integer('page_no').notNull(),
+  status: text('status').notNull().default('open').$type<'open' | 'promoted' | 'dismissed'>(),
+  promotedRowId: uuid('promoted_row_id').references(() => complianceRows.id, { onDelete: 'set null' }),
+  decidedBy: uuid('decided_by').references(() => users.id, { onDelete: 'set null' }),
+  decidedAt: timestamp('decided_at'),
+}, (table) => ({
+  bidStatusIdx: index('check_these_bid_id_status_idx').on(table.bidId, table.status),
+  documentStatusIdx: index('check_these_document_id_status_idx').on(table.documentId, table.status),
+}));

@@ -1,4 +1,5 @@
 import { PLAN_LIMITS, type Plan } from './limits';
+import { parseIntSetting } from './retention';
 
 export interface CreditState {
   allowed: number;
@@ -95,8 +96,23 @@ export function releaseCredit(state: CreditState): CreditState {
   return { ...state, reserved: state.reserved - 1 };
 }
 
-/** Amendment key overrides allowed per bid (06 s4; the number is still open, proposed 2). */
+/**
+ * Amendment key overrides allowed per bid when app_settings has no `key_overrides_per_bid`
+ * (06 s4; the number is still open, proposed 2). Read the limit with `keyOverridesPerBid`.
+ */
 export const KEY_OVERRIDES_PER_BID = 2;
+
+export const SETTING_KEY_OVERRIDES_PER_BID = 'key_overrides_per_bid';
+
+/** The per-bid override limit from the app_settings value; missing or malformed gives the default. */
+export function keyOverridesPerBid(value: string | null | undefined): number {
+  return parseIntSetting(value, KEY_OVERRIDES_PER_BID, 0);
+}
+
+/** Overrides a bid has left: never negative, even after the limit is lowered. */
+export function keyOverridesLeft(limit: number, used: number): number {
+  return Math.max(0, limit - used);
+}
 
 /**
  * RFP credits for one period of `plan`. Free: 2 in the first period after signup, then 1, and 1

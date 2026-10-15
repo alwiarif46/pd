@@ -673,7 +673,7 @@ function Reviews({ bid, data, onReload, onError, onOpen }: Panel) {
                     <button type="button" onClick={() => onOpen('review_findings', item.id)}>{item.kind}</button> {item.text}
                     {item.sourceQuote ? <span className="quote">{item.sourceQuote} p.{item.sourcePage}</span> : null}
                     <span className="row">
-                      {['accept', 'reject', 'done'].map((disposition) => (
+                      {['accepted', 'rejected', 'done'].map((disposition) => (
                         <button key={disposition} className="btn secondary" type="button" onClick={() => {
                           api(`/api/bids/${bid.id}/rows/review_findings/${item.id}`, { method: 'PATCH', body: JSON.stringify({ fields: { disposition } }) }).then(onReload);
                         }}>{disposition}</button>
@@ -726,7 +726,7 @@ function Orals({ bid, data, onOpen, onReload, onError }: Panel) {
           <button type="button" onClick={() => onOpen('orals_items', item.id)}>{item.category}: {item.item}</button>
         </label>
       ))}
-      <AddForm label="Session topic" onSubmit={(body) => postRow(bid.id, 'orals', { category: 'Session', item: body.name }, onReload, onError)} />
+      <AddForm label="Session topic" onSubmit={(body) => postRow(bid.id, 'orals', { category: 'session', item: body.name }, onReload, onError)} />
     </div>
   );
 }

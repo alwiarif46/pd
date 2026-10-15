@@ -38,9 +38,23 @@
       "breakpoints": true
     },
     {
+      "idx": 5,
+      "version": "7",
+      "when": 1792015835214,
+      "tag": "0005_documents_and_bids",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792040772315,
+      "tag": "0006_tab_rows",
+      "breakpoints": true
+    },
+    {
       "idx": 7,
       "version": "7",
-      "when": 1792015770098,
+      "when": 1792041592507,
       "tag": "0007_plan_status_and_customer",
       "breakpoints": true
     }

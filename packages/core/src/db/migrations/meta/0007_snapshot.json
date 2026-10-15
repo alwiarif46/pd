@@ -1,6 +1,6 @@
 {
-  "id": "15ed9ff7-b17f-4e1f-af3f-b69d63a10116",
-  "prevId": "c660d34a-fb70-42aa-9837-a82f2c7f85ab",
+  "id": "0b0d9ab8-8c63-458c-973c-593e4eb7228b",
+  "prevId": "70a9b54e-b1cb-4006-b210-cb29e37804ab",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1115,7 +1115,8 @@
           "name": "status",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": "'planning'"
         },
         "start_date": {
           "name": "start_date",
@@ -1313,6 +1314,201 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
+    "public.check_these": {
+      "name": "check_these",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "org_id": {
+          "name": "org_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bid_id": {
+          "name": "bid_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "document_id": {
+          "name": "document_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sentence": {
+          "name": "sentence",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "page_no": {
+          "name": "page_no",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'open'"
+        },
+        "promoted_row_id": {
+          "name": "promoted_row_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decided_by": {
+          "name": "decided_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decided_at": {
+          "name": "decided_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "check_these_bid_id_status_idx": {
+          "name": "check_these_bid_id_status_idx",
+          "columns": [
+            {
+              "expression": "bid_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "check_these_document_id_status_idx": {
+          "name": "check_these_document_id_status_idx",
+          "columns": [
+            {
+              "expression": "document_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "check_these_org_id_organizations_id_fk": {
+          "name": "check_these_org_id_organizations_id_fk",
+          "tableFrom": "check_these",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "check_these_bid_id_bids_id_fk": {
+          "name": "check_these_bid_id_bids_id_fk",
+          "tableFrom": "check_these",
+          "tableTo": "bids",
+          "columnsFrom": [
+            "bid_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "check_these_document_id_documents_id_fk": {
+          "name": "check_these_document_id_documents_id_fk",
+          "tableFrom": "check_these",
+          "tableTo": "documents",
+          "columnsFrom": [
+            "document_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "check_these_promoted_row_id_compliance_rows_id_fk": {
+          "name": "check_these_promoted_row_id_compliance_rows_id_fk",
+          "tableFrom": "check_these",
+          "tableTo": "compliance_rows",
+          "columnsFrom": [
+            "promoted_row_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "check_these_decided_by_users_id_fk": {
+          "name": "check_these_decided_by_users_id_fk",
+          "tableFrom": "check_these",
+          "tableTo": "users",
+          "columnsFrom": [
+            "decided_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
     "public.compliance_rows": {
       "name": "compliance_rows",
       "schema": "",
@@ -1476,7 +1672,8 @@
           "name": "status",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": "'open'"
         }
       },
       "indexes": {},
@@ -1654,6 +1851,12 @@
         "marking_status": {
           "name": "marking_status",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "marking_page": {
+          "name": "marking_page",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
@@ -2416,6 +2619,18 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "owner": {
+          "name": "owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "minutes": {
+          "name": "minutes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -2715,13 +2930,21 @@
           "name": "status",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": "'not_started'"
         },
         "due_date": {
           "name": "due_date",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
+        },
+        "position": {
+          "name": "position",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         }
       },
       "indexes": {},
@@ -3285,6 +3508,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "owner": {
+          "name": "owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -3429,6 +3658,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "ai_result": {
+          "name": "ai_result",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "evidence_quote": {
           "name": "evidence_quote",
@@ -3666,6 +3901,13 @@
           "name": "disposition",
           "type": "text",
           "primaryKey": false,
+          "notNull": true,
+          "default": "'open'"
+        },
+        "author_user_id": {
+          "name": "author_user_id",
+          "type": "uuid",
+          "primaryKey": false,
           "notNull": false
         }
       },
@@ -3703,6 +3945,19 @@
           "tableTo": "documents",
           "columnsFrom": [
             "document_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "review_findings_author_user_id_users_id_fk": {
+          "name": "review_findings_author_user_id_users_id_fk",
+          "tableFrom": "review_findings",
+          "tableTo": "users",
+          "columnsFrom": [
+            "author_user_id"
           ],
           "columnsTo": [
             "id"
@@ -3773,7 +4028,8 @@
           "name": "status",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": "'planned'"
         }
       },
       "indexes": {},
