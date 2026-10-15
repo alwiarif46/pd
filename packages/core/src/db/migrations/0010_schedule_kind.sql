@@ -58,7 +58,7 @@ CREATE FUNCTION pg_temp.pd_activity_kind(raw text) RETURNS text[] LANGUAGE sql I
   SELECT CASE
     WHEN n ~ '^white[ -]glove\y' THEN ARRAY['review', 'white_glove']
     WHEN n ~ '^(blue|pink|red|green|gold)[ -]team\y' THEN ARRAY['review', substring(n FROM '^(blue|pink|red|green|gold)')]
-    WHEN n ~ '\yproposals? due\y|^submit|^submission\y' THEN ARRAY['submission', NULL]
+    WHEN n ~ '\yproposals? due\y|^submit|\ysubmission\y|^due date\y' THEN ARRAY['submission', NULL]
     WHEN n ~ 'production|\yprint|packag' THEN ARRAY['production', NULL]
     WHEN n ~ 'kickoff|kick-off|meeting|released|questions|answers|site visit|\ydue\y' THEN ARRAY['milestone', NULL]
     WHEN n ~ 'draft|\ywrit|storyboard|outline|revis|pricing' THEN ARRAY['writing', NULL]

@@ -208,25 +208,54 @@ export function nextWorkday(date: string, rules: DayRules): string {
 
 /**
  * `n` counted days after `date` (before it when `n` is negative); `date` itself when `n` is 0.
- * With `workdaysOnly`, a nonzero `n` always lands on a workday.
+ * With `workdaysOnly`, a nonzero `n` always lands on a workday. Long distances jump whole weeks
+ * (counted with countWorkdays), so the cost does not grow with `n`.
  */
 export function addWorkdays(date: string, n: number, rules: DayRules): string {
   if (!rules.workdaysOnly) return addIsoDays(date, n);
   let cursor = date;
   const step = n < 0 ? -1 : 1;
-  for (let left = Math.abs(n); left > 0;) {
+  let left = Math.abs(n);
+  while (left > 0) {
+    if (left > 7) {
+      // At most left - 1 weekdays in these whole weeks, so the jump never reaches the answer.
+      const target = addIsoDays(cursor, step * Math.floor((left - 1) / 5) * 7);
+      left -= step > 0
+        ? countWorkdays(addIsoDays(cursor, 1), target, rules)
+        : countWorkdays(target, addIsoDays(cursor, -1), rules);
+      cursor = target;
+      continue;
+    }
     cursor = addIsoDays(cursor, step);
     if (isWorkday(cursor, rules)) left -= 1;
   }
   return cursor;
 }
 
-/** Counted days from `start` to `end`, both included; 0 when `end` is before `start`. */
+/** Mondays to Fridays from `start` to `end`, both included. */
+function weekdaysBetween(start: string, end: string): number {
+  const days = diffIsoDays(start, end) + 1;
+  if (days <= 0) return 0;
+  let total = Math.floor(days / 7) * 5;
+  const first = weekday(start);
+  for (let index = 0; index < days % 7; index += 1) {
+    const day = (first + index) % 7;
+    if (day !== 0 && day !== 6) total += 1;
+  }
+  return total;
+}
+
+/**
+ * Counted days from `start` to `end`, both included; 0 when `end` is before `start`. Computed
+ * from whole weeks minus the holidays in the range (observed federal holidays always fall on a
+ * weekday), so the cost grows with the years spanned, not the days.
+ */
 export function countWorkdays(start: string, end: string, rules: DayRules): number {
-  if (!rules.workdaysOnly) return Math.max(0, diffIsoDays(start, end) + 1);
-  let total = 0;
-  for (let cursor = start; cursor <= end; cursor = addIsoDays(cursor, 1)) {
-    if (isWorkday(cursor, rules)) total += 1;
+  if (end < start) return 0;
+  if (!rules.workdaysOnly) return diffIsoDays(start, end) + 1;
+  let total = weekdaysBetween(start, end) - federalHolidaysBetween(start, end).length;
+  for (const extra of rules.extraHolidays ?? []) {
+    if (extra >= start && extra <= end && !isWeekend(extra) && federalHolidayName(extra) === null) total -= 1;
   }
   return total;
 }
@@ -287,7 +316,7 @@ export interface AdjustPlan {
   unit: 'workdays' | 'days';
   /** The due date's move in `unit`s (signed). */
   delta: number;
-  /** Activities whose dates change, in input order. Locked and undated activities never appear. */
+  /** Activities whose dates change, in input order. Undated activities never appear; locked ones only when `followsDue`. */
   moves: ActivityMove[];
 }
 
@@ -300,10 +329,10 @@ export interface AdjustPlan {
  *   the nearest day (halves round later); an end never comes before its start. Activities that
  *   start before the anchor stay. Without a usable anchor (null, or not before both due dates),
  *   scale shifts instead and `mode` says so.
- * - keep: nothing moves.
- * Locked activities and activities with no start date never move, with one exception: on shift
- * and scale, a locked activity of kind 'submission' that starts on `previousDue` is the due
- * date itself, so it moves to `nextDue` (keeping its length in calendar days), with `followsDue`.
+ * - keep: nothing moves but the due date itself (below).
+ * Locked activities and activities with no start date never move, with one exception: in every
+ * mode, a locked activity of kind 'submission' that starts on `previousDue` is the due date
+ * itself, so it moves to `nextDue` (keeping its length in calendar days), with `followsDue`.
  */
 export function planScheduleAdjust(activities: readonly AdjustableActivity[], options: AdjustOptions): AdjustPlan {
   const rules: DayRules = { workdaysOnly: options.workdaysOnly, extraHolidays: options.extraHolidays };
@@ -323,7 +352,7 @@ export function planScheduleAdjust(activities: readonly AdjustableActivity[], op
     }
   }
   const plan: AdjustPlan = { requestedMode: options.mode, mode, unit, delta, moves: [] };
-  if (mode === 'keep' || options.previousDue === options.nextDue) {
+  if (options.previousDue === options.nextDue) {
     return plan;
   }
   const anchor = options.anchor!;
@@ -342,6 +371,7 @@ export function planScheduleAdjust(activities: readonly AdjustableActivity[], op
       }
       continue;
     }
+    if (mode === 'keep') continue;
     let start: string;
     let end: string;
     if (mode === 'shift') {
@@ -485,7 +515,7 @@ export function buildScheduleTemplate(template: ScheduleTemplate, dueDate: strin
  * The kind (and review color) a label suggests. Migration 0010 backfills existing rows with the
  * same rules in SQL; the api uses this when an activity is added without a kind.
  * - "<color> team..." (blue, pink, red, green, gold) and "white glove..." are reviews.
- * - "proposal due", "submit..." and "submission..." are the submission.
+ * - "proposal due", "submit...", "due date..." and any "submission" are the submission.
  * - production, print, and packag(e/ing) are production.
  * - kickoff, meeting, released, questions, answers, site visit, and other "... due" dates are milestones.
  * - draft, writ(e/ing), storyboard, outline, revis(e/ion), and pricing are writing.
@@ -496,7 +526,7 @@ export function inferActivityKind(label: string): { kind: ActivityKind; reviewCo
   if (/^white[ -]glove\b/.test(name)) return { kind: 'review', reviewColor: 'white_glove' };
   const color = /^(blue|pink|red|green|gold)[ -]team\b/.exec(name);
   if (color) return { kind: 'review', reviewColor: color[1] as ReviewColor };
-  if (/\bproposals? due\b|^submit|^submission\b/.test(name)) return { kind: 'submission', reviewColor: null };
+  if (/\bproposals? due\b|^submit|\bsubmission\b|^due date\b/.test(name)) return { kind: 'submission', reviewColor: null };
   if (/production|\bprint|packag/.test(name)) return { kind: 'production', reviewColor: null };
   if (/kickoff|kick-off|meeting|released|questions|answers|site visit|\bdue\b/.test(name)) return { kind: 'milestone', reviewColor: null };
   if (/draft|\bwrit|storyboard|outline|revis|pricing/.test(name)) return { kind: 'writing', reviewColor: null };

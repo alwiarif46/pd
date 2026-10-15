@@ -220,15 +220,15 @@ describe.skipIf(Boolean(unavailable))('schedule', () => {
       expect((await byId(id)).get(due.id)!.locked).toBe(true);
     });
 
-    it('moves the due date submission on scale too, but not on keep', async () => {
+    it('moves the due date submission on keep (alone) and on scale', async () => {
       const id = await bid({ startDate: '2026-11-02', dueDate: '2026-11-20' });
-      const { due } = await planned(id);
-      expect((await asA('POST', `/api/bids/${id}/schedule/adjust`, { mode: 'keep', previousDue: '2026-11-20', nextDue: '2026-12-04' })).json())
-        .toMatchObject({ moved: 0 });
-      expect(await dates(id, [due.id])).toEqual([['2026-11-20', '2026-11-20']]);
-      const scaled = await asA('POST', `/api/bids/${id}/schedule/adjust`, { mode: 'scale', previousDue: '2026-11-20', nextDue: '2026-12-04' });
+      const { draft, due } = await planned(id);
+      const kept = await asA('POST', `/api/bids/${id}/schedule/adjust`, { mode: 'keep', previousDue: '2026-11-20', nextDue: '2026-12-04' });
+      expect(kept.json()).toMatchObject({ mode: 'keep', moved: 1, moves: [{ id: due.id, start: '2026-12-04', followsDue: true }] });
+      expect(await dates(id, [due.id, draft.id])).toEqual([['2026-12-04', '2026-12-04'], ['2026-11-16', '2026-11-18']]);
+      const scaled = await asA('POST', `/api/bids/${id}/schedule/adjust`, { mode: 'scale', previousDue: '2026-12-04', nextDue: '2026-12-18' });
       expect(scaled.json()).toMatchObject({ mode: 'scale', moved: 3 });
-      expect(await dates(id, [due.id])).toEqual([['2026-12-04', '2026-12-04']]);
+      expect(await dates(id, [due.id])).toEqual([['2026-12-18', '2026-12-18']]);
     });
 
     it('shifts in calendar days when the request overrides the setting', async () => {
@@ -276,7 +276,7 @@ describe.skipIf(Boolean(unavailable))('schedule', () => {
       const { draft } = await planned(id);
       expect((await asA('POST', `/api/bids/${id}/schedule/adjust`, { mode: 'keep' })).json()).toMatchObject({ ok: true, moved: 0, moves: [] });
       expect((await asA('POST', `/api/bids/${id}/schedule/adjust`, { mode: 'keep', previousDue: '2026-11-20', nextDue: '2026-11-30' })).json())
-        .toMatchObject({ mode: 'keep', moved: 0 });
+        .toMatchObject({ mode: 'keep', moved: 1 }); // only the locked due date itself
       const post = (body: Record<string, unknown>) => asA('POST', `/api/bids/${id}/schedule/adjust`, body);
       expect((await post({ mode: 'stretch', previousDue: '2026-11-20', nextDue: '2026-11-30' })).statusCode).toBe(400);
       expect((await post({ mode: 'shift' })).statusCode).toBe(400);

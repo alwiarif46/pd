@@ -288,7 +288,7 @@ export async function registerSchedule(app: FastifyInstance): Promise<void> {
    * Body: mode ('shift' | 'scale' | 'keep'), previousDue and nextDue ('YYYY-MM-DD'; required
    * for shift and scale), workdaysOnly (optional: overrides the bid's setting for this call).
    * Scale stretches from the bid's start date and shifts instead without one (`mode` says
-   * which was done). Locked rows stay, except that on shift and scale a locked 'submission'
+   * which was done). Locked rows stay, except that in every mode (keep too) a locked 'submission'
    * starting on previousDue is the due date itself and moves to nextDue (`followsDue` in its
    * move). The bid's due date is not changed here.
    */

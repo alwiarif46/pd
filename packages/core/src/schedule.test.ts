@@ -118,6 +118,45 @@ describe('workdays', () => {
     expect(countWorkdays('2026-11-27', '2026-11-23', CALENDAR)).toBe(0);
   });
 
+  it('counts and adds the same as a day-by-day walk, with extra holidays too', () => {
+    const extra = new Set(['2026-11-27', '2027-01-02', '2027-03-10']); // a Friday, a Saturday, a Wednesday
+    const walk = (start: string, end: string, rules: DayRules) => {
+      let total = 0;
+      for (let cursor = start; cursor <= end; cursor = addIsoDays(cursor, 1)) if (isWorkday(cursor, rules)) total += 1;
+      return total;
+    };
+    const step = (date: string, n: number, rules: DayRules) => {
+      let cursor = date;
+      for (let left = Math.abs(n); left > 0;) {
+        cursor = addIsoDays(cursor, n < 0 ? -1 : 1);
+        if (isWorkday(cursor, rules)) left -= 1;
+      }
+      return cursor;
+    };
+    for (const rules of [WORKDAYS, { workdaysOnly: true, extraHolidays: extra }]) {
+      for (const start of ['2026-10-30', '2026-11-26', '2026-12-26', '2027-01-01']) {
+        for (const days of [0, 1, 6, 7, 8, 30, 64, 200, 400]) {
+          const end = addIsoDays(start, days);
+          expect(countWorkdays(start, end, rules), `${start}+${days}`).toBe(walk(start, end, rules));
+        }
+        for (const n of [-300, -41, -9, -8, -1, 1, 8, 9, 23, 41, 300]) {
+          expect(addWorkdays(start, n, rules), `${start} ${n}`).toBe(step(start, n, rules));
+        }
+      }
+    }
+  });
+
+  it('stays fast over centuries', () => {
+    // An adjust plans every activity; a day-by-day walk took about a second per 20 of these.
+    const started = Date.now();
+    for (let index = 0; index < 20; index += 1) {
+      expect(workdayDelta('1900-01-01', '2200-12-31', WORKDAYS)).toBeGreaterThan(70_000);
+      expect(addWorkdays('1900-01-01', 70_000, WORKDAYS) > '2160-01-01').toBe(true);
+      expect(addWorkdays('2200-12-31', -70_000, WORKDAYS) < '1940-12-31').toBe(true);
+    }
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
   it('gives a delta that lands on the target whenever the target is a workday', () => {
     const days = Array.from({ length: 50 }, (_, index) => addIsoDays('2026-11-15', index));
     for (const from of days) {
@@ -241,7 +280,7 @@ describe('planScheduleAdjust', () => {
     }
   });
 
-  it('moves the locked submission on the old due date to the new one, on shift and scale only', () => {
+  it('moves the locked submission on the old due date to the new one, in every mode', () => {
     const list: AdjustableActivity[] = [
       { id: 'due', start: '2026-11-20', end: '2026-11-20', locked: true, kind: 'submission' },
       { id: 'earlier', start: '2026-11-13', end: null, locked: true, kind: 'submission' },
@@ -259,9 +298,12 @@ describe('planScheduleAdjust', () => {
         expect(plan.moves.find((move) => move.id === 'draft')?.followsDue).toBe(false);
       }
     }
+    // On keep only the due date itself moves.
     expect(planScheduleAdjust(list, {
       mode: 'keep', previousDue: '2026-11-20', nextDue: '2026-11-28', anchor: null, workdaysOnly: true,
-    }).moves).toEqual([]);
+    }).moves).toEqual([
+      { id: 'due', previousStart: '2026-11-20', previousEnd: '2026-11-20', start: '2026-11-28', end: '2026-11-28', followsDue: true },
+    ]);
     // A multi-day submission keeps its length.
     const long = planScheduleAdjust([{ id: 'window', start: '2026-11-20', end: '2026-11-23', locked: true, kind: 'submission' }], {
       mode: 'shift', previousDue: '2026-11-20', nextDue: '2026-11-25', anchor: null, workdaysOnly: true,
@@ -327,6 +369,9 @@ describe('inferActivityKind', () => {
     ['Draft', 'writing', null],
     ['Final revisions', 'writing', null],
     ['Lunch', 'custom', null],
+    ['Proposal submission', 'submission', null],
+    ['Due date', 'submission', null],
+    ['Questions due date', 'milestone', null],
   ])('%s is %s', (label, kind, reviewColor) => {
     expect(inferActivityKind(label)).toEqual({ kind, reviewColor });
   });

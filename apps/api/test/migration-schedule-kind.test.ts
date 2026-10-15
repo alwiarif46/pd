@@ -43,7 +43,8 @@ const LABELS = [
   'Reduce page count', 'Proposal due', 'Proposals due', 'Submit', 'Submission', 'Questions due', 'Kickoff',
   'Kick-off call', 'Site visit', 'Answers posted', 'RFP released', 'Production', 'Print and package',
   'Storyboard', 'Draft', 'First draft writing', 'Outline and compliance matrix', 'Final revisions',
-  'Pricing volume', 'Date from solicitation', 'Lunch', '  Red team  ',
+  'Pricing volume', 'Date from solicitation', 'Lunch', '  Red team  ', 'Proposal submission', 'Due date',
+  'Questions due date',
 ];
 
 describe.skipIf(Boolean(unavailable))('0010_schedule_kind on a database with schedule rows', () => {

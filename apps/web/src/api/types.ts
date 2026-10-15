@@ -770,7 +770,7 @@ export interface ScheduleMoveDto {
   previousEnd: string;
   start: string;
   end: string;
-  /** The locked 'submission' that was on previousDue: it is the due date itself and moves to nextDue (shift and scale). */
+  /** The locked 'submission' that was on previousDue: it is the due date itself and moves to nextDue in every mode, keep included. */
   followsDue: boolean;
 }
 
