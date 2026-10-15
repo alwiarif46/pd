@@ -14,3 +14,4 @@ export * from './marking-checker';
 export * from './compliance-pipeline';
 export * from './amendment-diff';
 export * from './solicitation-key';
+export * from './amendment-number';
