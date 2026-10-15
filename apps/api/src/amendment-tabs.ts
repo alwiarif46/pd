@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import { PROPOSED, readDateChange, schema, toIsoDate } from '@pd/core';
 import type { Db } from './scope.js';
 
@@ -277,4 +277,76 @@ export async function confirmTabLink(
     })));
   }
   return 'ok';
+}
+
+/**
+ * PATCH of an amendment's number, for the tab rows step 8 wrote (inside the caller's
+ * transaction, after its compliance rows; it holds the document, the bid, and the amendment):
+ * amendment_no of the fact and activity rows the amendment added (document = the amendment), and
+ * changed_by_amendment of the rows they replace (superseded_by_row_id one of them), each with a
+ * row_history entry. Rows are locked by id, facts first. The supersede choices step 8 made are
+ * kept: a number moved past another amendment's does not re-decide which row is in force.
+ * updated_at is left alone: step 8 reads a moved updated_at as a user's edit (a touched row), and
+ * a new number is not an edit of the row.
+ */
+export async function renumberTabRows(
+  db: Db,
+  orgId: string,
+  userId: string,
+  bidId: string,
+  documentId: string,
+  amendmentNo: number,
+  now: Date,
+): Promise<void> {
+  for (const table of ['bid_facts', 'schedule_activities'] as const) {
+    const t = table === 'bid_facts' ? schema.bidFacts : schema.scheduleActivities;
+    const added = await db.select({ id: t.id }).from(t).where(and(
+      eq(t.bidId, bidId),
+      eq(t.orgId, orgId),
+      eq(t.documentId, documentId),
+    ));
+    const addedIds = added.map((row) => row.id);
+    if (addedIds.length === 0) {
+      continue;
+    }
+    const rows = await db.select({
+      id: t.id,
+      documentId: t.documentId,
+      amendmentNo: t.amendmentNo,
+      changedByAmendment: t.changedByAmendment,
+      supersededByRowId: t.supersededByRowId,
+    }).from(t).where(and(
+      eq(t.bidId, bidId),
+      eq(t.orgId, orgId),
+      or(inArray(t.id, addedIds), inArray(t.supersededByRowId, addedIds)),
+    )).orderBy(asc(t.id)).for('update');
+    const history: (typeof schema.rowHistory.$inferInsert)[] = [];
+    const addedSet = new Set(addedIds);
+    for (const row of rows) {
+      const change: { amendmentNo?: number; changedByAmendment?: number } = {};
+      if (addedSet.has(row.id) && row.amendmentNo > 0 && row.amendmentNo !== amendmentNo) {
+        change.amendmentNo = amendmentNo;
+        history.push({ orgId, rowTable: table, rowId: row.id, userId, field: 'amendment_no', oldValue: String(row.amendmentNo), newValue: String(amendmentNo), changedAt: now });
+      }
+      if (row.supersededByRowId && addedSet.has(row.supersededByRowId) && row.changedByAmendment !== amendmentNo) {
+        change.changedByAmendment = amendmentNo;
+        history.push({
+          orgId, rowTable: table, rowId: row.id, userId, field: 'changed_by_amendment',
+          oldValue: row.changedByAmendment === null ? null : String(row.changedByAmendment), newValue: String(amendmentNo), changedAt: now,
+        });
+      }
+      if (Object.keys(change).length === 0) {
+        continue;
+      }
+      if (table === 'bid_facts') {
+        await db.update(schema.bidFacts).set(change).where(and(eq(schema.bidFacts.id, row.id), eq(schema.bidFacts.orgId, orgId)));
+      } else {
+        await db.update(schema.scheduleActivities).set(change)
+          .where(and(eq(schema.scheduleActivities.id, row.id), eq(schema.scheduleActivities.orgId, orgId)));
+      }
+    }
+    if (history.length > 0) {
+      await db.insert(schema.rowHistory).values(history);
+    }
+  }
 }

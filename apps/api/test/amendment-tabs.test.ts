@@ -340,6 +340,28 @@ describe.skipIf(Boolean(unavailable))('amendment step 8: bid facts and dates', (
       expect((await amendmentOf(tenant, documentId)).status).toBe('applied');
     });
 
+    it('a new amendment number carries to the facts and dates it wrote and the rows they replace, leaving them untouched', async () => {
+      const { tenant, agency, due } = await setup('at-renumber');
+      const documentId = await amendment(tenant, 2);
+      expect(await run(tenant, documentId)).toBe('applied');
+      const renumbered = await as(app, tenant.token)('PATCH', `/api/documents/${documentId}/amendment-no`, { amendmentNo: 5 });
+      expect(renumbered.statusCode, renumbered.body).toBe(200);
+      const facts = await factsOf(tenant);
+      const navy = facts.find((fact) => fact.documentId === documentId && fact.factKey === 'agency')!;
+      expect(navy).toMatchObject({ amendmentNo: 5, supersedeStatus: 'active' });
+      expect(facts.find((fact) => fact.id === agency)).toMatchObject({ changedByAmendment: 5, supersededByRowId: navy.id });
+      const dates = await datesOf(tenant);
+      expect(dates.find((row) => row.documentId === documentId && row.dateKey === 'proposal_due')).toMatchObject({ amendmentNo: 5 });
+      expect(dates.find((row) => row.id === due)).toMatchObject({ changedByAmendment: 5 });
+      const history = await withOrg(tenant.orgId, (db) => db.select().from(schema.rowHistory).where(eq(schema.rowHistory.rowId, navy.id)));
+      expect(history.map((row) => [row.field, row.oldValue, row.newValue])).toEqual([['amendment_no', '2', '5']]);
+      // The renumbered AI row still counts as untouched: amendment 6 supersedes it automatically.
+      const six = await amendment(tenant, 6);
+      ai.facts = [{ field: 'agency', value: 'Department of the Air Force', sourceQuote: 'Amendment No. 6', sourcePage: 1 }];
+      expect(await run(tenant, six)).toBe('applied');
+      expect((await factsOf(tenant)).find((fact) => fact.id === navy.id)).toMatchObject({ supersedeStatus: 'superseded', changedByAmendment: 6 });
+    });
+
     it('gives the same facts and dates in force whichever amendment finishes first', async () => {
       const result = async (label: string, order: number[]) => {
         const { tenant } = await setup(label);
