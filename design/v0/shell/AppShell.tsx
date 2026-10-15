@@ -49,9 +49,7 @@ function formatDueDate(bid: AppShellProps['bid']): string {
   if (!bid?.dueDate) return 'Due date to be confirmed';
   const date = `Due ${formatDate(bid.dueDate)}`;
   if (!bid.dueTime || !bid.timeZone) return date;
-  const [hours, minutes] = bid.dueTime.split(':').map(Number);
-  const time = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', timeZone: bid.timeZone }).format(new Date(2026, 0, 1, hours, minutes));
-  return `${date} at ${time} (${bid.timeZone})`;
+  return `${date} at ${bid.dueTime} (${bid.timeZone})`;
 }
 
 function signalText(signal: TabSignal): string {
@@ -68,10 +66,14 @@ function signalIcon(signal: TabSignal) {
 
 export function AppShell(props: AppShellProps) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [detailOpen, setDetailOpen] = useState(Boolean(props.detail));
+  const [detailOpen, setDetailOpen] = useState(false);
   const signalFor = (tab: Tab) => props.tabSignals.find((item) => item.tab === tab)?.signal;
   const navigateTab = (tab: Tab) => {
     setMenuOpen(false);
+    if (props.plan === 'free' && PAID_TABS.includes(tab)) {
+      props.onUpgrade();
+      return;
+    }
     props.onSelectTab(tab);
   };
   const navigatePage = (page: OutsidePage) => {
@@ -90,7 +92,7 @@ export function AppShell(props: AppShellProps) {
             <Tooltip>
               <TooltipTrigger asChild>
                 <button type="button" aria-current={active ? 'page' : undefined} aria-label={`${label}${locked ? ' (locked)' : ''}${signal ? `, ${signalText(signal)}` : ''}`} onClick={() => navigateTab(id)} className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-weekend focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${active ? 'bg-weekend font-semibold' : ''}`}>
-                  <span className="relative shrink-0">{locked ? <Lock aria-hidden="true" className="size-4" /> : <Icon aria-hidden="true" className="size-4" />}{signal && <span className="absolute -right-1 -top-1 size-2 rounded-full bg-primary" aria-hidden="true" />}</span>
+                  <span className="relative shrink-0">{locked ? <Lock aria-hidden="true" className="size-4" /> : <Icon aria-hidden="true" className="size-4" />}{signal && <span className="absolute -right-1 -top-1" aria-hidden="true">{signalIcon(signal)}</span>}</span>
                   <span className="sr-only min-[1024px]:not-sr-only">{label}</span>
                   {signal && <span className="sr-only min-[1024px]:not-sr-only text-xs text-muted-foreground">{signalText(signal)}</span>}
                 </button>
@@ -125,11 +127,14 @@ export function AppShell(props: AppShellProps) {
         </header>
         <div className="flex min-h-0 flex-1">
           {props.bid && <aside className="hidden w-16 shrink-0 border-r border-line p-2 min-[640px]:block min-[1024px]:w-56 min-[1024px]:p-3">{nav}</aside>}
-          <main id="content" className="min-w-0 flex-1">{props.children}</main>
+          <main id="content" className="min-w-0 flex-1">
+            {props.detail && <div className="flex justify-end p-3 min-[1024px]:hidden"><Button variant="outline" size="sm" onClick={() => setDetailOpen(true)}>View row detail</Button></div>}
+            {props.children}
+          </main>
           {props.detail && <aside className="hidden w-80 shrink-0 border-l border-line p-4 min-[1024px]:block">{props.detail}</aside>}
         </div>
         {props.bid && <Sheet open={menuOpen} onOpenChange={setMenuOpen}><SheetContent side="left"><SheetTitle>Bid navigation</SheetTitle>{nav}</SheetContent></Sheet>}
-        {props.detail && <Sheet open={detailOpen} onOpenChange={setDetailOpen}><SheetContent side="bottom"><SheetTitle>Row detail</SheetTitle><SheetClose asChild><Button variant="outline">Close</Button></SheetClose>{props.detail}</SheetContent></Sheet>}
+        {props.detail && <Sheet open={detailOpen} onOpenChange={setDetailOpen}><SheetContent side="bottom" className="min-[1024px]:hidden"><SheetTitle>Row detail</SheetTitle><SheetClose asChild><Button variant="outline">Close</Button></SheetClose>{props.detail}</SheetContent></Sheet>}
       </div>
     </TooltipProvider>
   );
