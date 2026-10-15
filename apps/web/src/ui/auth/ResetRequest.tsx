@@ -12,7 +12,7 @@ import {
   fieldAria,
   useAuthForm,
 } from './AuthLayout';
-import type { ResetRequestProps } from '@/types';
+import type { ResetRequestProps } from './types';
 
 const CHECKS = { email: checkEmail };
 const INITIAL = { email: '' };

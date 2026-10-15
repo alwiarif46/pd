@@ -1,0 +1,12 @@
+{
+  "sourceCommit": "489cfea086c03cfcf9268aea00e857df80503778",
+  "files": [
+    "BidsList.tsx",
+    "NewBid.tsx",
+    "OutOfCreditsMessage.tsx",
+    "format.ts",
+    "sample-data.ts",
+    "types.ts"
+  ],
+  "keepLocal": []
+}

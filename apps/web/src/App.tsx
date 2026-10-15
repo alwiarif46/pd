@@ -2,7 +2,11 @@ import { useEffect, useState } from 'react';
 import { ApiError, api, setToken, token } from './legacy-api';
 import type { Bid, OrgPayload, TabId } from './models';
 import { AuthContainer } from './features/auth/AuthContainer';
-import { Account, BidsHome, NewBid, Organization, Privacy } from './screens/Outside';
+import { BidsContainer } from './features/bids/BidsContainer';
+import { NewBidContainer } from './features/bids/NewBidContainer';
+import { TempFrame } from './features/bids/TempFrame';
+import { Toaster } from './components/ui/sonner';
+import { Account, Organization, Privacy } from './screens/Outside';
 import { Workspace } from './screens/Workspace';
 
 type Route =
@@ -68,8 +72,15 @@ export default function App() {
   const credits = org?.credits;
   const left = credits ? credits.allowed - credits.used - credits.reserved : null;
 
+  // The v0 bids screens render outside `.app-shell`, in TempFrame, until the shell replaces both. Only the
+  // legacy header stays in `.app-shell` on those routes.
+  const v0Page = signedIn && (route.name === 'bids' || route.name === 'new');
+
   return (
-    <div className="app-shell">
+    <>
+    {/* Toasts from the v0 screens' containers; outside .app-shell so the reset and v0 tokens apply. */}
+    <Toaster />
+    <div className="app-shell" style={v0Page ? { minHeight: 0 } : undefined}>
       <header className="topbar">
         <a className="brand" href={signedIn ? '#/bids' : '#/login'}>Proposal Development</a>
         <span className="grow" />
@@ -83,8 +94,6 @@ export default function App() {
         ) : null}
       </header>
       {route.name === 'privacy' ? <Privacy /> : null}
-      {signedIn && route.name === 'bids' ? <BidsHome onOpen={(id) => { window.location.hash = `#/bids/${id}/overview`; }} /> : null}
-      {signedIn && route.name === 'new' ? <NewBid onCreated={(id) => { window.location.hash = `#/bids/${id}/documents`; }} /> : null}
       {signedIn && route.name === 'org' ? <Organization /> : null}
       {signedIn && route.name === 'account' ? <Account /> : null}
       {signedIn && route.name === 'bid' ? (
@@ -98,5 +107,9 @@ export default function App() {
         />
       ) : null}
     </div>
+    {v0Page ? (
+      <TempFrame>{route.name === 'bids' ? <BidsContainer /> : <NewBidContainer />}</TempFrame>
+    ) : null}
+    </>
   );
 }

@@ -1,17 +1,9 @@
-import {
-  Children,
-  isValidElement,
-  useCallback,
-  useId,
-  useState,
-  type ReactNode,
-  type Ref,
-} from 'react';
+import { Children, isValidElement, useCallback, useId, useState, type ReactNode, type Ref } from 'react';
 import { AlertCircle, Check, Eye, EyeOff, Info, Landmark, ListChecks, Loader2, Quote } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import type { AuthLayoutProps, AuthStatus } from '@/types';
+import type { AuthLayoutProps, AuthStatus } from './types';
 
 /* ------------------------------------------------------------------ */
 /* Frame                                                               */
@@ -64,18 +56,13 @@ export function AuthLayout({ title, children }: AuthLayoutProps) {
 
       <main className="flex min-w-0 flex-1 justify-center px-4 py-8 lg:items-center lg:px-12">
         <div className="flex w-full min-w-0 flex-col gap-6 lg:max-w-[400px]">
-          <section
-            aria-labelledby={titleId}
-            className="rounded-lg border border-line bg-paper p-6 shadow-sm sm:p-8"
-          >
+          <section aria-labelledby={titleId} className="rounded-lg border border-line bg-paper p-6 shadow-sm sm:p-8">
             <h1 id={titleId} className="text-pretty text-2xl font-semibold tracking-tight text-ink">
               {title}
             </h1>
             <div className="mt-6 flex flex-col gap-5">{inside}</div>
           </section>
-          {below.length > 0 && (
-            <div className="text-center text-sm leading-relaxed text-muted-foreground">{below}</div>
-          )}
+          {below.length > 0 && <div className="text-center text-sm leading-relaxed text-muted-foreground">{below}</div>}
         </div>
       </main>
     </div>
@@ -169,7 +156,16 @@ interface PasswordInputProps {
   onBlur: () => void;
 }
 
-export function PasswordInput({ id, value, autoComplete, error, hasHint, inputRef, onChange, onBlur }: PasswordInputProps) {
+export function PasswordInput({
+  id,
+  value,
+  autoComplete,
+  error,
+  hasHint,
+  inputRef,
+  onChange,
+  onBlur,
+}: PasswordInputProps) {
   const [visible, setVisible] = useState(false);
   return (
     <div className="relative">
@@ -215,7 +211,15 @@ export function PasswordLengthHint({ password }: { password: string }) {
   );
 }
 
-export function SubmitButton({ submitting, label, busyLabel }: { submitting: boolean; label: string; busyLabel: string }) {
+export function SubmitButton({
+  submitting,
+  label,
+  busyLabel,
+}: {
+  submitting: boolean;
+  label: string;
+  busyLabel: string;
+}) {
   return (
     <Button type="submit" className="h-10 w-full" disabled={submitting} aria-disabled={submitting}>
       {submitting && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
@@ -224,7 +228,15 @@ export function SubmitButton({ submitting, label, busyLabel }: { submitting: boo
   );
 }
 
-export function TextButton({ onClick, children, disabled }: { onClick: () => void; children: ReactNode; disabled?: boolean }) {
+export function TextButton({
+  onClick,
+  children,
+  disabled,
+}: {
+  onClick: () => void;
+  children: ReactNode;
+  disabled?: boolean;
+}) {
   return (
     <Button
       type="button"
@@ -294,7 +306,10 @@ export function formatPhone(digits: string) {
 /* Form state                                                          */
 /* ------------------------------------------------------------------ */
 
-export function useAuthForm<K extends string>(checks: Record<K, FieldCheck<Record<K, string>>>, initial: Record<K, string>) {
+export function useAuthForm<K extends string>(
+  checks: Record<K, FieldCheck<Record<K, string>>>,
+  initial: Record<K, string>,
+) {
   const [values, setValues] = useState(initial);
   const [errors, setErrors] = useState<Partial<Record<K, string>>>({});
 
