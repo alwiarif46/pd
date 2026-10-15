@@ -33,6 +33,10 @@ button, a, input, select, textarea { }
 
 .app-shell { min-height: 100vh; }
 
+/* A legacy screen hosted inside the v0 shell (features/shell/LegacyFrame.tsx): the shell owns the page height and the sidebar. */
+.app-shell.legacy-embed { min-height: 0; }
+.legacy-embed .workspace { grid-template-columns: 1fr; min-height: 0; }
+
 .topbar {
   display: flex;
   align-items: center;

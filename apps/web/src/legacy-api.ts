@@ -1,5 +1,5 @@
 import { ApiError } from './api/errors';
-import { getToken as token, setToken } from './api/session';
+import { getToken as token, notifyUnauthorized, setToken } from './api/session';
 
 export { ApiError, token, setToken };
 
@@ -13,6 +13,10 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set('Content-Type', 'application/json');
   }
   const response = await fetch(path, { ...init, headers });
+  // An expired session: the shell signs out, as it does for the typed client (api/http.ts).
+  if (response.status === 401 && current) {
+    notifyUnauthorized();
+  }
   if (response.status === 204) {
     return undefined as T;
   }

@@ -5,7 +5,7 @@ import { isUuid, mbCapForPlan, PLAN_LIMITS, type Plan, schema, userMemberships, 
 import { billingAvailable, registerBilling } from './billing.js';
 import { requireAuth, requireUser } from './context.js';
 import { BODY_REQUIRED, readBody, text } from './body.js';
-import { currentCreditPeriod, expireAbandonedUploads, removeChunkDirs } from './credits.js';
+import { currentCreditPeriod, expireAbandonedUploads, planCreditPeriod, removeChunkDirs } from './credits.js';
 import { inOrg } from './scope.js';
 import { hashToken, isWorkEmail, newToken, sendOutOfBand } from './security.js';
 
@@ -22,6 +22,19 @@ const PUBLIC_ORG_COLUMNS = {
   cycleEnd: schema.organizations.cycleEnd,
   freeFirstMonthEnds: schema.organizations.freeFirstMonthEnds,
 };
+
+/** GET /api/org `credits` while the current period has no row yet (see the handler). */
+interface ProjectedCredits {
+  id: null;
+  orgId: string;
+  periodStart: Date;
+  periodEnd: Date;
+  allowed: number;
+  used: 0;
+  reserved: 0;
+  createdAt: null;
+  updatedAt: null;
+}
 
 function seatLimit(plan: Plan): number {
   return PLAN_LIMITS[plan].maxUsers;
@@ -79,8 +92,25 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
       abandoned.push(...await expireAbandonedUploads(db, orgId, now));
       // Stripe ids stay on the server: members see this payload too, and the web never needs them.
       const [org] = await db.select(PUBLIC_ORG_COLUMNS).from(schema.organizations).where(eq(schema.organizations.id, orgId));
-      // The period that holds now, or null before the first credit of this period is reserved.
-      const credits = await currentCreditPeriod(db, orgId, now);
+      // The period that holds now. Before the first credit of a period is reserved it has no row:
+      // show the row that reservation would create (allowance, reset date) with `id: null`, since
+      // null would read as 0 credits left. Nothing is written here.
+      const row = await currentCreditPeriod(db, orgId, now);
+      let credits: typeof row | ProjectedCredits = row;
+      if (!row && org) {
+        const planned = await planCreditPeriod(db, { ...org, plan: org.plan as Plan }, now);
+        credits = {
+          id: null,
+          orgId,
+          periodStart: planned.start,
+          periodEnd: planned.end,
+          allowed: planned.allowed,
+          used: 0,
+          reserved: 0,
+          createdAt: null,
+          updatedAt: null,
+        };
+      }
       const plan = (org?.plan ?? 'free') as Plan;
       return {
         org: org ?? null,

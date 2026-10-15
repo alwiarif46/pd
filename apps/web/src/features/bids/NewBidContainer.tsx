@@ -14,6 +14,7 @@ import {
 } from './controller';
 import { stashUploadNotices } from './notices';
 import { bidDocumentsHash, BIDS_HASH, UPGRADE_HASH } from './routes';
+import { useUpgrade } from './use-upgrade';
 
 type State = { kind: 'loading' } | { kind: 'error'; message: string } | NewBidScreenData;
 
@@ -32,6 +33,7 @@ function go(hash: string) {
  * refusals show as toasts.
  */
 export function NewBidContainer({ api = bidsApi }: Props) {
+  const upgrade = useUpgrade();
   const [state, setState] = useState<State>({ kind: 'loading' });
   const [attempt, setAttempt] = useState(0);
   const [status, setStatus] = useState<FormStatus>({ state: 'idle' });
@@ -117,7 +119,7 @@ export function NewBidContainer({ api = bidsApi }: Props) {
       status={status}
       onCreate={create}
       onCancel={() => go(BIDS_HASH)}
-      onUpgrade={() => go(UPGRADE_HASH)}
+      onUpgrade={() => upgrade(org.creditsLeft)}
     />
   );
 }

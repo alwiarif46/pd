@@ -1,0 +1,20 @@
+import { Lock } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import type { LockedTabProps } from './types';
+export function LockedTab({ tab, title, description, onUpgrade }: LockedTabProps) {
+  return (
+    <section className="space-y-4 rounded-lg border border-line bg-paper p-6">
+      <h2>{title}</h2>
+      <p className="font-medium">{tab} is on a paid plan</p>
+      <p className="text-sm text-muted-foreground">{description}</p>
+      <div aria-hidden className="pointer-events-none rounded border border-line bg-weekend p-5 opacity-60">
+        <span className="text-xs">Sample</span>
+        <div className="mt-3 h-20 rounded bg-paper" />
+      </div>
+      <Button onClick={onUpgrade}>
+        <Lock className="mr-2 h-4 w-4" />
+        Upgrade plan
+      </Button>
+    </section>
+  );
+}

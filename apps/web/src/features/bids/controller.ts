@@ -1,7 +1,11 @@
 import * as api from '@/api';
 import { ApiError } from '@/api';
-import type { BidDto, OrganizationDto, OrgPayloadDto } from '@/api';
-import type { BidCard, BidType, FileKind, Plan, UploadNotice } from '@/types';
+import type { BidDto } from '@/api';
+import type { BidCard, BidType, FileKind, UploadNotice } from '@/types';
+import { summarizeOrg, type OrgSummary } from '@/features/shared/credits';
+import { messageOf, noticeFor } from '@/features/shared/messages';
+
+export { periodEndFrom, summarizeOrg, type OrgSummary } from '@/features/shared/credits';
 
 /** The slice of the typed API client the bids containers use. Tests pass a mock. */
 export interface BidsApi {
@@ -13,15 +17,8 @@ export interface BidsApi {
 
 export const bidsApi: BidsApi = api;
 
-const FALLBACK_MESSAGE = 'Something went wrong. Try again.';
-
 /** API errors carry text meant for the user (out of credits, key mismatch, over the cap); show it as given. */
-export function messageOf(error: unknown): string {
-  return error instanceof ApiError && error.message ? error.message : FALLBACK_MESSAGE;
-}
-
-/** The shown text for a duplicate upload (05 s3.10). */
-export const DUPLICATE_MESSAGE = 'Already uploaded.';
+export { DUPLICATE_MESSAGE, messageOf } from '@/features/shared/messages';
 
 /* ---- Bid list ---- */
 
@@ -83,76 +80,6 @@ export function sortBidCards(cards: BidCard[]): BidCard[] {
       return x < y ? 1 : -1;
     });
   return [...open, ...closed];
-}
-
-/* ---- Credits, plan and cap from GET /api/org ---- */
-
-export interface OrgSummary {
-  creditsLeft: number;
-  creditsResetOn: string;
-  plan: Plan;
-  mbCap: number;
-}
-
-/** 06 s3. Used only while the API has no credit period row for the current period (see `summarizeOrg`). */
-const MONTHLY_ALLOWANCE: Record<Plan, number> = { free: 1, starter: 10, growth: 20 };
-const FREE_FIRST_MONTH_ALLOWANCE = 2;
-
-function addMonthsClamped(anchor: Date, months: number): Date {
-  const year = anchor.getUTCFullYear();
-  const month = anchor.getUTCMonth() + months;
-  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
-  return new Date(
-    Date.UTC(
-      year,
-      month,
-      Math.min(anchor.getUTCDate(), lastDay),
-      anchor.getUTCHours(),
-      anchor.getUTCMinutes(),
-      anchor.getUTCSeconds(),
-    ),
-  );
-}
-
-/** End of the monthly period, counted from `anchor`, that holds `now` (same rule as the API's credit periods). */
-export function periodEndFrom(anchor: Date, now: Date): Date {
-  const base = anchor.getTime() > now.getTime() ? now : anchor;
-  let index = Math.max(
-    0,
-    (now.getUTCFullYear() - base.getUTCFullYear()) * 12 + (now.getUTCMonth() - base.getUTCMonth()),
-  );
-  while (index > 0 && addMonthsClamped(base, index).getTime() > now.getTime()) index -= 1;
-  while (addMonthsClamped(base, index + 1).getTime() <= now.getTime()) index += 1;
-  return addMonthsClamped(base, index + 1);
-}
-
-function estimateCredits(org: OrganizationDto, now: Date): { left: number; resetOn: string } {
-  const plan = org.plan;
-  const firstMonth = plan === 'free' && org.freeFirstMonthEnds !== null && now < new Date(org.freeFirstMonthEnds);
-  const left = firstMonth ? FREE_FIRST_MONTH_ALLOWANCE : MONTHLY_ALLOWANCE[plan];
-  const cycleStart = org.cycleStart ? new Date(org.cycleStart) : null;
-  const cycleEnd = org.cycleEnd ? new Date(org.cycleEnd) : null;
-  if (plan !== 'free' && cycleStart && cycleEnd && cycleStart <= now && now < cycleEnd) {
-    return { left, resetOn: cycleEnd.toISOString() };
-  }
-  return { left, resetOn: periodEndFrom(new Date(org.cycleStart ?? org.createdAt), now).toISOString() };
-}
-
-/**
- * Credits left = allowed - used - reserved. The API answers `credits: null` until the first credit of the
- * period is reserved (the period row is created then), so a new organization has no row yet. That is
- * not "out of credits": the allowance for the plan is shown instead, and the API decides at upload.
- */
-export function summarizeOrg(payload: OrgPayloadDto, now: Date): OrgSummary {
-  const org = payload.org;
-  const plan: Plan = org?.plan ?? 'free';
-  if (payload.credits) {
-    const { allowed, used, reserved, periodEnd } = payload.credits;
-    return { creditsLeft: Math.max(0, allowed - used - reserved), creditsResetOn: periodEnd, plan, mbCap: payload.mbCap };
-  }
-  if (!org) return { creditsLeft: 0, creditsResetOn: '', plan, mbCap: payload.mbCap };
-  const estimate = estimateCredits(org, now);
-  return { creditsLeft: estimate.left, creditsResetOn: estimate.resetOn, plan, mbCap: payload.mbCap };
 }
 
 /* ---- Loading ---- */
@@ -245,10 +172,10 @@ export async function createBidAction(
     try {
       const result = await deps.uploadFile(bid.id, file, kind);
       if (result.duplicate) {
-        notices.push({ id, fileName: file.name, tone: 'info', message: DUPLICATE_MESSAGE });
+        notices.push(noticeFor('duplicate', file, id));
       }
     } catch (error) {
-      notices.push({ id, fileName: file.name, tone: 'error', message: messageOf(error) });
+      notices.push(noticeFor(error, file, id));
       if (kind === 'solicitation') break;
     }
   }

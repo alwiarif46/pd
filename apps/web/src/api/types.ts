@@ -118,9 +118,26 @@ export interface RfpCreditDto extends OrgScopedDto {
   reserved: number;
 }
 
+/**
+ * GET /api/org `credits` before the current period has a row (the first reservation of the period
+ * creates it): the bounds and allowance that row will get, with nothing used or reserved.
+ */
+export interface ProjectedCreditDto {
+  id: null;
+  orgId: string;
+  periodStart: string;
+  periodEnd: string;
+  allowed: number;
+  used: 0;
+  reserved: 0;
+  createdAt: null;
+  updatedAt: null;
+}
+
 export interface OrgPayloadDto {
   org: OrganizationDto | null;
-  credits: RfpCreditDto | null;
+  /** The period that holds now; projected (`id: null`) until its row exists. Null only without an organization. */
+  credits: RfpCreditDto | ProjectedCreditDto | null;
   role: Role;
   /** Members the plan allows (06 s2). */
   seatLimit: number;
