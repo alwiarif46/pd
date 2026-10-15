@@ -11,7 +11,9 @@ import { linesToSearch } from './solicitation-key';
  *   Block 9A ("Amendment of Solicitation No.") is the solicitation's number and is never read
  *   here; block 4 is the requisition number.
  * - "Amendment No./Number/#" and "Addendum No./Number/#", after the label or under it.
- * - A page-1 line that starts "Amendment 0003" or "Addendum 2".
+ * - A page-1 heading "Amendment 0003" or "Addendum 2": one of the first 10 non-blank lines, at
+ *   most 40 characters, and not a sentence (body prose such as "Addendum 1 is hereby
+ *   incorporated." names another addendum).
  * Labels are searched on the lines `linesToSearch` gives (all of pages 1 and 2, the first and last
  * 3 lines of later pages). A value must be digits only: P00002 (a contract modification) is not an
  * amendment number. OCR'd pages read O as 0. Leading zeros are dropped; 1 to 999 only.
@@ -31,6 +33,11 @@ const MAX = 999;
 const BLOCK_LABEL = /\bamendment\s*\/\s*modification\s*(?:no\b\.?|number\b|#)\s*[:.\-#]?/gi;
 const LABEL = /\b(?:amendment|addendum)\s*(?:no\b\.?|number\b|#)\s*[:.\-#]?/gi;
 const HEADING = /^\s*(?:amendment|addendum)\s+([A-Za-z0-9]+)(?![A-Za-z0-9])/i;
+/** Headings are looked for in the first 10 non-blank lines of page 1, at most 40 characters long. */
+const HEADING_LINES = 10;
+const HEADING_MAX = 40;
+/** A line that reads as a sentence, not a title: a verb of the body, or a closing full stop. */
+const SENTENCE = /\b(?:is|are|was|were|has|have|had|shall|will|hereby|incorporated)\b|\.$/i;
 /** The start of the next numbered form block ("3. EFFECTIVE DATE", "9A. AMENDMENT OF"). */
 const NEXT_BLOCK = /^\d{1,2}[A-Z]?\.\s+[A-Za-z]/;
 
@@ -112,8 +119,13 @@ function hitsOn(page: PageText, firstPage: boolean): Hit[] {
     hits.push(...labelHits(page, all, index, LABEL, false));
   }
   if (firstPage) {
-    for (const line of all) {
-      const heading = HEADING.exec(line);
+    // A heading reads like a title: early on the page, short, and not a sentence.
+    for (const line of all.filter((candidate) => candidate.trim()).slice(0, HEADING_LINES)) {
+      const trimmed = line.trim();
+      if (trimmed.length > HEADING_MAX || SENTENCE.test(trimmed)) {
+        continue;
+      }
+      const heading = HEADING.exec(trimmed);
       const value = heading ? amendmentNumberValue(heading[1], page.ocrUsed) : null;
       if (value !== null) {
         hits.push({ number: value, page: page.pageNo, block: false });

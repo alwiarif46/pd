@@ -42,6 +42,18 @@ describe('extractAmendmentNumber', () => {
     expect(extractAmendmentNumber([page('Amendment No.\n5\nThe due date moves.')])).toMatchObject({ result: 'found', number: 5 });
   });
 
+  it('a heading is a short title line near the top of page 1, never body prose', () => {
+    expect(extractAmendmentNumber([page('City of Springfield\nRFP 24-017\nAddendum 1 is hereby incorporated into the solicitation.')])).toEqual({ result: 'none' });
+    expect(extractAmendmentNumber([page('Notice\nAmendment 2 was issued on October 1.')])).toEqual({ result: 'none' });
+    expect(extractAmendmentNumber([page('Notice\nAddendum 3.')])).toEqual({ result: 'none' });
+    const late = [...Array.from({ length: 10 }, (_, index) => `Line ${index + 1}`), 'Addendum 4'].join('\n');
+    expect(extractAmendmentNumber([page(late)])).toEqual({ result: 'none' });
+    expect(extractAmendmentNumber([page('\n\nCity of Springfield\n\nADDENDUM 4\nRFP 24-017')])).toMatchObject({ result: 'found', number: 4 });
+    expect(extractAmendmentNumber([page('Amendment 2 to RFP 24-017')])).toMatchObject({ result: 'found', number: 2 });
+    // A prose line does not turn a clear heading into an ambiguous page.
+    expect(extractAmendmentNumber([page('Addendum 2\nAddendum 1 is hereby incorporated.')])).toMatchObject({ result: 'found', number: 2 });
+  });
+
   it('ignores the solicitation number in block 9A and a heading with no number', () => {
     expect(extractAmendmentNumber([page('AMENDMENT OF SOLICITATION NO. 2024-0015\nThe site visit moves.')])).toEqual({ result: 'none' });
     expect(extractAmendmentNumber([page('AMENDMENT OF SOLICITATION/MODIFICATION OF CONTRACT')])).toEqual({ result: 'none' });

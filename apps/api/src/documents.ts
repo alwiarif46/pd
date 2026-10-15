@@ -491,6 +491,8 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
             bidId: document.bidId,
             documentId,
             jobId: job.id,
+            // Classify and the key check read the page text, never the stored file, so an archived
+            // amendment (no storage path) is checked the same way.
             storagePath: document.storagePath ?? '',
             kind: 'amendment',
           }),
