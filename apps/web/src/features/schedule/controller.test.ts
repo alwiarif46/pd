@@ -1,0 +1,173 @@
+import { describe, expect, it, vi } from 'vitest';
+import { ApiError, type AdjustScheduleDto } from '@/api';
+import { bidDto, scheduleActivityDto } from '@/test/fixtures';
+import {
+  CHECK_MESSAGE,
+  doneMessage,
+  NO_PROGRESS,
+  resolveDateChange,
+  scheduleMoved,
+  STALE_MESSAGE,
+  type ScheduleApi,
+} from './controller';
+
+const change = { previousDue: '2026-11-25', nextDue: '2026-12-02' };
+const result: AdjustScheduleDto = {
+  ok: true,
+  requestedMode: 'shift',
+  mode: 'shift',
+  workdaysOnly: true,
+  unit: 'workdays',
+  delta: 4,
+  moved: 1,
+  moves: [],
+};
+const ts = (day: string) => `${day}T00:00:00.000Z`;
+const original = [scheduleActivityDto()];
+const shifted = [scheduleActivityDto({ startDate: ts('2026-11-20'), endDate: ts('2026-11-24') })];
+
+type Deps = Pick<ScheduleApi, 'getBid' | 'updateBid' | 'getTab' | 'adjustSchedule'>;
+
+function deps(due: string | null, over: Partial<{ [K in keyof Deps]: unknown }> = {}): Deps & { calls: string[] } {
+  const calls: string[] = [];
+  const d = {
+    calls,
+    getBid: vi.fn(async () => {
+      calls.push('getBid');
+      return bidDto({ dueDate: due ? ts(due) : null });
+    }),
+    updateBid: vi.fn(async () => {
+      calls.push('updateBid');
+      return bidDto();
+    }),
+    getTab: vi.fn(async () => {
+      calls.push('getTab');
+      return { activities: original, workdaysOnly: true };
+    }),
+    adjustSchedule: vi.fn(async () => {
+      calls.push('adjust');
+      return result;
+    }),
+    ...over,
+  };
+  return d as unknown as Deps & { calls: string[] };
+}
+
+const lost = () => new ApiError('The API is not reachable', 0);
+const refusedErr = () => new ApiError('Bad date.', 400, 'invalid_date');
+
+describe('resolveDateChange', () => {
+  it('re-reads the bid, saves the due date, reads the schedule, then adjusts', async () => {
+    const d = deps('2026-11-25');
+    const outcome = await resolveDateChange(d, 'bid-1', change, 'shift');
+    expect(outcome).toEqual({ kind: 'done', result });
+    expect(d.calls).toEqual(['getBid', 'updateBid', 'getTab', 'adjust']);
+    expect(d.updateBid).toHaveBeenCalledWith('bid-1', { dueDate: '2026-12-02' });
+    expect(d.adjustSchedule).toHaveBeenCalledWith('bid-1', { mode: 'shift', previousDue: '2026-11-25', nextDue: '2026-12-02' });
+  });
+
+  it('stops when the due date changed elsewhere', async () => {
+    const d = deps('2026-12-09');
+    expect(await resolveDateChange(d, 'bid-1', change, 'shift')).toEqual({ kind: 'stale', message: STALE_MESSAGE });
+    expect(d.updateBid).not.toHaveBeenCalled();
+    expect(d.adjustSchedule).not.toHaveBeenCalled();
+  });
+
+  it('stops when the next date was saved elsewhere, not by an earlier try', async () => {
+    const d = deps('2026-12-02');
+    expect((await resolveDateChange(d, 'bid-1', change, 'shift')).kind).toBe('stale');
+    expect(d.adjustSchedule).not.toHaveBeenCalled();
+  });
+
+  it('on a retry after its own save, skips the due date and adjusts', async () => {
+    const d = deps('2026-12-02');
+    const outcome = await resolveDateChange(d, 'bid-1', change, 'shift', { dueWritten: true, snapshot: null });
+    expect(outcome.kind).toBe('done');
+    expect(d.calls).toEqual(['getBid', 'getTab', 'adjust']);
+  });
+
+  it('returns failed when the bid cannot be read, with nothing written', async () => {
+    const d = deps('2026-11-25', { getBid: vi.fn(async () => Promise.reject(lost())) });
+    expect(await resolveDateChange(d, 'bid-1', change, 'shift')).toEqual({
+      kind: 'failed',
+      message: 'The API is not reachable',
+      progress: NO_PROGRESS,
+    });
+    expect(d.updateBid).not.toHaveBeenCalled();
+  });
+
+  it('returns failed when the due date is not saved, and does not adjust', async () => {
+    const refused = deps('2026-11-25', { updateBid: vi.fn(async () => Promise.reject(refusedErr())) });
+    expect(await resolveDateChange(refused, 'bid-1', change, 'shift')).toEqual({ kind: 'failed', message: 'Bad date.', progress: NO_PROGRESS });
+    expect(refused.adjustSchedule).not.toHaveBeenCalled();
+
+    // A lost PATCH response may have saved it: the next try may accept the next date as its own.
+    const unknown = deps('2026-11-25', { updateBid: vi.fn(async () => Promise.reject(lost())) });
+    const outcome = await resolveDateChange(unknown, 'bid-1', change, 'shift');
+    expect(outcome).toMatchObject({ kind: 'failed', progress: { dueWritten: true, snapshot: null } });
+    expect(unknown.adjustSchedule).not.toHaveBeenCalled();
+  });
+
+  it('returns adjust_failed when the schedule does not move, with the due date saved', async () => {
+    const d = deps('2026-11-25', { adjustSchedule: vi.fn(async () => Promise.reject(refusedErr())) });
+    const outcome = await resolveDateChange(d, 'bid-1', change, 'shift');
+    expect(outcome.kind).toBe('adjust_failed');
+    if (outcome.kind !== 'adjust_failed') return;
+    expect(outcome.message.startsWith('The new due date is saved')).toBe(true);
+    expect(outcome.message).toContain('Bad date.');
+    // A 4xx refusal did not move anything: a retry needs no check.
+    expect(outcome.progress).toEqual({ dueWritten: true, snapshot: null });
+  });
+
+  it('never shifts twice when an adjust response was lost and it was applied', async () => {
+    const first = deps('2026-11-25', { adjustSchedule: vi.fn(async () => Promise.reject(lost())) });
+    const outcome = await resolveDateChange(first, 'bid-1', change, 'shift');
+    expect(outcome.kind).toBe('adjust_failed');
+    if (outcome.kind !== 'adjust_failed') return;
+    expect(outcome.progress.snapshot).toEqual([{ id: 'act-1', start: '2026-11-16', end: '2026-11-18' }]);
+
+    // The server applied it: the schedule no longer matches the snapshot, so the retry does not adjust.
+    const retry = deps('2026-12-02', { getTab: vi.fn(async () => ({ activities: shifted, workdaysOnly: true })) });
+    expect(await resolveDateChange(retry, 'bid-1', change, 'shift', outcome.progress)).toEqual({ kind: 'check', message: CHECK_MESSAGE });
+    expect(retry.updateBid).not.toHaveBeenCalled();
+    expect(retry.adjustSchedule).not.toHaveBeenCalled();
+  });
+
+  it('retries the adjust when the lost one was not applied, and keeps the first snapshot', async () => {
+    const progress = { dueWritten: true, snapshot: [{ id: 'act-1', start: '2026-11-16', end: '2026-11-18' }] };
+    const retry = deps('2026-12-02', { adjustSchedule: vi.fn(async () => Promise.reject(refusedErr())) });
+    const outcome = await resolveDateChange(retry, 'bid-1', change, 'scale', progress);
+    expect(retry.adjustSchedule).toHaveBeenCalledWith('bid-1', { mode: 'scale', previousDue: '2026-11-25', nextDue: '2026-12-02' });
+    expect(outcome).toMatchObject({ kind: 'adjust_failed', progress });
+
+    const ok = deps('2026-12-02');
+    expect((await resolveDateChange(ok, 'bid-1', change, 'shift', progress)).kind).toBe('done');
+  });
+
+  it('keeps the prompt when the schedule cannot be read before the adjust', async () => {
+    const d = deps('2026-11-25', { getTab: vi.fn(async () => Promise.reject(lost())) });
+    const outcome = await resolveDateChange(d, 'bid-1', change, 'shift');
+    expect(outcome).toMatchObject({ kind: 'adjust_failed', progress: { dueWritten: true, snapshot: null } });
+    expect(d.adjustSchedule).not.toHaveBeenCalled();
+  });
+});
+
+describe('scheduleMoved', () => {
+  it('compares only the activities in both lists', () => {
+    const before = [{ id: 'a', start: '2026-11-02', end: '2026-11-02' }];
+    expect(scheduleMoved(before, [...before, { id: 'new', start: '2026-12-01', end: '2026-12-01' }])).toBe(false);
+    expect(scheduleMoved(before, [])).toBe(false);
+    expect(scheduleMoved(before, [{ id: 'a', start: '2026-11-03', end: '2026-11-03' }])).toBe(true);
+  });
+});
+
+describe('doneMessage', () => {
+  it('names the scale fallback, the count, and a plain keep', () => {
+    expect(doneMessage({ requestedMode: 'scale', mode: 'shift', moved: 3 })).toBe(
+      'The bid has no start date before both due dates, so the schedule was shifted. Moved 3 activities.',
+    );
+    expect(doneMessage({ requestedMode: 'shift', mode: 'shift', moved: 1 })).toBe('Moved 1 activity.');
+    expect(doneMessage({ requestedMode: 'keep', mode: 'keep', moved: 0 })).toBe('Kept the schedule dates.');
+    expect(doneMessage({ requestedMode: 'keep', mode: 'keep', moved: 1 })).toBe('Moved 1 activity.');
+  });
+});
