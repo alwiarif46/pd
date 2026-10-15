@@ -703,7 +703,7 @@ export interface CreateComplianceRowInput {
 /** Exactly what the server's `insertRow` accepts, per tab. */
 export interface CreateRowBodyMap {
   overview: { kind: 'fact'; field: string; value: string } | { label: string };
-  /** `kind` and `reviewColor` are inferred from the label when not sent; `endDate` defaults to `startDate`. */
+  /** Dates 'YYYY-MM-DD' only (timestamps are 400). `kind` and `reviewColor` are inferred from the label when not sent; `endDate` defaults to `startDate`. */
   schedule: {
     label: string;
     startDate?: string | null;

@@ -123,7 +123,7 @@ describe.skipIf(Boolean(unavailable))('schedule', () => {
       expect(day(custom.endDate)).toBe('2026-11-04');
       const colored = await add(id, { label: 'Session', reviewColor: 'gold' });
       expect(colored).toMatchObject({ kind: 'review', reviewColor: 'gold', startDate: null });
-      const locked = await add(id, { label: 'Proposal due', startDate: '2026-11-20T00:00:00.000Z', locked: true });
+      const locked = await add(id, { label: 'Proposal due', startDate: '2026-11-20', locked: true });
       expect(locked).toMatchObject({ kind: 'submission', locked: true });
       expect(day(locked.startDate)).toBe('2026-11-20');
 
@@ -139,6 +139,9 @@ describe.skipIf(Boolean(unavailable))('schedule', () => {
       expect((await post({ label: 'X', kind: 'writing', reviewColor: 'red' })).json()).toEqual({ error: 'Only a review activity has a review color.' });
       expect((await post({ label: 'X', startDate: 'soon' })).statusCode).toBe(400);
       expect((await post({ label: 'X', startDate: '2026-02-30' })).statusCode).toBe(400);
+      // Only YYYY-MM-DD: a timestamp is refused, whatever its zone.
+      expect((await post({ label: 'X', startDate: '2026-11-20T00:00:00.000Z' })).json()).toEqual({ error: 'Send dates as YYYY-MM-DD.' });
+      expect((await post({ label: 'X', startDate: '2026-11-20', endDate: '2026-11-20T05:00:00.000Z' })).statusCode).toBe(400);
       expect((await post({ label: 'X', startDate: '2026-11-10', endDate: '2026-11-09' })).statusCode).toBe(400);
       expect((await post({ startDate: '2026-11-10' })).statusCode).toBe(400);
       expect((await tab(id)).activities).toEqual([]);
@@ -162,6 +165,8 @@ describe.skipIf(Boolean(unavailable))('schedule', () => {
       expect((await patch(id, row.id, { kind: 'bogus' })).statusCode).toBe(400);
       expect((await patch(id, row.id, { endDate: '2026-11-01' })).statusCode).toBe(400);
       expect((await patch(id, row.id, { startDate: 'tomorrow' })).statusCode).toBe(400);
+      expect((await patch(id, row.id, { startDate: '2026-11-09T23:00:00.000Z' })).statusCode).toBe(400);
+      expect(day((await byId(id)).get(row.id)!.startDate)).toBe('2026-11-10');
     });
 
     it('answers 409 for a date move on a locked row and leaves it where it was', async () => {
@@ -283,9 +288,24 @@ describe.skipIf(Boolean(unavailable))('schedule', () => {
       expect((await post({ mode: 'shift', previousDue: '2026-11-20' })).statusCode).toBe(400);
       expect((await post({ mode: 'shift', previousDue: '2026-11-20', nextDue: 'later' })).json()).toMatchObject({ code: 'invalid_date' });
       expect((await post({ mode: 'shift', previousDue: '2026-11-20', nextDue: '9999-01-01' })).statusCode).toBe(400);
+      expect((await post({ mode: 'shift', previousDue: '2026-11-20T00:00:00.000Z', nextDue: '2026-11-30' })).statusCode).toBe(400);
+      // A shift that would carry an activity past 2200.
+      expect((await post({ mode: 'shift', previousDue: '1901-01-01', nextDue: '2199-12-01' })).json())
+        .toEqual({ error: 'That change would move activities outside the years 1900 to 2200.', code: 'invalid_date' });
       expect((await post({ mode: 'shift', previousDue: '2026-11-20', nextDue: '2026-11-30', workdaysOnly: 'yes' })).statusCode).toBe(400);
       expect(await dates(id, [draft.id])).toEqual([['2026-11-16', '2026-11-18']]);
     });
+  });
+
+  it('refuses a scale that would stretch activities centuries away, and moves nothing', async () => {
+    const id = await bid({ startDate: '2026-03-02', dueDate: '2026-03-03' });
+    const row = await add(id, { label: 'Draft', startDate: '2100-01-04' });
+    const started = Date.now();
+    const response = await asA('POST', `/api/bids/${id}/schedule/adjust`, { mode: 'scale', previousDue: '2026-03-03', nextDue: '2199-12-31' });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'invalid_date' });
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(day((await byId(id)).get(row.id)!.startDate)).toBe('2100-01-04');
   });
 
   describe('templates', () => {

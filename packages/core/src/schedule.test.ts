@@ -270,6 +270,12 @@ describe('planScheduleAdjust', () => {
     expect(plan.moves[0].start).toBe(plan.moves[0].end);
   });
 
+  it('throws a RangeError for a scale that would stretch an activity centuries away', () => {
+    expect(() => planScheduleAdjust([{ id: 'a', start: '2100-01-04', end: null, locked: false }], {
+      mode: 'scale', previousDue: '2026-03-03', nextDue: '2199-12-31', anchor: '2026-03-02', workdaysOnly: true,
+    })).toThrow(RangeError);
+  });
+
   it('shifts instead of scaling without a usable anchor', () => {
     for (const anchor of [null, '2026-11-20', '2026-12-01']) {
       const plan = planScheduleAdjust(activities, {

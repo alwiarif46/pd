@@ -320,6 +320,9 @@ export interface AdjustPlan {
   moves: ActivityMove[];
 }
 
+/** About 300 years of days: a scale that stretches an offset further throws a RangeError. */
+const MAX_SCALED_OFFSET = 110_000;
+
 /**
  * Plans how unlocked activities follow a due-date change (05 s3.2, 09 s5.11):
  * - shift: every unlocked activity moves by the due date's move, counted in workdays (or days).
@@ -328,7 +331,8 @@ export interface AdjustPlan {
  *   Each counted-day offset from the anchor is multiplied by new span / old span and rounded to
  *   the nearest day (halves round later); an end never comes before its start. Activities that
  *   start before the anchor stay. Without a usable anchor (null, or not before both due dates),
- *   scale shifts instead and `mode` says so.
+ *   scale shifts instead and `mode` says so. A stretch that would carry an activity more than
+ *   MAX_SCALED_OFFSET counted days from the anchor throws a RangeError.
  * - keep: nothing moves but the due date itself (below).
  * Locked activities and activities with no start date never move, with one exception: in every
  * mode, a locked activity of kind 'submission' that starts on `previousDue` is the due date
@@ -358,6 +362,9 @@ export function planScheduleAdjust(activities: readonly AdjustableActivity[], op
   const anchor = options.anchor!;
   const scaled = (date: string) => {
     const offset = Math.round((workdayDelta(anchor, date, rules) * newSpan) / oldSpan);
+    if (Math.abs(offset) > MAX_SCALED_OFFSET) {
+      throw new RangeError('Scaling would move an activity more than 300 years from the anchor.');
+    }
     return offset === 0 ? nextWorkday(anchor, rules) : addWorkdays(anchor, offset, rules);
   };
   for (const activity of activities) {

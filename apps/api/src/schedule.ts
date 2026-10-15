@@ -16,6 +16,7 @@ import {
   schema,
   toIsoDate,
   type ActivityKind,
+  type AdjustPlan,
   type ReviewColor,
 } from '@pd/core';
 import { requireAuth } from './context.js';
@@ -49,24 +50,22 @@ function fail<T>(code: 400 | 404 | 409, error: string, errorCode?: ErrorCode): R
 const EARLIEST_YEAR = 1900;
 const LATEST_YEAR = 2200;
 
+/** A 'YYYY-MM-DD' day in the years 1900 to 2200. */
+function inWindow(value: unknown): value is string {
+  if (!isIsoDate(value)) return false;
+  const year = Number(value.slice(0, 4));
+  return year >= EARLIEST_YEAR && year <= LATEST_YEAR;
+}
+
 /**
  * A schedule day from a client value: undefined when not sent, null when cleared (null or ''),
- * 'YYYY-MM-DD', or false when it is not a date (or outside 1900 to 2200, which also bounds the
- * day-by-day workday loops).
+ * 'YYYY-MM-DD' in the years 1900 to 2200, or false for anything else. Timestamps are refused: a
+ * client east of UTC sending local midnight as toISOString() would land a day early.
  */
 export function readDay(value: unknown): string | null | undefined | false {
   if (value === undefined) return undefined;
   if (value === null || value === '') return null;
-  let iso: string | null = null;
-  if (isIsoDate(value)) {
-    iso = value;
-  } else if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
-    const date = new Date(value);
-    iso = Number.isNaN(date.getTime()) ? null : toIsoDate(date);
-  }
-  if (iso === null) return false;
-  const year = Number(iso.slice(0, 4));
-  return year >= EARLIEST_YEAR && year <= LATEST_YEAR ? iso : false;
+  return inWindow(value) ? value : false;
 }
 
 function storedDay(date: Date | null): string | null {
@@ -74,6 +73,7 @@ function storedDay(date: Date | null): string | null {
 }
 
 const INVALID_DATE = 'Send dates as YYYY-MM-DD.';
+const OUT_OF_WINDOW = 'That change would move activities outside the years 1900 to 2200.';
 const END_BEFORE_START = 'The end date is before the start date.';
 
 async function lockSchedule(db: Db, bidId: string): Promise<void> {
@@ -331,20 +331,30 @@ export async function registerSchedule(app: FastifyInstance): Promise<void> {
       const workdaysOnly = workdaysOverride ?? bid.scheduleWorkdaysOnly;
       await lockSchedule(db, bid.id);
       const rows = await activities(db, orgId, bid.id);
-      const plan = planScheduleAdjust(rows.map((row) => ({
-        id: row.id,
-        start: storedDay(row.startDate),
-        end: storedDay(row.endDate),
-        locked: row.locked,
-        kind: row.kind,
-      })), {
-        mode,
-        // keep without dates: nothing moves whatever these are.
-        previousDue: datesSent ? previousDue : '2000-01-01',
-        nextDue: datesSent ? nextDue : '2000-01-01',
-        anchor: storedDay(bid.startDate),
-        workdaysOnly,
-      });
+      let plan: AdjustPlan;
+      try {
+        plan = planScheduleAdjust(rows.map((row) => ({
+          id: row.id,
+          start: storedDay(row.startDate),
+          end: storedDay(row.endDate),
+          locked: row.locked,
+          kind: row.kind,
+        })), {
+          mode,
+          // keep without dates: nothing moves whatever these are.
+          previousDue: datesSent ? previousDue : '2000-01-01',
+          nextDue: datesSent ? nextDue : '2000-01-01',
+          anchor: storedDay(bid.startDate),
+          workdaysOnly,
+        });
+      } catch (error) {
+        // A scale whose stretch would carry an activity centuries away (planScheduleAdjust).
+        if (error instanceof RangeError) return respond(400, apiError('invalid_date', OUT_OF_WINDOW));
+        throw error;
+      }
+      if (plan.moves.some((move) => !inWindow(move.start) || !inWindow(move.end))) {
+        return respond(400, apiError('invalid_date', OUT_OF_WINDOW));
+      }
       const moved = [];
       for (const move of plan.moves) {
         const [row] = await db.update(schema.scheduleActivities).set({
