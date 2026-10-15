@@ -230,6 +230,32 @@ mk_tenant ovh-override 'setv("subprocessor", "\"Example Hosting Inc\"", "infra")
 o="$(sp "$TMP/ovh-override.toml")"
 [[ "$o" == "Example Hosting Inc" ]] && ok "[infra] subprocessor overrides the adapter's value" || bad "override" "$o"
 
+# ------------------------------------------------------------------ luks_find_byid
+mkdir -p "$S/byid"; U=0d9e8f7a-1b2c-4d5e-8f90-a1b2c3d4e5f6
+ln -s /dev/null "$S/byid/scsi-0QEMU_QEMU_HARDDISK_$U"; ln -s /dev/null "$S/byid/virtio-${U:0:20}"
+o="$(PD_BYID_DIR="$S/byid" bash -c 'die(){ echo "DIE $*"; exit 1; }; warn(){ :; }; is_dry(){ return 1; }; source infra/luks/luks-common.sh; luks_find_byid "$1"' _ "$U" 2>&1)"
+[[ "$o" == "$S/byid/scsi-0QEMU_QEMU_HARDDISK_$U" ]] && ok "luks_find_byid: virtio-scsi name preferred" || bad "find_byid" "$o"
+o="$(PD_BYID_DIR="$S/byid" bash -c 'die(){ echo "DIE $*"; exit 1; }; source infra/luks/luks-common.sh; luks_find_byid 12ab' 2>&1)"
+grep -q 'DIE volume id must be' <<<"$o" && ok "luks_find_byid refuses an id that is neither a UUID nor a Hetzner number" || bad "non-uuid" "$o"
+ln -sf /dev/zero "$S/byid/virtio-${U:0:20}"
+o="$(PD_BYID_DIR="$S/byid" bash -c 'die(){ echo "DIE $*"; exit 1; }; source infra/luks/luks-common.sh; luks_find_byid "$1"' _ "$U" 2>&1)"
+grep -q 'point to different devices' <<<"$o" && ok "luks_find_byid refuses links to different devices" || bad "ambiguous byid" "$o"
+ln -s /dev/null "$S/byid/scsi-0HC_Volume_1234567"
+o="$(PD_BYID_DIR="$S/byid" bash -c 'die(){ echo "DIE $*"; exit 1; }; source infra/luks/luks-common.sh; luks_find_byid 1234567' 2>&1)"
+[[ "$o" == "$S/byid/scsi-0HC_Volume_1234567" ]] && ok "luks_find_byid: Hetzner volume id -> scsi-0HC_Volume_<id>" || bad "hetzner byid" "$o"
+o="$(PD_BYID_DIR="$S/byid" bash -c 'die(){ echo "DIE $*"; exit 1; }; source infra/luks/luks-common.sh; luks_find_byid ../../etc' 2>&1)"
+grep -q "DIE volume id must be" <<<"$o" && ok "luks_find_byid refuses a path-like id" || bad "path id" "$o"
+# container ids (non-root checks): path and id must match, symlinks refused
+L="$S/luks"; mkdir -p "$L/disks"
+lc() { PD_CONTAINER_DIR="$L/disks" bash -c 'die(){ echo "DIE $*"; exit 1; }; warn(){ :; }; is_dry(){ return 1; }; source infra/luks/luks-common.sh; '"$1" 2>&1; }
+o="$(lc 'luks_check_dev_path '"$L"'/disks/pdbackup.img container-pddata')"
+grep -q "DIE container path" <<<"$o" && ok "container id must match its own file (no cross-wiring)" || bad "container cross" "$o"
+ln -s "$L/disks/pddata.img" "$L/disks/pdbackup.img"
+o="$(lc 'luks_check_dev_path '"$L"'/disks/pdbackup.img container-pdbackup')"
+grep -q "DIE .*not a regular file" <<<"$o" && ok "a symlinked container is refused" || bad "symlink" "$o"
+rm -f "$L/disks/pdbackup.img"
+
+
 # ================================================================== static
 "$PY" - <<'PYEOF2' && ok "hapi.py, netutil.py and the Hetzner fake compile" || bad "python syntax"
 import sys
