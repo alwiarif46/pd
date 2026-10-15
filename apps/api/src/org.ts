@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { activeModel } from '@pd/ai';
 import { isUuid, mbCapForPlan, type Plan, schema, seatHolders, seatLimitFor, userMemberships, withOrg } from '@pd/core';
+import { processingInfo } from './about.js';
 import { billingAvailable, registerBilling } from './billing.js';
 import { requireAuth, requireUser } from './context.js';
 import { BODY_REQUIRED, readBody, text } from './body.js';
@@ -128,14 +128,10 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
   });
 
   // Public: the privacy page reads it signed out. It reads only the environment and a static list,
-  // never the database or `request.auth`, so it cannot reach any organization's data.
+  // never the database or `request.auth`, so it cannot reach any organization's data. The hosting provider and
+  // the off-site backup target come from the deployment (apps/api/src/about.ts).
   app.get('/api/about/processing', async () => {
-    return {
-      provider: process.env.AI_PROVIDER || 'deepinfra',
-      model: activeModel(),
-      subprocessors: ['DeepInfra', 'Anthropic', 'Telnyx', 'Stripe'],
-      privacyPath: '/#/privacy',
-    };
+    return processingInfo();
   });
 
   app.patch('/api/org', { preHandler: requireAuth }, async (request, reply) => {
