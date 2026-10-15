@@ -92,14 +92,27 @@ export function jobsKey(data: Pick<BidData, 'jobs'> | null): string {
 const DATE_ONLY = /^(\d{4}-\d{2}-\d{2})/;
 
 /**
- * A due date as local noon of its calendar day (`YYYY-MM-DDT12:00:00`, a valid ISO string). The API sends
- * due dates as midnight UTC, and v0's AppShell formats them with `new Date(value)`, which shows the
- * previous day in US time zones; noon local time reads as the right day everywhere. Remove when v0 formats
- * date-only values itself.
+ * A bid's due date as the plain `YYYY-MM-DD` that v0's AppShell splits itself. The API sends a due date as
+ * midnight UTC of its calendar day (`2026-11-03T00:00:00.000Z`), so the date is the leading part as stored,
+ * never converted to local time (which would show the previous day in the Americas).
  */
-export function noonOf(value: string | null): string | null {
+export function dateOnly(value: string | null): string | null {
   const match = value ? DATE_ONLY.exec(value) : null;
-  return match ? `${match[1]}T12:00:00` : null;
+  return match ? match[1] : null;
+}
+
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/**
+ * The day an instant falls on in the viewer's time zone, as `YYYY-MM-DD`; '' when it is not a date.
+ * Used for the credit reset: `periodEnd` is an exclusive instant (the next period starts on it), so this is
+ * the day credits reset, the same day UpgradeDialog and TabFrame show with
+ * `new Date(creditsResetOn).toLocaleDateString()`. Nothing is subtracted.
+ */
+export function localDayOf(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 export function toShellBid(bid: BidDto): ShellBid {
@@ -107,7 +120,7 @@ export function toShellBid(bid: BidDto): ShellBid {
     id: bid.id,
     name: bid.name,
     agency: bid.agency,
-    dueDate: noonOf(bid.dueDate),
+    dueDate: dateOnly(bid.dueDate),
     dueTime: bid.dueTime,
     timeZone: bid.timeZone,
   };

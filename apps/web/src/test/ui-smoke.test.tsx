@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // Smoke renders of every integrated v0 component (src/ui) with its sample data: catches runtime breaks
 // (a missing import, a crash on null) that tsc cannot. Tests live here, not in src/ui, which is generated.
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 import type { ProcessingState } from '@/types';
 import { LogIn } from '@/ui/auth/LogIn';
 import { ResetPassword } from '@/ui/auth/ResetPassword';
@@ -88,7 +89,7 @@ describe('shell', () => {
     id: '1',
     name: 'VA EHR Support Services',
     agency: 'Department of Veterans Affairs',
-    dueDate: '2026-11-03T12:00:00',
+    dueDate: '2026-11-03',
     dueTime: '14:00',
     timeZone: 'America/New_York',
   };
@@ -96,7 +97,7 @@ describe('shell', () => {
     bids: [{ id: '1', name: 'VA EHR Support Services' }],
     plan: 'free' as const,
     creditsLeft: 3,
-    creditsResetOn: '2026-11-01T00:00:00.000Z',
+    creditsResetOn: '2026-11-01',
     tabSignals: [],
     user: { name: 'Dana Reyes', email: 'dana.reyes@example.gov' },
     detail: null,
@@ -116,6 +117,112 @@ describe('shell', () => {
     expect(screen.getByText('Tab content')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Outline (locked)' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Orals/ })).toBeNull();
+    // Date-only strings: v0 splits them itself.
+    expect(screen.getByText('Due Nov 3, 2026 at 14:00 (America/New_York)')).toBeTruthy();
+    expect(screen.getByText(/resets Nov 1, 2026/)).toBeTruthy();
+  });
+
+  it('opens Account, Privacy and Sign out from the account menu', async () => {
+    const onOpenPage = vi.fn();
+    const onSignOut = vi.fn();
+    render(
+      <AppShell {...base} bid={bid} activeTab="overview" activePage={null} oralsEnabled onOpenPage={onOpenPage} onSignOut={onSignOut}>
+        <p>Tab content</p>
+      </AppShell>,
+    );
+    const menu = () => userEvent.click(screen.getByRole('button', { name: 'Account menu for Dana Reyes' }));
+    await menu();
+    expect(await screen.findByText('dana.reyes@example.gov')).toBeTruthy();
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Account' }));
+    await menu();
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Privacy' }));
+    await menu();
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Sign out' }));
+    expect(onOpenPage.mock.calls).toEqual([['account'], ['privacy']]);
+    expect(onSignOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('switches bids from the bid switcher', async () => {
+    const onSwitchBid = vi.fn();
+    render(
+      <AppShell
+        {...base}
+        bids={[{ id: '1', name: 'VA EHR Support Services' }, { id: '2', name: 'Navy IT' }]}
+        bid={bid}
+        activeTab="overview"
+        activePage={null}
+        oralsEnabled
+        onSwitchBid={onSwitchBid}
+      >
+        <p>Tab content</p>
+      </AppShell>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /VA EHR Support Services/ }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Navy IT' }));
+    expect(onSwitchBid).toHaveBeenCalledWith('2');
+  });
+
+  it('sends a locked tab click to onUpgrade and an open tab click to onSelectTab', async () => {
+    const onUpgrade = vi.fn();
+    const onSelectTab = vi.fn();
+    render(
+      <AppShell {...base} bid={bid} activeTab="overview" activePage={null} oralsEnabled onUpgrade={onUpgrade} onSelectTab={onSelectTab}>
+        <p>Tab content</p>
+      </AppShell>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Outline (locked)' }));
+    expect(onUpgrade).toHaveBeenCalledTimes(1);
+    expect(onSelectTab).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    expect(onSelectTab).toHaveBeenCalledWith('schedule');
+  });
+
+  it('shows each tab signal with its aria-label', () => {
+    render(
+      <AppShell
+        {...base}
+        plan="growth"
+        bid={bid}
+        activeTab="overview"
+        activePage={null}
+        oralsEnabled
+        tabSignals={[
+          { tab: 'documents', signal: 'processing' },
+          { tab: 'compliance', signal: 'failed' },
+          { tab: 'schedule', signal: 'waiting' },
+        ]}
+      >
+        <p>Tab content</p>
+      </AppShell>,
+    );
+    expect(within(screen.getByRole('button', { name: 'Documents' })).getByLabelText('processing')).toBeTruthy();
+    expect(within(screen.getByRole('button', { name: 'Compliance' })).getByLabelText('failed')).toBeTruthy();
+    expect(within(screen.getByRole('button', { name: 'Schedule' })).getByLabelText('waiting')).toBeTruthy();
+  });
+
+  it('opens the tab list in a sheet from the Menu button', async () => {
+    const onSelectTab = vi.fn();
+    render(
+      <AppShell {...base} plan="growth" bid={bid} activeTab="overview" activePage={null} oralsEnabled onSelectTab={onSelectTab}>
+        <p>Tab content</p>
+      </AppShell>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Menu' }));
+    const sheet = await screen.findByRole('dialog');
+    await userEvent.click(within(sheet).getByRole('button', { name: 'Documents' }));
+    expect(onSelectTab).toHaveBeenCalledWith('documents');
+  });
+
+  it('opens Bids and Organization outside a bid', async () => {
+    const onOpenPage = vi.fn();
+    render(
+      <AppShell {...base} bid={null} activeTab={null} activePage="bids" oralsEnabled onOpenPage={onOpenPage}>
+        <p>Page</p>
+      </AppShell>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Bids' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Organization' }));
+    expect(onOpenPage.mock.calls).toEqual([['bids'], ['organization']]);
   });
 
   it('renders outside a bid with a detail column', () => {

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, getToken, setToken } from '@/api';
-import { bidDto, docDto, jobDto, linkDto, meDto, orgPayload, organizationDto } from '@/test/fixtures';
+import { bidDto, creditDto, docDto, jobDto, linkDto, meDto, orgPayload, organizationDto } from '@/test/fixtures';
 import { jsonResponse } from '@/test/fetch';
 import { TabFrameContainer } from '@/features/tab-frame/TabFrameContainer';
 import type { TabFrameApi } from '@/features/tab-frame/actions';
@@ -29,11 +29,14 @@ function mockApi(over: Partial<ShellApi> = {}): ShellApi {
   };
 }
 
+const realTz = process.env.TZ;
 const outline = { kind: 'tab', bidId: 'bid-1', tab: 'outline', rowId: null } as const;
 
 afterEach(() => {
   vi.useRealTimers();
   window.location.hash = '';
+  if (realTz === undefined) delete process.env.TZ;
+  else process.env.TZ = realTz;
 });
 
 describe('LegacyFrame', () => {
@@ -57,7 +60,9 @@ describe('ShellContainer', () => {
     render(<ShellContainer route={outline} api={api} />);
     expect(await screen.findByText('outline is on a paid plan')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Outline (locked)' }).getAttribute('aria-current')).toBe('page');
-    expect(screen.getByRole('navigation', { name: 'Account and bid' })).toBeTruthy();
+    // The interim bar is gone: v0's shell has the account menu and the bid switcher.
+    expect(screen.queryByRole('navigation', { name: 'Account and bid' })).toBeNull();
+    expect(screen.queryByRole('combobox')).toBeNull();
 
     await userEvent.click(screen.getByRole('button', { name: /Upgrade plan/ }));
     expect(await screen.findByText('This tab is on a paid plan.')).toBeTruthy();
@@ -66,15 +71,75 @@ describe('ShellContainer', () => {
     await waitFor(() => expect(screen.queryByText('This tab is on a paid plan.')).toBeNull());
   });
 
-  it('switches bids and tabs through the hash', async () => {
+  it('opens the upgrade dialog when a locked tab is clicked in the tab list, and does not navigate', async () => {
+    render(<ShellContainer route={{ kind: 'tab', bidId: 'bid-1', tab: 'overview', rowId: null }} api={mockApi()} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Reviews (locked)' }));
+    expect(await screen.findByText('This tab is on a paid plan.')).toBeTruthy();
+    expect(window.location.hash).toBe('');
+  });
+
+  it('switches bids from the bid switcher, keeping the tab, and tabs through the tab list', async () => {
     render(<ShellContainer route={outline} api={mockApi()} />);
     await screen.findByText('outline is on a paid plan');
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Bid' }), 'bid-2');
+    await userEvent.click(screen.getByRole('button', { name: /VA EHR Support/ }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Navy IT' }));
     expect(window.location.hash).toBe('#/bids/bid-2/outline');
     await userEvent.click(screen.getByRole('button', { name: 'Compliance' }));
     expect(window.location.hash).toBe('#/bids/bid-1/compliance');
-    await userEvent.click(screen.getByRole('button', { name: 'Account' }));
+  });
+
+  it('opens Account and Privacy from the account menu', async () => {
+    render(<ShellContainer route={outline} api={mockApi()} />);
+    await screen.findByText('outline is on a paid plan');
+    await userEvent.click(screen.getByRole('button', { name: 'Account menu for Dana Reyes' }));
+    expect(await screen.findByText('dana@northbridge.example')).toBeTruthy();
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Account' }));
     expect(window.location.hash).toBe('#/account');
+    await userEvent.click(screen.getByRole('button', { name: 'Account menu for Dana Reyes' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Privacy' }));
+    expect(window.location.hash).toBe('#/privacy');
+  });
+
+  it('links to Bids and Organization outside a bid', async () => {
+    render(<ShellContainer route={{ kind: 'page', page: 'privacy' }} api={mockApi()} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Organization' }));
+    expect(window.location.hash).toBe('#/org');
+    await userEvent.click(screen.getByRole('button', { name: 'Bids' }));
+    expect(window.location.hash).toBe('#/bids');
+    expect(screen.queryByRole('navigation', { name: 'Bid tabs' })).toBeNull();
+  });
+
+  it('opens the mobile tab list from the Menu button', async () => {
+    render(<ShellContainer route={outline} api={mockApi()} />);
+    await screen.findByText('outline is on a paid plan');
+    await userEvent.click(screen.getByRole('button', { name: 'Menu' }));
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByRole('navigation', { name: 'Bid tabs' })).toBeTruthy();
+    await userEvent.click(within(sheet).getByRole('button', { name: 'Schedule' }));
+    expect(window.location.hash).toBe('#/bids/bid-1/schedule');
+  });
+
+  it.each([
+    ['processing', [jobDto({ status: 'running', type: 'scan' })], [docDto()]],
+    ['waiting', [], [docDto({ markingStatus: 'blocked', markingFound: ['CUI'], markingPage: 2 })]],
+  ] as const)('shows the %s signal on the Documents tab with its label', async (signal, jobs, docs) => {
+    const api = mockApi({ listJobs: vi.fn(async () => [...jobs]), listDocuments: vi.fn(async () => [...docs]) });
+    render(<ShellContainer route={{ kind: 'tab', bidId: 'bid-1', tab: 'documents', rowId: null }} api={api} />);
+    const documents = await screen.findByRole('button', { name: 'Documents' });
+    await waitFor(() => expect(within(documents).getByLabelText(signal)).toBeTruthy());
+  });
+
+  it('writes the due date and the credit reset as the right calendar days in Los Angeles', async () => {
+    process.env.TZ = 'America/Los_Angeles';
+    const api = mockApi({
+      getOrg: vi.fn(async () =>
+        orgPayload({ credits: creditDto({ periodEnd: '2026-11-08T20:00:00.000Z' }) }),
+      ),
+    });
+    render(<ShellContainer route={{ kind: 'tab', bidId: 'bid-1', tab: 'overview', rowId: null }} api={api} />);
+    // Due 2026-11-03 stored as midnight UTC: Nov 3, not Nov 2.
+    expect(await screen.findByText('Due Nov 3, 2026 at 14:00 (America/New_York)')).toBeTruthy();
+    expect(screen.getByText(/resets Nov 8, 2026/)).toBeTruthy();
   });
 
   it('polls every 3 s while a job runs and stops when the bid is idle', async () => {
@@ -174,13 +239,21 @@ describe('ShellContainer', () => {
     expect(window.location.hash).toBe('#/bids/bid-1/settings');
   });
 
-  it('signs out through the API and goes to log in', async () => {
+  it('signs out from the account menu through the API and goes to log in', async () => {
     const api = mockApi();
     render(<ShellContainer route={outline} api={api} />);
     await screen.findByText('outline is on a paid plan');
-    await userEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Account menu for Dana Reyes' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Sign out' }));
     expect(api.logOut).toHaveBeenCalled();
     await waitFor(() => expect(window.location.hash).toBe('#/login'));
+  });
+
+  it('draws the organization page inside the shell when the user has no organization', async () => {
+    const api = mockApi({ getOrg: vi.fn(async () => Promise.reject(new ApiError('No organization', 403))) });
+    render(<ShellContainer route={{ kind: 'page', page: 'bids' }} api={api} />);
+    expect(await screen.findByRole('button', { name: 'Account menu for Dana Reyes' })).toBeTruthy();
+    expect(screen.queryByRole('navigation', { name: 'Bid tabs' })).toBeNull();
   });
 });
 
