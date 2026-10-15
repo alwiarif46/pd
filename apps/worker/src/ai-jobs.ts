@@ -13,6 +13,7 @@ import { schema, withOrg } from '@pd/core';
 import { checkCredit, heldUnlessCredited } from './credit-gate.js';
 import { shareOrg } from './key-check.js';
 import { kickAmendments, kickHeldDocuments } from './kick.js';
+import { replaceDocumentDates, replaceDocumentFacts } from './ai-rows.js';
 import { allocateReqIds } from './req-ids.js';
 import type { JobPayload } from './redis.js';
 
@@ -220,8 +221,18 @@ export async function processCompliance(payload: JobPayload): Promise<void> {
         return false;
       }
       await replaceCheckThese(db, payload, result.checkThese ?? []);
-      const reqIds = await allocateReqIds(db, payload.orgId, payload.bidId, result.requirements);
-      const rows = result.requirements.map((row, index) => ({ row, reqId: reqIds[index] }));
+      // A second run of a document whose matrix rows are already written (a duplicate job, a
+      // retry of a file that went through) adds no rows: they would duplicate its requirements.
+      // The existing rows are kept, not replaced: users edit them, promote hits to them, and
+      // amendments link to and supersede them. Checked under the document lock taken above.
+      const [written] = await db.select({ id: schema.complianceRows.id }).from(schema.complianceRows).where(and(
+        eq(schema.complianceRows.documentId, payload.documentId),
+        eq(schema.complianceRows.orgId, payload.orgId),
+        eq(schema.complianceRows.origin, 'ai'),
+      )).limit(1);
+      const requirements = written ? [] : result.requirements;
+      const reqIds = await allocateReqIds(db, payload.orgId, payload.bidId, requirements);
+      const rows = requirements.map((row, index) => ({ row, reqId: reqIds[index] }));
       for (const chunk of chunks(rows)) {
         await db.insert(schema.complianceRows).values(chunk.map(({ row, reqId }) => ({
           orgId: payload.orgId,
@@ -308,11 +319,8 @@ export async function processOverview(payload: JobPayload): Promise<void> {
       origin: 'ai' as const,
     }];
   });
-  await withOrg(payload.orgId, async (db) => {
-    if (facts.length > 0) {
-      await db.insert(schema.bidFacts).values(facts);
-    }
-  });
+  // A rerun (retry, or a kick of a held file) replaces this document's untouched AI facts.
+  await replaceDocumentFacts(payload, facts);
   await recordRun({
     orgId: payload.orgId,
     bidId: payload.bidId,
@@ -331,21 +339,17 @@ export async function processOverview(payload: JobPayload): Promise<void> {
 export async function processDates(payload: JobPayload): Promise<void> {
   const pages = await loadPages(payload.orgId, payload.documentId);
   const hits = preScan(pages).dates;
-  if (hits.length === 0) {
-    return;
-  }
-  await withOrg(payload.orgId, async (db) => {
-    await db.insert(schema.scheduleActivities).values(hits.map((hit) => ({
-      orgId: payload.orgId,
-      bidId: payload.bidId,
-      label: 'Date from solicitation',
-      locked: true,
-      documentId: payload.documentId,
-      sourcePage: hit.pageNo,
-      sourceQuote: hit.text,
-      quoteVerified: true,
-      origin: 'ai' as const,
-      note: hit.text,
-    })));
-  });
+  // A rerun replaces this document's untouched AI dates, so it never adds them twice.
+  await replaceDocumentDates(payload, hits.map((hit) => ({
+    orgId: payload.orgId,
+    bidId: payload.bidId,
+    label: 'Date from solicitation',
+    locked: true,
+    documentId: payload.documentId,
+    sourcePage: hit.pageNo,
+    sourceQuote: hit.text,
+    quoteVerified: true,
+    origin: 'ai' as const,
+    note: hit.text,
+  })));
 }

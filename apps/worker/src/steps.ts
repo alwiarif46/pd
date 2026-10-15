@@ -1,4 +1,5 @@
-import { withOrg } from '@pd/core';
+import { and, eq } from 'drizzle-orm';
+import { schema, withOrg } from '@pd/core';
 import { settleCreditIn } from './ai-jobs.js';
 import { shareOrg } from './key-check.js';
 import { MARKING_REJECTED } from './marking-job.js';
@@ -30,8 +31,9 @@ const FAILED_STEP: Record<GuardedQueue, { type: 'scan' | 'classify'; error: stri
  * failure: processMarking returns without throwing, and the file keeps its reservation until the
  * user confirms or deletes it (owner decision, 16 Oct 2026).
  *
- * Lock order (credits.ts): organization (key share, for the job insert), then the bid and the
- * credit inside settleCreditIn. Logged, never thrown: the caller rethrows the original error.
+ * Lock order (credits.ts): organization (key share, for the job insert), the document (a deleted
+ * one records nothing and releases nothing), then the bid and the credit inside settleCreditIn.
+ * Logged, never thrown: the caller rethrows the original error.
  */
 export async function recordStepFailure(queue: GuardedQueue, payload: JobPayload, error: unknown): Promise<void> {
   const step = FAILED_STEP[queue];
@@ -41,6 +43,16 @@ export async function recordStepFailure(queue: GuardedQueue, payload: JobPayload
   try {
     await withOrg(payload.orgId, async (db) => {
       await shareOrg(db, payload.orgId);
+      // A document the user deleted meanwhile is not failed and releases nothing: its delete
+      // already decided the reservation (documents.ts keeps it while another solicitation of the
+      // bid is live, for that file's run to settle). Locked so a delete cannot commit in between.
+      const [document] = await db.select({ liveStatus: schema.documents.liveStatus }).from(schema.documents).where(and(
+        eq(schema.documents.id, payload.documentId),
+        eq(schema.documents.orgId, payload.orgId),
+      )).for('update');
+      if (!document || document.liveStatus === 'deleted') {
+        return;
+      }
       await failStepIn(db, payload, step.type, message);
       if (payload.kind === 'solicitation') {
         await settleCreditIn(db, payload.orgId, payload.bidId, 'release');

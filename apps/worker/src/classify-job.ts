@@ -53,5 +53,11 @@ export async function processClassify(payload: JobPayload): Promise<void> {
   await enqueue('ai:overview', payload);
   await enqueue('ai:dates', payload);
   await enqueue('ai:compliance', payload);
-  await completeClassifyJob(payload);
+  // The matrix step is queued now and settles the credit itself: a failure from here on must not
+  // fail classify (guardStep would release the credit the queued matrix is about to use).
+  try {
+    await completeClassifyJob(payload);
+  } catch (error) {
+    console.error(`Could not close classify job ${payload.jobId}`, error);
+  }
 }

@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { schema, withOrg } from '@pd/core';
 import type { JobPayload } from './redis.js';
 
@@ -79,6 +79,18 @@ export async function failStepIn(db: Db, payload: JobPayload, type: 'scan' | 'cl
       updatedAt: new Date(),
     }).where(and(eq(schema.jobs.id, payload.jobId), eq(schema.jobs.orgId, payload.orgId)));
     return;
+  }
+  // The document's newest row already failed at this step (the key check records a failed
+  // amendment queue call itself, then rethrows): one failed row is enough to retry from. A held
+  // marker is always written, since kickHeldDocuments looks for it as the newest row.
+  if (error !== HELD_FOR_CREDIT && error !== SOLICITATION_CREDIT_RELEASED) {
+    const [newest] = await db.select({ type: schema.jobs.type, status: schema.jobs.status }).from(schema.jobs).where(and(
+      eq(schema.jobs.documentId, payload.documentId),
+      eq(schema.jobs.orgId, payload.orgId),
+    )).orderBy(desc(schema.jobs.createdAt), desc(schema.jobs.id)).limit(1);
+    if (newest?.type === type && newest.status === 'failed') {
+      return;
+    }
   }
   await db.insert(schema.jobs).values({
     orgId: payload.orgId,

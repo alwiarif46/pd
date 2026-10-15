@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { amendmentKickJobId, nextAmendmentToRun, schema, withOrg } from '@pd/core';
 import { enqueue } from './enqueue.js';
-import { recordQueueFailure } from './key-check.js';
+import { recordQueueFailure, shareOrg } from './key-check.js';
 import type { JobPayload } from './redis.js';
-import { HELD_FOR_CREDIT, markJobFailed } from './rows.js';
+import { HELD_FOR_CREDIT, markJobFailed, SOLICITATION_CREDIT_RELEASED } from './rows.js';
 
 /**
  * Queues ai:amendment for the bid's next amendment (04 s3.1): the lowest-numbered one in
@@ -41,15 +41,20 @@ export async function kickAmendments(orgId: string, bidId: string): Promise<void
 /**
  * Reruns classify for the bid's held files after the solicitation's matrix consumed the credit
  * (06 s4): live attachments and amendments whose latest job is the failed classify row
- * HELD_FOR_CREDIT (classify-job.ts holdUnlessCredited, the key check, or an attachment's matrix
- * run wrote it while the credit was released). Each gets a pending classify row and a classify
- * job; classify checks the credit again under the bid lock. Called after COMMIT. A failed queue
- * call fails that row (the user retries it); nothing here throws.
+ * HELD_FOR_CREDIT, and solicitations whose latest is SOLICITATION_CREDIT_RELEASED (credit-gate.ts,
+ * the key check, or a matrix run wrote it while the credit was released). Each gets a pending
+ * classify row and a classify job; classify checks the credit again under the bid lock. Called
+ * after COMMIT. A failed queue call fails that row (the user retries it); nothing here throws.
  */
 export async function kickHeldDocuments(orgId: string, bidId: string): Promise<void> {
   let held: JobPayload[] = [];
   try {
     held = await withOrg(orgId, async (db) => {
+      // Lock order (credits.ts): organization key share (for the job inserts), then the bid's
+      // candidate documents FOR UPDATE by id. The retry route takes the same document lock before
+      // it adds a job, so a manual retry and this kick never both rerun one file: whichever comes
+      // second sees the other's newer job row.
+      await shareOrg(db, orgId);
       const documents = await db.select({
         id: schema.documents.id,
         kind: schema.documents.kind,
@@ -57,9 +62,9 @@ export async function kickHeldDocuments(orgId: string, bidId: string): Promise<v
       }).from(schema.documents).where(and(
         eq(schema.documents.bidId, bidId),
         eq(schema.documents.orgId, orgId),
-        inArray(schema.documents.kind, ['attachment', 'amendment']),
+        inArray(schema.documents.kind, ['solicitation', 'attachment', 'amendment']),
         sql`${schema.documents.liveStatus} is distinct from 'deleted'`,
-      ));
+      )).orderBy(asc(schema.documents.id)).for('update');
       if (documents.length === 0) {
         return [];
       }
@@ -81,7 +86,10 @@ export async function kickHeldDocuments(orgId: string, bidId: string): Promise<v
       const payloads: JobPayload[] = [];
       for (const document of documents) {
         const job = latest.get(document.id);
-        if (job?.type !== 'classify' || job.status !== 'failed' || job.error !== HELD_FOR_CREDIT) {
+        // A solicitation stopped because a sibling's failure released the credit runs too: the
+        // set's credit is consumed now, so its matrix joins the set's.
+        const marker = document.kind === 'solicitation' ? SOLICITATION_CREDIT_RELEASED : HELD_FOR_CREDIT;
+        if (job?.type !== 'classify' || job.status !== 'failed' || job.error !== marker) {
           continue;
         }
         const [created] = await db.insert(schema.jobs).values({
