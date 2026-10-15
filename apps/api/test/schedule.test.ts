@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
-import { closeDb, getPool } from '@pd/core';
+import { closeDb, getPool, schema, withOrg } from '@pd/core';
 import { as, createTenant, type Tenant } from './helpers.js';
 
 vi.mock('../src/queue.js', () => ({
@@ -199,18 +199,36 @@ describe.skipIf(Boolean(unavailable))('schedule', () => {
       return ids.map((rowId) => [day(rows.get(rowId)!.startDate), day(rows.get(rowId)!.endDate)]);
     };
 
-    it('shifts in workdays with the bid setting on, and never moves locked rows', async () => {
+    it('shifts in workdays with the bid setting on; locked rows stay but the due date itself follows', async () => {
       const id = await bid({ startDate: '2026-11-02', dueDate: '2026-11-20' });
       const { draft, pink, due, undated } = await planned(id);
+      const questions = await add(id, { label: 'Questions due', startDate: '2026-11-20', locked: true });
+      const earlier = await add(id, { label: 'Submit volume 1', startDate: '2026-11-13', locked: true });
+      expect([due.kind, questions.kind, earlier.kind]).toEqual(['submission', 'milestone', 'submission']);
       const response = await asA('POST', `/api/bids/${id}/schedule/adjust`, { mode: 'shift', previousDue: '2026-11-20', nextDue: '2026-11-30' });
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({
-        ok: true, requestedMode: 'shift', mode: 'shift', workdaysOnly: true, unit: 'workdays', delta: 5, moved: 2,
+        ok: true, requestedMode: 'shift', mode: 'shift', workdaysOnly: true, unit: 'workdays', delta: 5, moved: 3,
       });
+      expect(response.json<{ moves: { id: string; followsDue: boolean }[] }>().moves.find((move) => move.id === due.id))
+        .toMatchObject({ start: '2026-11-30', end: '2026-11-30', followsDue: true });
       // Thanksgiving (26 Nov) and the weekend are skipped.
-      expect(await dates(id, [draft.id, pink.id, due.id, undated.id])).toEqual([
-        ['2026-11-23', '2026-11-25'], ['2026-11-27', '2026-11-27'], ['2026-11-20', '2026-11-20'], [null, null],
+      expect(await dates(id, [draft.id, pink.id, due.id, undated.id, questions.id, earlier.id])).toEqual([
+        ['2026-11-23', '2026-11-25'], ['2026-11-27', '2026-11-27'], ['2026-11-30', '2026-11-30'], [null, null],
+        ['2026-11-20', '2026-11-20'], ['2026-11-13', '2026-11-13'],
       ]);
+      expect((await byId(id)).get(due.id)!.locked).toBe(true);
+    });
+
+    it('moves the due date submission on scale too, but not on keep', async () => {
+      const id = await bid({ startDate: '2026-11-02', dueDate: '2026-11-20' });
+      const { due } = await planned(id);
+      expect((await asA('POST', `/api/bids/${id}/schedule/adjust`, { mode: 'keep', previousDue: '2026-11-20', nextDue: '2026-12-04' })).json())
+        .toMatchObject({ moved: 0 });
+      expect(await dates(id, [due.id])).toEqual([['2026-11-20', '2026-11-20']]);
+      const scaled = await asA('POST', `/api/bids/${id}/schedule/adjust`, { mode: 'scale', previousDue: '2026-11-20', nextDue: '2026-12-04' });
+      expect(scaled.json()).toMatchObject({ mode: 'scale', moved: 3 });
+      expect(await dates(id, [due.id])).toEqual([['2026-12-04', '2026-12-04']]);
     });
 
     it('shifts in calendar days when the request overrides the setting', async () => {
@@ -219,7 +237,7 @@ describe.skipIf(Boolean(unavailable))('schedule', () => {
       const response = await asA('POST', `/api/bids/${id}/schedule/adjust`, {
         mode: 'shift', previousDue: '2026-11-20', nextDue: '2026-11-30', workdaysOnly: false,
       });
-      expect(response.json()).toMatchObject({ mode: 'shift', workdaysOnly: false, unit: 'days', delta: 10, moved: 2 });
+      expect(response.json()).toMatchObject({ mode: 'shift', workdaysOnly: false, unit: 'days', delta: 10, moved: 3 });
       expect(await dates(id, [draft.id, pink.id])).toEqual([['2026-11-26', '2026-11-28'], ['2026-11-29', '2026-11-29']]);
       expect((await tab(id)).workdaysOnly).toBe(true);
     });
@@ -305,6 +323,22 @@ describe.skipIf(Boolean(unavailable))('schedule', () => {
       expect(after.map((row) => row.id)).toContain(locked.id);
       expect(after.map((row) => row.id)).not.toContain(mine.id);
       expect(after.filter((row) => row.origin === 'template')).toHaveLength(6);
+    });
+
+    it('keeps AI rows when replacing', async () => {
+      const id = await bid({ dueDate: '2026-11-25' });
+      const ai = await withOrg(a.orgId, async (db) => (await db.insert(schema.scheduleActivities).values({
+        orgId: a.orgId, bidId: id, label: 'Date from solicitation', kind: 'milestone', origin: 'ai', locked: false,
+        startDate: new Date('2026-11-10T00:00:00Z'), sourcePage: 3, sourceQuote: 'Questions are due November 10, 2026.',
+      }).returning())[0]);
+      const mine = await add(id, { label: 'Data call', startDate: '2026-11-02' });
+      await seed(id, { template: 'task-order' });
+      const replaced = await seed(id, { template: 'federal-fast', replace: true });
+      expect(replaced.json()).toMatchObject({ added: 6, replaced: 5 });
+      const ids = (await tab(id)).activities.map((row) => row.id);
+      expect(ids).toContain(ai.id);
+      expect(ids).not.toContain(mine.id);
+      expect(ids).toHaveLength(7);
     });
 
     it('counts calendar days with the setting off, maps the legacy ids, and refuses unknown ones', async () => {

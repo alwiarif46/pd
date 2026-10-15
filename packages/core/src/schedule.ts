@@ -254,6 +254,8 @@ export interface AdjustableActivity {
   /** 'YYYY-MM-DD'; null means the same day as `start`. */
   end: string | null;
   locked: boolean;
+  /** The kind; a locked 'submission' on the old due date is the due date itself and follows it. */
+  kind?: ActivityKind;
 }
 
 export interface AdjustOptions {
@@ -272,6 +274,8 @@ export interface ActivityMove {
   previousEnd: string;
   start: string;
   end: string;
+  /** True for the locked submission that is the due date itself (it moves although locked). */
+  followsDue: boolean;
 }
 
 export interface AdjustPlan {
@@ -297,7 +301,9 @@ export interface AdjustPlan {
  *   start before the anchor stay. Without a usable anchor (null, or not before both due dates),
  *   scale shifts instead and `mode` says so.
  * - keep: nothing moves.
- * Locked activities and activities with no start date never move.
+ * Locked activities and activities with no start date never move, with one exception: on shift
+ * and scale, a locked activity of kind 'submission' that starts on `previousDue` is the due
+ * date itself, so it moves to `nextDue` (keeping its length in calendar days), with `followsDue`.
  */
 export function planScheduleAdjust(activities: readonly AdjustableActivity[], options: AdjustOptions): AdjustPlan {
   const rules: DayRules = { workdaysOnly: options.workdaysOnly, extraHolidays: options.extraHolidays };
@@ -326,9 +332,16 @@ export function planScheduleAdjust(activities: readonly AdjustableActivity[], op
     return offset === 0 ? nextWorkday(anchor, rules) : addWorkdays(anchor, offset, rules);
   };
   for (const activity of activities) {
-    if (activity.locked || activity.start === null) continue;
+    if (activity.start === null) continue;
     const previousStart = activity.start;
     const previousEnd = activity.end !== null && activity.end >= activity.start ? activity.end : activity.start;
+    if (activity.locked) {
+      if (activity.kind === 'submission' && previousStart === options.previousDue) {
+        const end = addIsoDays(previousEnd, diffIsoDays(options.previousDue, options.nextDue));
+        plan.moves.push({ id: activity.id, previousStart, previousEnd, start: options.nextDue, end, followsDue: true });
+      }
+      continue;
+    }
     let start: string;
     let end: string;
     if (mode === 'shift') {
@@ -341,7 +354,7 @@ export function planScheduleAdjust(activities: readonly AdjustableActivity[], op
     }
     if (end < start) end = start;
     if (start !== previousStart || end !== previousEnd) {
-      plan.moves.push({ id: activity.id, previousStart, previousEnd, start, end });
+      plan.moves.push({ id: activity.id, previousStart, previousEnd, start, end, followsDue: false });
     }
   }
   return plan;

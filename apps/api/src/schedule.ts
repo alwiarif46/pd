@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import {
   ACTIVITY_KINDS,
@@ -31,7 +31,8 @@ import type { Result } from './tabs.js';
  *
  * Locking: seed and adjust take a per-bid advisory lock (outside the credit lock order in
  * credits.ts; no other path takes it), so two of them never interleave. Adjust moves a row only
- * while it is still unlocked (a conditional UPDATE), so a lock set meanwhile wins.
+ * while it is still unlocked (a conditional UPDATE), so a lock set meanwhile wins; the locked
+ * submission that is the due date itself is the one exception.
  */
 
 type ActivityRow = typeof schema.scheduleActivities.$inferSelect;
@@ -232,7 +233,8 @@ const LEGACY_TEMPLATES: Record<string, string> = { standard: 'federal-standard',
 /**
  * Applies a template (packages/core SCHEDULE_TEMPLATES), counted back from the bid's due date
  * with the bid's setting. Body: `template` (default 'federal-standard'), `replace` (true: delete
- * the unlocked activities first, as the prototype's "Apply template" does; default false: add).
+ * the unlocked activities of origin 'template' or 'user' first, keeping AI rows and locked rows;
+ * default false: add).
  * Rows are origin 'template'. 409 `due_date_required` when the bid has no due date.
  */
 export async function seedSchedule(
@@ -259,6 +261,7 @@ export async function seedSchedule(
       eq(schema.scheduleActivities.bidId, bid.id),
       eq(schema.scheduleActivities.orgId, orgId),
       eq(schema.scheduleActivities.locked, false),
+      inArray(schema.scheduleActivities.origin, ['template', 'user']),
     )).returning({ id: schema.scheduleActivities.id })).length;
   }
   const built = buildScheduleTemplate(template, toIsoDate(bid.dueDate), { workdaysOnly: bid.scheduleWorkdaysOnly });
@@ -285,7 +288,9 @@ export async function registerSchedule(app: FastifyInstance): Promise<void> {
    * Body: mode ('shift' | 'scale' | 'keep'), previousDue and nextDue ('YYYY-MM-DD'; required
    * for shift and scale), workdaysOnly (optional: overrides the bid's setting for this call).
    * Scale stretches from the bid's start date and shifts instead without one (`mode` says
-   * which was done). The bid's due date is not changed here.
+   * which was done). Locked rows stay, except that on shift and scale a locked 'submission'
+   * starting on previousDue is the due date itself and moves to nextDue (`followsDue` in its
+   * move). The bid's due date is not changed here.
    */
   app.post('/api/bids/:id/schedule/adjust', { preHandler: requireAuth }, async (request, reply) => {
     const orgId = request.auth!.orgId!;
@@ -318,6 +323,7 @@ export async function registerSchedule(app: FastifyInstance): Promise<void> {
         start: storedDay(row.startDate),
         end: storedDay(row.endDate),
         locked: row.locked,
+        kind: row.kind,
       })), {
         mode,
         // keep without dates: nothing moves whatever these are.
@@ -335,7 +341,8 @@ export async function registerSchedule(app: FastifyInstance): Promise<void> {
         }).where(and(
           eq(schema.scheduleActivities.id, move.id),
           eq(schema.scheduleActivities.orgId, orgId),
-          eq(schema.scheduleActivities.locked, false),
+          // The due date itself moves although locked; any other row only while still unlocked.
+          move.followsDue ? undefined : eq(schema.scheduleActivities.locked, false),
         )).returning({ id: schema.scheduleActivities.id });
         if (row) moved.push(move);
       }

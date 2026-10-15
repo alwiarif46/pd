@@ -770,6 +770,8 @@ export interface ScheduleMoveDto {
   previousEnd: string;
   start: string;
   end: string;
+  /** The locked 'submission' that was on previousDue: it is the due date itself and moves to nextDue (shift and scale). */
+  followsDue: boolean;
 }
 
 export interface AdjustScheduleDto {
@@ -788,7 +790,7 @@ export interface AdjustScheduleDto {
 /** POST /api/bids/:id/tabs/schedule/seed. 409 `due_date_required` when the bid has no due date. */
 export interface SeedScheduleInput {
   template?: ScheduleTemplate;
-  /** true: delete the unlocked activities first; default false: add to them. */
+  /** true: delete the unlocked activities of origin 'template' or 'user' first (AI rows stay); default false: add to them. */
   replace?: boolean;
 }
 

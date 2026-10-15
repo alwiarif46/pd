@@ -148,8 +148,8 @@ describe('planScheduleAdjust', () => {
     });
     expect(plan).toMatchObject({ requestedMode: 'shift', mode: 'shift', unit: 'workdays', delta: 5 });
     expect(plan.moves).toEqual([
-      { id: 'draft', previousStart: '2026-11-16', previousEnd: '2026-11-18', start: '2026-11-23', end: '2026-11-25' },
-      { id: 'pink', previousStart: '2026-11-19', previousEnd: '2026-11-19', start: '2026-11-27', end: '2026-11-27' },
+      { id: 'draft', previousStart: '2026-11-16', previousEnd: '2026-11-18', start: '2026-11-23', end: '2026-11-25', followsDue: false },
+      { id: 'pink', previousStart: '2026-11-19', previousEnd: '2026-11-19', start: '2026-11-27', end: '2026-11-27', followsDue: false },
     ]);
   });
 
@@ -206,7 +206,7 @@ describe('planScheduleAdjust', () => {
     const options = { mode: 'scale' as const, previousDue: '2026-01-11', anchor: '2026-01-01', workdaysOnly: false };
     // Span 10 -> 20: offsets 3 and 5 double.
     expect(planScheduleAdjust(list, { ...options, nextDue: '2026-01-21' }).moves).toEqual([
-      { id: 'a', previousStart: '2026-01-04', previousEnd: '2026-01-06', start: '2026-01-07', end: '2026-01-11' },
+      { id: 'a', previousStart: '2026-01-04', previousEnd: '2026-01-06', start: '2026-01-07', end: '2026-01-11', followsDue: false },
     ]);
     // Span 10 -> 15: 4.5 rounds to 5, 7.5 to 8.
     expect(planScheduleAdjust(list, { ...options, nextDue: '2026-01-16' }).moves[0]).toMatchObject({ start: '2026-01-06', end: '2026-01-09' });
@@ -239,6 +239,34 @@ describe('planScheduleAdjust', () => {
       expect(plan).toMatchObject({ requestedMode: 'scale', mode: 'shift', delta: 5 });
       expect(plan.moves[0]).toMatchObject({ id: 'draft', start: '2026-11-23' });
     }
+  });
+
+  it('moves the locked submission on the old due date to the new one, on shift and scale only', () => {
+    const list: AdjustableActivity[] = [
+      { id: 'due', start: '2026-11-20', end: '2026-11-20', locked: true, kind: 'submission' },
+      { id: 'earlier', start: '2026-11-13', end: null, locked: true, kind: 'submission' },
+      { id: 'questions', start: '2026-11-20', end: null, locked: true, kind: 'milestone' },
+      { id: 'draft', start: '2026-11-16', end: '2026-11-18', locked: false, kind: 'writing' },
+    ];
+    for (const workdaysOnly of [true, false]) {
+      for (const [mode, anchor] of [['shift', null], ['scale', '2026-11-02'], ['scale', null]] as const) {
+        const plan = planScheduleAdjust(list, { mode, previousDue: '2026-11-20', nextDue: '2026-11-28', anchor, workdaysOnly });
+        // Saturday 28 Nov: the due date goes exactly where it was set, workday or not.
+        expect(plan.moves.find((move) => move.id === 'due')).toEqual({
+          id: 'due', previousStart: '2026-11-20', previousEnd: '2026-11-20', start: '2026-11-28', end: '2026-11-28', followsDue: true,
+        });
+        expect(plan.moves.map((move) => move.id).sort()).toEqual(['draft', 'due']);
+        expect(plan.moves.find((move) => move.id === 'draft')?.followsDue).toBe(false);
+      }
+    }
+    expect(planScheduleAdjust(list, {
+      mode: 'keep', previousDue: '2026-11-20', nextDue: '2026-11-28', anchor: null, workdaysOnly: true,
+    }).moves).toEqual([]);
+    // A multi-day submission keeps its length.
+    const long = planScheduleAdjust([{ id: 'window', start: '2026-11-20', end: '2026-11-23', locked: true, kind: 'submission' }], {
+      mode: 'shift', previousDue: '2026-11-20', nextDue: '2026-11-25', anchor: null, workdaysOnly: true,
+    });
+    expect(long.moves[0]).toMatchObject({ start: '2026-11-25', end: '2026-11-28' });
   });
 
   it('applies moves for a preview', () => {
