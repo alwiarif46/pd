@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { BidsList } from '@/ui/bids/BidsList';
 import { bidsApi, loadBidsScreen, messageOf, type BidsApi, type BidsScreenData } from './controller';
 import { bidHash, NEW_BID_HASH, UPGRADE_HASH } from './routes';
+import { useUpgrade } from './use-upgrade';
 
 type State = { kind: 'loading' } | { kind: 'error'; message: string } | BidsScreenData;
 
@@ -18,6 +19,7 @@ function go(hash: string) {
 
 /** Loads the bids and the credit count, and renders the v0 list. */
 export function BidsContainer({ api = bidsApi }: Props) {
+  const upgrade = useUpgrade();
   const [state, setState] = useState<State>({ kind: 'loading' });
   const [attempt, setAttempt] = useState(0);
 
@@ -70,7 +72,7 @@ export function BidsContainer({ api = bidsApi }: Props) {
       creditsResetOn={state.org.creditsResetOn}
       onOpen={(id) => go(bidHash(id))}
       onCreate={() => go(NEW_BID_HASH)}
-      onUpgrade={() => go(UPGRADE_HASH)}
+      onUpgrade={() => upgrade(state.org.creditsLeft)}
     />
   );
 }
