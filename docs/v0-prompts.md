@@ -46,7 +46,7 @@ HOW
 
 WHAT
 Top bar (bg-ink, text-paper, 56 px):
-- "Shaavir PD" wordmark.
+- The Shaavir mark (`<img src="/shaavir-mark.png" alt="" />`, about 28 px square, from the app's public folder) followed by the "Shaavir PD" wordmark. Below 640 px the mark only, with "Shaavir PD" as an sr-only label.
 - Inside a bid: a bid switcher (Select labelled "Bid", sr-only label is fine, listing bids by name, plus "All bids" which calls onOpenPage('bids')), then the due date and time ("Due Nov 3, 2:00 PM ET", numeric font). Outside a bid: links "Bids" and "Organization", the active one marked.
 - Credits: "3 RFP credits left · resets Nov 1" (numeric font). At 0 it reads "0 RFP credits left" in a warning style with an "Upgrade plan" button calling onUpgrade. On narrow screens shorten to "3 credits".
 - User menu (DropdownMenu, trigger shows the user's initials and has the accessible name "Account menu for [name]"): name and email at the top, then "Account", "Organization", "Privacy", a separator, "Sign out".
