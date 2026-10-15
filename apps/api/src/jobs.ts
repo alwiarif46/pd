@@ -1,6 +1,6 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { isUuid, schema, withOrg } from '@pd/core';
+import { isUuid, lockDocumentJobs, schema, withOrg } from '@pd/core';
 import { requireAuth } from './context.js';
 import { lockBid, lockOrg, reserveForBid, shareOrg } from './credits.js';
 import { apiError } from './errors.js';
@@ -67,22 +67,23 @@ export async function registerJobs(app: FastifyInstance): Promise<void> {
       if (!document?.storagePath) {
         return { code: 404, body: { error: 'The file is no longer available' } };
       }
+      // The document's job lock (an advisory lock held until COMMIT, taken before any row lock)
+      // serialises retries of one file with each other and with the worker's kick of a held file,
+      // which takes it too: only a retry of the document's newest unfinished or failed step runs,
+      // so a double click, or a retry racing the kick, never runs one file twice. It is not a row
+      // lock, so it adds nothing to the row lock order (credits.ts).
+      await lockDocumentJobs(db, document.id);
       // Lock order: organization (FOR UPDATE when a credit may be reserved, else the key share the
-      // job insert needs), document, bid, credit (credits.ts).
+      // job insert needs), bid, credit (credits.ts).
       const org = document.kind === 'solicitation' ? await lockOrg(db, orgId) : null;
       if (document.kind !== 'solicitation') {
         await shareOrg(db, orgId);
       }
-      // The document lock serialises retries of one file with each other and with the worker's
-      // kick of a held file (which takes it too): only a retry of the document's newest step runs,
-      // so a double click, or a retry racing the kick, never runs one file twice.
-      await db.select({ id: schema.documents.id }).from(schema.documents).where(and(
-        eq(schema.documents.id, document.id),
-        eq(schema.documents.orgId, orgId),
-      )).for('update');
+      // A newer completed step does not count: there would be nothing left to retry.
       const [newer] = await db.select({ id: schema.jobs.id }).from(schema.jobs).where(and(
         eq(schema.jobs.documentId, document.id),
         eq(schema.jobs.orgId, orgId),
+        ne(schema.jobs.status, 'completed'),
         // Compared in the database: created_at has microseconds, a JS Date only milliseconds.
         sql`${schema.jobs.createdAt} > (select created_at from jobs where id = ${job.id})`,
       )).limit(1);
@@ -127,7 +128,7 @@ export async function registerJobs(app: FastifyInstance): Promise<void> {
           jobId: created.id,
           enqueue: () => (job.type === 'scan' ? enqueueScan(payload) : enqueueClassify(payload)),
           // The credit this retry reserved goes back if its job never reaches the queue.
-          releaseBidId: reserved ? job.bidId : undefined,
+          release: reserved ? { bidId: job.bidId, documentId: job.documentId } : undefined,
         }],
       };
     });

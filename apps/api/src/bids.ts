@@ -1,5 +1,5 @@
 import { rm } from 'node:fs/promises';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import {
   BID_STATUSES,
@@ -315,10 +315,11 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
       // Lock order (credits.ts): documents, then upload sessions, then the bid. The worker takes
       // a document before the bid, and upload complete holds its session before the bid; the
       // bid's DELETE cascades into both tables, so their rows are locked here first.
+      // By id, as every multi-document lock (the worker's kick), so two never wait in a cycle.
       await db.select({ id: schema.documents.id }).from(schema.documents).where(and(
         eq(schema.documents.bidId, id),
         eq(schema.documents.orgId, orgId),
-      )).for('update');
+      )).orderBy(asc(schema.documents.id)).for('update');
       await db.select({ id: schema.uploadSessions.id }).from(schema.uploadSessions).where(and(
         eq(schema.uploadSessions.bidId, id),
         eq(schema.uploadSessions.orgId, orgId),

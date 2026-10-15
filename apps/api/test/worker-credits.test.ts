@@ -703,7 +703,7 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
     expect(await state(tenant, creditId)).toEqual({ reserved: 0, used: 1, status: 'consumed' });
   });
 
-  it('a rerun of the overview and dates steps replaces the document\'s untouched AI rows and keeps the rest', async () => {
+  it('a rerun of the overview and dates steps adds no duplicates and never deletes or changes a row', async () => {
     const { tenant, solicitationId } = await setup('rerun-facts', 'consumed');
     await withOrg(tenant.orgId, (db) => db.update(schema.pages).set({ text: 'Proposals are due December 15, 2026.\nQuestions by 12/01/2026.' })
       .where(eq(schema.pages.documentId, solicitationId)));
@@ -720,6 +720,9 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
     expect(await facts()).toHaveLength(3);
     const firstDates = await dates();
     expect(firstDates.length).toBeGreaterThan(0);
+    // A user edits an AI date in the Schedule tab; that patch records no row history.
+    await withOrg(tenant.orgId, (db) => db.update(schema.scheduleActivities).set({ owner: 'Ray', status: 'done' })
+      .where(eq(schema.scheduleActivities.id, firstDates[0].id)));
 
     // A user confirms one fact and edits another (row history), and adds a fact of their own.
     const [agency, naics] = (await facts()).sort((a, b) => a.field.localeCompare(b.field));
@@ -735,10 +738,12 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
     await worker.processOverview(p);
     await worker.processDates(p);
     const after = await facts();
-    // agency (confirmed), naics (edited), setAside (replaced once), note (user): no duplicates.
+    // agency (confirmed), naics (edited), setAside (kept), note (user): no duplicates.
     expect(after.map((fact) => fact.field).sort()).toEqual(['agency', 'naics', 'note', 'setAside']);
     expect(after.find((fact) => fact.id === naics.id)?.value).toBe('541512');
-    expect(await dates()).toHaveLength(firstDates.length);
+    const afterDates = await dates();
+    expect(afterDates).toHaveLength(firstDates.length);
+    expect(afterDates.find((row) => row.id === firstDates[0].id)).toMatchObject({ owner: 'Ray', status: 'done' });
     overviewFacts.facts = [];
   });
 
@@ -791,6 +796,8 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
 
   it('a retry or an upload complete whose queue call fails releases the credit it reserved', async () => {
     const { tenant, creditId, solicitationId } = await setup('queue-fails', 'released');
+    // The tenant's own (archived) solicitation would count as a sibling that shares the credit.
+    await dropTenantSolicitation(tenant);
     const failed = await jobRow(tenant, solicitationId, 'classify', 'failed');
     vi.mocked(enqueueClassify).mockRejectedValueOnce(new Error('redis down'));
     const retried = await as(app, tenant.token)('POST', `/api/jobs/${failed}/retry`);
@@ -819,5 +826,47 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
     expect(enqueued).toContain('classify');
     const kicked = await latestJob(tenant, stopped);
     expect({ type: kicked.type, status: kicked.status }).toEqual({ type: 'classify', status: 'pending' });
+  });
+
+  it('a retry and the kick of one held file, queued on its job lock, add one job between them', async () => {
+    for (const kickFirst of [true, false, true, false]) {
+      const { tenant, attachmentId } = await setup(`kick-lock-${randomUUID().slice(0, 8)}`, 'released');
+      await classify.processClassify(payload(tenant, attachmentId, 'attachment'));
+      const held = await latestJob(tenant, attachmentId);
+      expect(held.error).toBe(rows.HELD_FOR_CREDIT);
+      await withOrg(tenant.orgId, (db) => db.update(schema.bids).set({ creditStatus: 'consumed' }).where(eq(schema.bids.id, tenant.bidId)));
+      const { kickHeldDocuments } = await import('../../worker/src/kick.js');
+      const kick = () => kickHeldDocuments(tenant.orgId, tenant.bidId).then(() => ({ statusCode: 0 }));
+      const retry = () => as(app, tenant.token)('POST', `/api/jobs/${held.id}/retry`);
+      const { waiting, results } = await raceInOrder(tenant.orgId, 'select pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`document-jobs:${attachmentId}`], kickFirst ? [kick, retry] : [retry, kick]);
+      expect(waiting).toBe(2);
+      const retried = fulfilled(results[kickFirst ? 1 : 0]) as { statusCode: number };
+      expect(retried.statusCode).toBe(kickFirst ? 409 : 200);
+      const pending = (await jobsOf(tenant, attachmentId)).filter((job) => job.status === 'pending');
+      expect(pending).toHaveLength(1);
+    }
+  });
+
+  it('a retry is refused only for a newer unfinished or failed step, not a newer completed one', async () => {
+    const { tenant, solicitationId } = await setup('newer-completed', 'reserved');
+    const failed = await jobRow(tenant, solicitationId, 'scan', 'failed');
+    await jobRow(tenant, solicitationId, 'classify', 'completed');
+    expect((await as(app, tenant.token)('POST', `/api/jobs/${failed}/retry`)).statusCode).toBe(200);
+  });
+
+  it('an upload complete whose queue call fails keeps a reservation another solicitation now relies on', async () => {
+    const other = await createTenant(app, 'queue-fails-shared');
+    const { bidId, sessionId } = await solicitationSession(other);
+    // Meanwhile the session's reservation was released and another solicitation of the bid took
+    // the bid's credit again (same period, so the same credit id).
+    await withOrg(other.orgId, (db) => db.insert(schema.documents).values({
+      orgId: other.orgId, bidId, fileName: 's1.pdf', mime: 'application/pdf', sizeBytes: 5,
+      sha256: randomUUID(), kind: 'solicitation', storagePath: `docs/${randomUUID()}.pdf`, liveStatus: 'live',
+    }));
+    vi.mocked(enqueueScan).mockRejectedValueOnce(new Error('redis down'));
+    expect((await as(app, other.token)('POST', `/api/uploads/${sessionId}/complete`)).statusCode).toBe(500);
+    const [bid] = await withOrg(other.orgId, (db) => db.select().from(schema.bids).where(eq(schema.bids.id, bidId)));
+    expect(bid.creditStatus).toBe('reserved');
   });
 });

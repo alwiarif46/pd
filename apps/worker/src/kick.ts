@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
-import { amendmentKickJobId, nextAmendmentToRun, schema, withOrg } from '@pd/core';
+import { amendmentKickJobId, lockDocumentJobs, nextAmendmentToRun, schema, withOrg } from '@pd/core';
 import { enqueue } from './enqueue.js';
 import { recordQueueFailure, shareOrg } from './key-check.js';
 import type { JobPayload } from './redis.js';
@@ -50,10 +50,18 @@ export async function kickHeldDocuments(orgId: string, bidId: string): Promise<v
   let held: JobPayload[] = [];
   try {
     held = await withOrg(orgId, async (db) => {
-      // Lock order (credits.ts): organization key share (for the job inserts), then the bid's
-      // candidate documents FOR UPDATE by id. The retry route takes the same document lock before
-      // it adds a job, so a manual retry and this kick never both rerun one file: whichever comes
-      // second sees the other's newer job row.
+      // Each candidate document's job lock (advisory, by id, before any row lock), the one the
+      // retry route takes before it adds a job: a manual retry and this kick never both rerun one
+      // file, since whichever comes second sees the other's newer job row. Then the organization
+      // key share the job inserts need (credits.ts).
+      const candidates = await db.select({ id: schema.documents.id }).from(schema.documents).where(and(
+        eq(schema.documents.bidId, bidId),
+        eq(schema.documents.orgId, orgId),
+        inArray(schema.documents.kind, ['solicitation', 'attachment', 'amendment']),
+      )).orderBy(asc(schema.documents.id));
+      for (const candidate of candidates) {
+        await lockDocumentJobs(db, candidate.id);
+      }
       await shareOrg(db, orgId);
       const documents = await db.select({
         id: schema.documents.id,
@@ -64,7 +72,7 @@ export async function kickHeldDocuments(orgId: string, bidId: string): Promise<v
         eq(schema.documents.orgId, orgId),
         inArray(schema.documents.kind, ['solicitation', 'attachment', 'amendment']),
         sql`${schema.documents.liveStatus} is distinct from 'deleted'`,
-      )).orderBy(asc(schema.documents.id)).for('update');
+      )).orderBy(asc(schema.documents.id));
       if (documents.length === 0) {
         return [];
       }

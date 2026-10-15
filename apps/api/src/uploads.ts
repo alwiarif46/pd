@@ -454,7 +454,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
             storagePath,
             kind: session.kind,
           }),
-          releaseBidId: ownsCredit ? session.bidId : undefined,
+          release: ownsCredit ? { bidId: session.bidId, documentId: document.id } : undefined,
         }],
       };
     }).catch(async (error: unknown) => {
