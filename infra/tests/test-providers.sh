@@ -230,6 +230,33 @@ mk_tenant ovh-override 'setv("subprocessor", "\"Example Hosting Inc\"", "infra")
 o="$(sp "$TMP/ovh-override.toml")"
 [[ "$o" == "Example Hosting Inc" ]] && ok "[infra] subprocessor overrides the adapter's value" || bad "override" "$o"
 
+# ================================================================== switch-provider.sh (Drive D-149)
+mk_tenant other 'import re; s = re.sub(r"(?m)^id(\s*)=.*$", "id = \"someone-else\"", s, count=1)'
+o="$(bash infra/switch-provider.sh plan --tenant "$TMP/ssh.toml" --to "$TMP/other.toml" 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "tenant.id differs" <<<"$o" && ok "switch refuses a target file of another tenant" || bad "switch other tenant" "$o"
+for key in tenant.domain tenant.hostname backup.bucket backup.crypt_prefix; do
+  sect="${key%%.*}"; name="${key#*.}"
+  mk_tenant "diff-$name" "setv('$name', '\"changed-$name\"', '$sect')"
+  o="$(bash infra/switch-provider.sh plan --tenant "$TMP/ssh.toml" --to "$TMP/diff-$name.toml" 2>&1)"; rc=$?
+  [[ $rc != 0 ]] && grep -q "$key differs" <<<"$o" && ok "switch refuses when $key differs" || bad "switch $key check" "$o"
+done
+o="$(bash infra/switch-provider.sh plan --tenant "$TMP/ssh.toml" --to "$TMP/vol.toml" 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q "from 'ssh' to 'hetzner'" <<<"$o" && grep -q "restore-runbook.md section 3" <<<"$o" && grep -q "cutover --to" <<<"$o" && ok "switch plan: ordered checklist via the restore path" || bad "switch plan" "$o"
+grep -q "rsync -aHAX --numeric-ids pdadmin@<old tailnet IP>:/mnt/pddata/files/ /mnt/pddata/files/" <<<"$o" && ok "switch plan copies the live files with rsync (plan 01 s4: they are not in the backups)" || bad "rsync step" "$o"
+grep -q "NEW server's tailnet IP" <<<"$o" && ok "switch plan warns: --check-host must be the new node's tailnet IP" || bad "check-host warning" "$o"
+grep -q "restore.sh --archive latest --confirm" <<<"$o" && grep -q "backup.sh" <<<"$o" && grep -q "stop api worker" <<<"$o" && ok "switch plan: stop api/worker and back up on the old server, restore.sh on the new one" || bad "restore steps" "$o"
+o="$(bash infra/switch-provider.sh build --tenant "$TMP/ssh.toml" --to "$TMP/vol.toml" 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "\-\-confirm" <<<"$o" && ok "switch build refuses without --confirm" || bad "switch confirm" "$o"
+o="$(bash infra/switch-provider.sh cutover --tenant "$TMP/ssh.toml" --to "$TMP/vol.toml" 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "\-\-confirm" <<<"$o" && ok "switch cutover refuses without --confirm" || bad "cutover confirm" "$o"
+: >"$TMP/hz.calls"
+o="$(bash infra/switch-provider.sh build --tenant "$TMP/ssh.toml" --to "$TMP/vol.toml" --dry-run 2>&1)"; rc=$?
+[[ $rc == 0 && ! -s "$TMP/hz.calls" ]] && grep -q "infra/provision.sh\|provision.sh" <<<"$o" && ! grep -q "bootstrap-existing.sh --tenant.*--dry-run" <<<"$o" && ok "switch build --dry-run to hetzner: provision only (cloud-init came with the server), no API call" || bad "switch dry" "$o"
+o="$(bash infra/switch-provider.sh build --tenant "$TMP/vol.toml" --to "$TMP/ssh.toml" --dry-run 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q "applying infra/cloud-init.yaml now" <<<"$o" && ok "switch build to the ssh adapter also bootstraps" || bad "switch to ssh" "$o"
+o="$(bash infra/switch-provider.sh plan --tenant "$TMP/ssh.toml" --to "$TMP/ssh.toml" 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "current tenant file itself" <<<"$o" && ok "switch refuses --to naming the current file" || bad "switch same file" "$o"
+
 # ------------------------------------------------------------------ luks_find_byid
 mkdir -p "$S/byid"; U=0d9e8f7a-1b2c-4d5e-8f90-a1b2c3d4e5f6
 ln -s /dev/null "$S/byid/scsi-0QEMU_QEMU_HARDDISK_$U"; ln -s /dev/null "$S/byid/virtio-${U:0:20}"

@@ -290,6 +290,65 @@ else
   skip "nft load tests (needs Linux with nft and unshare -rn; CI runs them)"
 fi
 
+# ------------------------------------------------------------------ cloudflare-dns.py (fake Cloudflare API)
+CFTOKEN="cf-fake-token-$(printf '%030d' 5)"
+CF_PID=""
+start_cf() { # start_cf [SEED_RECORDS_JSON]
+  [[ -n "$CF_PID" ]] && { kill "$CF_PID" 2>/dev/null; wait "$CF_PID" 2>/dev/null; }
+  printf '{"zone":{"id":"z1","name":"shaavir.com"},"records":%s}' "${1:-[]}" >"$S/cf.json"; : >"$S/cf.calls"; rm -f "$S/cf.port"
+  "$PY" infra/tests/fakes/cloudflare_fake.py "$(np "$S/cf.json")" "$(np "$S/cf.calls")" "$(np "$S/cf.port")" "$CFTOKEN" </dev/null >/dev/null 2>&1 &
+  CF_PID=$!
+  local _; for _ in $(seq 1 50); do [[ -s "$S/cf.port" ]] && break; sleep 0.1; done
+  export PD_CLOUDFLARE_API="http://127.0.0.1:$(cat "$S/cf.port")/client/v4"
+}
+cf() { "$PY" -c "import json,sys; d=json.load(open(sys.argv[2])); print(eval(sys.argv[1]))" "$1" "$(np "$S/cf.json")"; }
+CFPY=("$PY" infra/dns/cloudflare-dns.py)
+IP4=93.184.216.34 IP6=2606:2800:220:1:248:1893:25c8:1946
+setup dns
+printf 'CLOUDFLARE_DNS_TOKEN=%s\n' "$CFTOKEN" >"$S/secrets.env"
+export PD_BASH="$(np "$(command -v bash)")"
+out="$("${CFPY[@]}" apply --ipv4 $IP4 --ipv6 $IP6 --dry-run 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q "proxied: true" <<<"$out" && grep -q "TTL 1" <<<"$out" && ! grep -qF -- "$CFTOKEN" <<<"$out" && ok "cloudflare-dns apply --dry-run shows proxied records, TTL 1, no token" || bad "cf dry-run" "$out"
+! grep -qE "CAA|letsencrypt" <<<"$out" && ok "no CAA / ACME records (origin certificate, no certbot)" || bad "CAA in plan"
+start_cf
+out="$("${CFPY[@]}" apply --ipv4 $IP4 --ipv6 $IP6 2>&1)"; rc=$?
+[[ $rc == 0 ]] && [[ "$(cf 'sorted((r["type"], r["content"], r["proxied"], r["ttl"]) for r in d["records"])')" == "[('A', '$IP4', True, 1), ('AAAA', '$IP6', True, 1)]" ]] && ok "apply creates the A and AAAA records, proxied, TTL 1" || bad "cf apply" "rc=$rc $out $(cf 'd["records"]')"
+! grep -q 'auth=BAD' "$S/cf.calls" && grep -q 'auth=OK' "$S/cf.calls" && ! grep -qF -- "$CFTOKEN" <<<"$out" && ok "every API call carried the token in the header; it is not in the output" || bad "cf auth" "$(cat "$S/cf.calls")"
+n1="$(grep -cE '^(POST|PATCH)' "$S/cf.calls")"
+out="$("${CFPY[@]}" apply --ipv4 $IP4 --ipv6 $IP6 2>&1)"; rc=$?
+[[ $rc == 0 && "$(grep -cE '^(POST|PATCH)' "$S/cf.calls")" == "$n1" ]] && grep -q "^ok " <<<"$out" && ok "a second apply changes nothing (idempotent)" || bad "cf idempotent" "$out"
+out="$("${CFPY[@]}" apply --ipv4 93.184.216.35 --ipv6 $IP6 2>&1)"
+[[ "$(cf '[r["content"] for r in d["records"] if r["type"]=="A"][0]')" == 93.184.216.35 ]] && grep -q "^updated" <<<"$out" && ok "a changed address updates the record in place (never deletes)" || bad "cf update" "$out"
+"${CFPY[@]}" apply --ipv4 93.184.216.35 --ipv6 $IP6 >/dev/null 2>&1
+out="$("${CFPY[@]}" check --ipv4 93.184.216.35 --ipv6 $IP6 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q "CHECK: PASS" <<<"$out" && ok "check compares the API records with the server addresses (no DNS resolution)" || bad "cf check pass" "$out"
+out="$("${CFPY[@]}" check --ipv4 93.184.216.99 --ipv6 $IP6 2>&1)"; rc=$?
+[[ $rc == 1 ]] && grep -q "FAIL A" <<<"$out" && ok "check fails when the record holds another address" || bad "cf check fail" "$out"
+# proxied flag drift
+"$PY" - "$(np "$S/cf.json")" <<'PYEOF'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+for r in d["records"]: r["proxied"] = False
+json.dump(d, open(p, "w"))
+PYEOF
+out="$("${CFPY[@]}" check --ipv4 93.184.216.35 --ipv6 $IP6 2>&1)"; rc=$?
+[[ $rc == 1 ]] && grep -q "proxied=False" <<<"$out" && ok "check fails when the proxied flag differs from [dns] proxied" || bad "cf proxied drift" "$out"
+# the API URL guard
+out="$(PD_CLOUDFLARE_API=https://api.example.net/client/v4 "${CFPY[@]}" apply --ipv4 $IP4 --ipv6 $IP6 --dry-run 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "PD_CLOUDFLARE_API must be" <<<"$out" && ok "a non-Cloudflare PD_CLOUDFLARE_API is refused (the token cannot go elsewhere)" || bad "cf url guard" "$out"
+out="$(PD_CLOUDFLARE_API=http://evil.localhost.example.com/ "${CFPY[@]}" apply --ipv4 $IP4 --ipv6 $IP6 2>&1)"; rc=$?
+[[ $rc != 0 ]] && ok "a look-alike host is refused too" || bad "cf lookalike"
+# --from-provider goes through the dispatcher (ssh adapter: addresses from [infra.ssh])
+sed -e 's/^ipv4 .*/ipv4           = "93.184.216.40"/' -e 's/^ipv6 .*/ipv6           = "2606:2800:220:1:248:1893:25c8:1950"/' config/tenant.toml >"$S/ssh.toml"
+start_cf
+out="$("${CFPY[@]}" apply --from-provider --tenant "$(np "$S/ssh.toml")" 2>&1)"; rc=$?
+[[ $rc == 0 && "$(cf 'sorted(r["content"] for r in d["records"])')" == "['2606:2800:220:1:248:1893:25c8:1950', '93.184.216.40']" ]] && ok "apply --from-provider reads IPv4 + IPv6 through infra/server-addresses.sh (ssh adapter)" || bad "cf from-provider" "rc=$rc $out"
+out="$("${CFPY[@]}" apply --from-provider --dry-run --tenant "$(np "$S/ssh.toml")" 2>&1)"
+grep -q "from the 'ssh' adapter" <<<"$out" && ok "dry-run --from-provider names the adapter and makes no call" || bad "cf from-provider dry" "$out"
+[[ -n "$CF_PID" ]] && { kill "$CF_PID" 2>/dev/null; CF_PID=""; }
+unset PD_CLOUDFLARE_API PD_BASH
+
+
 # ------------------------------------------------------------------ provider layer
 o="$(bash infra/tests/test-providers.sh </dev/null 2>&1)"; rc=$?
 [[ $rc == 0 ]] && ok "provider layer suite: $(tail -1 <<<"$o")" || bad "provider layer suite (bash infra/tests/test-providers.sh)" "$(grep -A1 '^FAIL' <<<"$o" | head -20)"
