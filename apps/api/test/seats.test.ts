@@ -112,4 +112,16 @@ describe.skipIf(Boolean(unavailable))('seats', () => {
       .where(eq(schema.invites.email, 'b@acme-seats.com')));
     expect((await invite('d@acme-seats.com')).statusCode).toBe(201);
   });
+
+  it('a second open invite to the same email is refused, so one person never holds two seats', async () => {
+    const { orgId, owner } = await newOrg('seats-same-email', 'starter', 0);
+    const invite = (email: string) => as(app, owner.token)('POST', '/api/org/invites', { email });
+    expect((await invite('pat@acme-same.com')).statusCode).toBe(201);
+    const again = await invite('Pat@Acme-Same.com');
+    expect(again.statusCode).toBe(409);
+    expect(again.json<{ code: string }>().code).toBe('invite_pending');
+    // Once that invite expires, the email can be invited again.
+    await withOrg(orgId, (db) => db.update(schema.invites).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(schema.invites.orgId, orgId)));
+    expect((await invite('pat@acme-same.com')).statusCode).toBe(201);
+  });
 });

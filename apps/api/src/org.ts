@@ -7,6 +7,7 @@ import { billingAvailable, registerBilling } from './billing.js';
 import { requireAuth, requireUser } from './context.js';
 import { BODY_REQUIRED, readBody, text } from './body.js';
 import { currentCreditPeriod, expireAbandonedUploads, lockOrg, planCreditPeriod, removeChunkDirs } from './credits.js';
+import { apiError } from './errors.js';
 import { inOrg } from './scope.js';
 import { hashToken, isWorkEmail, newToken, sendOutOfBand } from './security.js';
 
@@ -203,6 +204,17 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
         isNull(schema.invites.acceptedAt),
         gt(schema.invites.expiresAt, new Date()),
       ));
+      // One open invite per email: a second would hold a second seat for one person. Checked under
+      // the organization lock, so two invites to one email at once cannot both pass.
+      const [open] = await db.select({ id: schema.invites.id }).from(schema.invites).where(and(
+        eq(schema.invites.orgId, auth.orgId!),
+        eq(schema.invites.email, email),
+        isNull(schema.invites.acceptedAt),
+        gt(schema.invites.expiresAt, new Date()),
+      )).limit(1);
+      if (open) {
+        return respond(409, apiError('invite_pending'));
+      }
       const plan = (org?.plan ?? 'free') as Plan;
       if (members.length + (pending?.count ?? 0) >= seatLimit(plan)) {
         return respond(402, { error: 'This plan has no seats left' });

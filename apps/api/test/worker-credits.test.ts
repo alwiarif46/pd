@@ -13,6 +13,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, inject, it, vi } fro
 import { closeDb, getPool, schema, withOrg } from '@pd/core';
 import { as, createTenant, type Tenant } from './helpers.js';
 import { fulfilled, raceInOrder } from './races.js';
+import { enqueueClassify, enqueueScan } from '../src/queue.js';
 
 vi.mock('../src/queue.js', () => ({
   enqueueScan: vi.fn(async () => undefined),
@@ -21,18 +22,29 @@ vi.mock('../src/queue.js', () => ({
 }));
 
 const enqueued = vi.hoisted(() => [] as string[]);
+/** Worker queues whose enqueue call fails (Redis down) while listed. */
+const queueDown = vi.hoisted(() => new Set<string>());
 vi.mock('../../worker/src/enqueue.js', () => ({
   enqueue: vi.fn(async (name: string) => {
+    if (queueDown.has(name)) {
+      throw new Error('redis down');
+    }
     enqueued.push(name);
   }),
 }));
 
 const extract = vi.hoisted(() => ({ impl: null as null | (() => Promise<unknown>), calls: 0 }));
+/** The facts the mocked model returns to the overview step. */
+const overviewFacts = vi.hoisted(() => ({ facts: [] as unknown[] }));
 vi.mock('@pd/ai', async (importOriginal) => {
   const original = await importOriginal<typeof import('@pd/ai')>();
   return {
     ...original,
-    getProvider: () => ({}),
+    loadSkill: () => ({ name: 'bid-summary', version: '1' }),
+    buildSystemPrompt: () => 'Extract bid facts.',
+    getProvider: () => ({
+      complete: async () => ({ json: { facts: overviewFacts.facts }, usage: { totalTokens: 5 } }),
+    }),
     extractComplianceMatrix: vi.fn(async () => {
       extract.calls += 1;
       return extract.impl!();
@@ -92,6 +104,7 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
 
   beforeEach(() => {
     enqueued.length = 0;
+    queueDown.clear();
     extract.impl = async () => matrix('x');
     extract.calls = 0;
   });
@@ -99,7 +112,7 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
   /** How many times the matrix AI ran since the test started. */
   const extractCalls = () => extract.calls;
 
-  async function setup(label: string, creditStatus: 'reserved' | 'released' | null, allowed = 5) {
+  async function setup(label: string, creditStatus: 'reserved' | 'consumed' | 'released' | null, allowed = 5) {
     const tenant = await createTenant(app, label);
     return withOrg(tenant.orgId, async (db) => {
       await db.update(schema.organizations).set({ plan: 'starter' }).where(eq(schema.organizations.id, tenant.orgId));
@@ -609,7 +622,8 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
     await worker.processCompliance(payload(tenant, solicitationId, 'solicitation'));
     expect(extractCalls()).toBe(1);
     // The retry reserves again, and the matrix is built and paid for.
-    const retryId = (await as(app, tenant.token)('POST', `/api/jobs/${held.id}/retry`)).json<{ id: string }>().id;
+    // The retry is of the newest failed step (the second run recorded its own).
+    const retryId = (await as(app, tenant.token)('POST', `/api/jobs/${(await latestJob(tenant, solicitationId)).id}/retry`)).json<{ id: string }>().id;
     await worker.processCompliance({ ...payload(tenant, solicitationId, 'solicitation'), jobId: retryId });
     expect(await state(tenant, creditId)).toEqual({ reserved: 0, used: 1, status: 'consumed' });
     expect(await matrixRows(tenant, solicitationId)).toHaveLength(1);
@@ -670,5 +684,140 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
       expect(proceeded !== kicked, `${order}: proceeded ${proceeded}, kicked ${kicked}`).toBe(true);
       expect(order === 'classify first' ? kicked : proceeded, order).toBe(true);
     }
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // Review fixes.
+
+  it('a deleted solicitation that fails later neither records a step nor releases its live sibling\'s reservation', async () => {
+    const { tenant, creditId, solicitationId } = await setup('deleted-fails', 'reserved');
+    const deleted = await addDocument(tenant, 'solicitation');
+    // The user deletes the second file; the first keeps the bid's reservation (documents.ts).
+    const response = await as(app, tenant.token)('DELETE', `/api/documents/${deleted}`);
+    expect(response.json<{ creditReleased: boolean }>().creditReleased).toBe(false);
+    await steps.recordStepFailure('file', payload(tenant, deleted, 'solicitation'), new Error('file is gone'));
+    expect(await state(tenant, creditId)).toEqual({ reserved: 1, used: 0, status: 'reserved' });
+    expect(await jobsOf(tenant, deleted)).toEqual([]);
+    // The live solicitation's matrix is built and paid for.
+    await worker.processCompliance(payload(tenant, solicitationId, 'solicitation'));
+    expect(await state(tenant, creditId)).toEqual({ reserved: 0, used: 1, status: 'consumed' });
+  });
+
+  it('a rerun of the overview and dates steps replaces the document\'s untouched AI rows and keeps the rest', async () => {
+    const { tenant, solicitationId } = await setup('rerun-facts', 'consumed');
+    await withOrg(tenant.orgId, (db) => db.update(schema.pages).set({ text: 'Proposals are due December 15, 2026.\nQuestions by 12/01/2026.' })
+      .where(eq(schema.pages.documentId, solicitationId)));
+    overviewFacts.facts = [
+      { field: 'agency', value: 'GSA', sourceQuote: 'GSA', sourcePage: 1 },
+      { field: 'naics', value: '541511', sourceQuote: '541511', sourcePage: 1 },
+      { field: 'setAside', value: 'SB', sourceQuote: 'small business', sourcePage: 1 },
+    ];
+    const p = payload(tenant, solicitationId, 'solicitation');
+    const facts = () => withOrg(tenant.orgId, (db) => db.select().from(schema.bidFacts).where(eq(schema.bidFacts.documentId, solicitationId)));
+    const dates = () => withOrg(tenant.orgId, (db) => db.select().from(schema.scheduleActivities).where(eq(schema.scheduleActivities.documentId, solicitationId)));
+    await worker.processOverview(p);
+    await worker.processDates(p);
+    expect(await facts()).toHaveLength(3);
+    const firstDates = await dates();
+    expect(firstDates.length).toBeGreaterThan(0);
+
+    // A user confirms one fact and edits another (row history), and adds a fact of their own.
+    const [agency, naics] = (await facts()).sort((a, b) => a.field.localeCompare(b.field));
+    await withOrg(tenant.orgId, async (db) => {
+      await db.update(schema.bidFacts).set({ confirmed: true }).where(eq(schema.bidFacts.id, agency.id));
+      await db.update(schema.bidFacts).set({ value: '541512' }).where(eq(schema.bidFacts.id, naics.id));
+      await db.insert(schema.rowHistory).values({ orgId: tenant.orgId, rowTable: 'bid_facts', rowId: naics.id, field: 'value', oldValue: '541511', newValue: '541512', changedAt: new Date() });
+      await db.insert(schema.bidFacts).values({ orgId: tenant.orgId, bidId: tenant.bidId, field: 'note', value: 'mine', documentId: solicitationId, origin: 'user' });
+    });
+
+    await worker.processOverview(p);
+    await worker.processDates(p);
+    await worker.processOverview(p);
+    await worker.processDates(p);
+    const after = await facts();
+    // agency (confirmed), naics (edited), setAside (replaced once), note (user): no duplicates.
+    expect(after.map((fact) => fact.field).sort()).toEqual(['agency', 'naics', 'note', 'setAside']);
+    expect(after.find((fact) => fact.id === naics.id)?.value).toBe('541512');
+    expect(await dates()).toHaveLength(firstDates.length);
+    overviewFacts.facts = [];
+  });
+
+  it('a double-clicked retry runs once: the second answers 409', async () => {
+    const { tenant, solicitationId } = await setup('double-retry', 'released');
+    const failed = await jobRow(tenant, solicitationId, 'classify', 'failed');
+    const call = as(app, tenant.token);
+    const [first, second] = await Promise.all([call('POST', `/api/jobs/${failed}/retry`), call('POST', `/api/jobs/${failed}/retry`)]);
+    expect([first.statusCode, second.statusCode].sort()).toEqual([200, 409]);
+    const refused = first.statusCode === 409 ? first : second;
+    expect(refused.json<{ code: string }>().code).toBe('retry_superseded');
+    expect((await jobsOf(tenant, solicitationId)).filter((job) => job.status === 'pending')).toHaveLength(1);
+  });
+
+  it('a retry of a held attachment after the kick reran it answers 409, and a rerun of its matrix adds no rows', async () => {
+    const { tenant, solicitationId, attachmentId } = await setup('kick-vs-retry', 'released');
+    await classify.processClassify(payload(tenant, attachmentId, 'attachment'));
+    const held = await latestJob(tenant, attachmentId);
+    expect(held.error).toBe(rows.HELD_FOR_CREDIT);
+    const failed = await jobRow(tenant, solicitationId, 'classify', 'failed');
+    expect((await as(app, tenant.token)('POST', `/api/jobs/${failed}/retry`)).statusCode).toBe(200);
+    await worker.processCompliance(payload(tenant, solicitationId, 'solicitation'));
+    expect((await latestJob(tenant, attachmentId)).status).toBe('pending');
+    const late = await as(app, tenant.token)('POST', `/api/jobs/${held.id}/retry`);
+    expect(late.statusCode).toBe(409);
+    // Even a duplicate matrix job for the attachment writes its rows once.
+    await worker.processCompliance(payload(tenant, attachmentId, 'attachment'));
+    await worker.processCompliance(payload(tenant, attachmentId, 'attachment'));
+    expect(await matrixRows(tenant, attachmentId)).toHaveLength(1);
+  });
+
+  it('a classify that cannot close its row after queueing the matrix keeps the credit', async () => {
+    const admin = new pg.Client({ connectionString: inject('adminUrl') });
+    await admin.connect();
+    const { tenant, creditId, solicitationId } = await setup('close-fails', 'reserved');
+    const classifyJob = await jobRow(tenant, solicitationId, 'classify', 'pending');
+    await admin.query(`create or replace function pd_test_no_close() returns trigger language plpgsql as $$
+      begin if new.id = '${classifyJob}' and new.status = 'completed' then raise exception 'no close'; end if; return new; end $$`);
+    await admin.query('create trigger pd_test_no_close before update on jobs for each row execute function pd_test_no_close()');
+    try {
+      await steps.guardStep('classify', classify.processClassify)({ ...payload(tenant, solicitationId, 'solicitation'), jobId: classifyJob });
+      expect(enqueued).toContain('ai:compliance');
+      expect(await state(tenant, creditId)).toEqual({ reserved: 1, used: 0, status: 'reserved' });
+    } finally {
+      await admin.query('drop trigger if exists pd_test_no_close on jobs');
+      await admin.query('drop function if exists pd_test_no_close()');
+      await admin.end();
+    }
+  });
+
+  it('a retry or an upload complete whose queue call fails releases the credit it reserved', async () => {
+    const { tenant, creditId, solicitationId } = await setup('queue-fails', 'released');
+    const failed = await jobRow(tenant, solicitationId, 'classify', 'failed');
+    vi.mocked(enqueueClassify).mockRejectedValueOnce(new Error('redis down'));
+    const retried = await as(app, tenant.token)('POST', `/api/jobs/${failed}/retry`);
+    expect(retried.statusCode).toBe(500);
+    expect(await state(tenant, creditId)).toEqual({ reserved: 0, used: 0, status: 'released' });
+    expect((await latestJob(tenant, solicitationId)).status).toBe('failed');
+
+    const other = await createTenant(app, 'queue-fails-upload');
+    const { bidId, sessionId } = await solicitationSession(other);
+    vi.mocked(enqueueScan).mockRejectedValueOnce(new Error('redis down'));
+    expect((await as(app, other.token)('POST', `/api/uploads/${sessionId}/complete`)).statusCode).toBe(500);
+    const [bid] = await withOrg(other.orgId, (db) => db.select().from(schema.bids).where(eq(schema.bids.id, bidId)));
+    expect(bid.creditStatus).toBe('released');
+    const credits = await withOrg(other.orgId, (db) => db.select().from(schema.rfpCredits).where(eq(schema.rfpCredits.orgId, other.orgId)));
+    expect(credits.reduce((sum, row) => sum + row.reserved, 0)).toBe(0);
+  });
+
+  it('a solicitation stopped by a sibling\'s release reruns when the sibling consumes', async () => {
+    const { tenant, creditId, solicitationId } = await setup('held-sibling', 'reserved');
+    const stopped = await addDocument(tenant, 'solicitation');
+    await withOrg(tenant.orgId, (db) => db.insert(schema.jobs).values({
+      orgId: tenant.orgId, bidId: tenant.bidId, documentId: stopped, type: 'classify', status: 'failed', error: rows.SOLICITATION_CREDIT_RELEASED,
+    }));
+    await worker.processCompliance(payload(tenant, solicitationId, 'solicitation'));
+    expect(await state(tenant, creditId)).toEqual({ reserved: 0, used: 1, status: 'consumed' });
+    expect(enqueued).toContain('classify');
+    const kicked = await latestJob(tenant, stopped);
+    expect({ type: kicked.type, status: kicked.status }).toEqual({ type: 'classify', status: 'pending' });
   });
 });

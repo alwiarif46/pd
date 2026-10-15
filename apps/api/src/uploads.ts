@@ -365,6 +365,9 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
       // abandoned) or processing released it, reserve again now. This runs after the bytes are
       // verified, so a refused complete never leaves a reservation behind, and the org lock is
       // not held while the file is assembled. The session records the credit it now owns.
+      // The session's reservation (made at start, or just below): if the scan job never reaches the
+      // queue, nothing would settle it, so queueAfterCommit releases it.
+      let ownsCredit = session.kind === 'solicitation' && session.creditId !== null;
       if (session.kind === 'solicitation') {
         // Lock order: organization, then bid (read under lock, so credit_status is current),
         // then the credit row inside reserveForBid.
@@ -378,6 +381,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
           if (!creditId) {
             return refuse(402, apiError('out_of_credits'));
           }
+          ownsCredit = true;
           await db.update(schema.uploadSessions).set({ creditId, updatedAt: new Date() }).where(and(
             eq(schema.uploadSessions.id, sessionId),
             eq(schema.uploadSessions.orgId, orgId),
@@ -450,6 +454,7 @@ export async function registerUploads(app: FastifyInstance): Promise<void> {
             storagePath,
             kind: session.kind,
           }),
+          releaseBidId: ownsCredit ? session.bidId : undefined,
         }],
       };
     }).catch(async (error: unknown) => {
