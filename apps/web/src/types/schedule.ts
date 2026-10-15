@@ -96,6 +96,10 @@ export interface ScheduleTabProps {
   onSetWorkdaysOnly: (workdaysOnly: boolean) => void;
   onResolveDateChange: (mode: DateChangeMode) => void;
   onCancelDateChange: () => void;
+  /** True while a date-change answer is being applied (prompt buttons disabled). */
+  dateChangeBusy: boolean;
+  /** "Change due date" in the header: the container opens the date-change prompt (or saves at once when the bid had no due date). */
+  onChangeDueDate: (nextDue: string) => void;
   onOpenRow: (id: string) => void;
   onOpenSource: (id: string) => void;
   onExport: (format: ScheduleExportFormat) => void;
