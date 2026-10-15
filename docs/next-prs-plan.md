@@ -200,3 +200,13 @@ The reserve and settle code lives in these places:
 - apps/api/src/tabs.ts
 - apps/api/src/context.ts
 - apps/worker/src/amendment-job.ts
+
+## Decisions (owner, 16 Oct 2026)
+
+- PR3: a file paused at the marking check keeps its credit reserved until the user confirms or removes it.
+- PR4: shift and scale count workdays (weekends and US federal holidays skipped) by default, with a per-bid "Workdays only" switch on the Schedule tab for short timelines. The date math lives in one shared function used by the server's adjust route and the web preview.
+- PR4: template activities get their own origin, `'template'`.
+- PR5: when the earlier row was confirmed or edited by a user, the amendment's replacement is proposed, with a button to insert it. Untouched AI rows are superseded automatically.
+- PR5: the worker never changes the bid's due date. It records the change, and the date-change prompt applies it when the user answers.
+- PR5: open tab proposals keep the amendment in `needs_confirmation`.
+- PR5 step 8 covers bid facts and dates only, until the paid tabs have AI skills.
