@@ -25,12 +25,13 @@ export type RowTableName = (typeof ROW_TABLES)[number];
 export const TABS = ['overview', 'schedule', 'compliance', 'outline', 'resumes', 'reviews', 'production', 'orals', 'lessons'] as const;
 
 /** A verified user with a live session. `users` and `sessions` have no row-level security. */
-export async function createUser(label: string): Promise<{ userId: string; token: string }> {
+export async function createUser(label: string): Promise<{ userId: string; token: string; email: string }> {
   const db = getDb();
   const userId = randomUUID();
+  const email = `${label}-${userId}@example.com`;
   await db.insert(schema.users).values({
     id: userId,
-    email: `${label}-${userId}@example.com`,
+    email,
     passwordHash: 'x:y',
     emailVerifiedAt: new Date(),
     phoneVerifiedAt: new Date(),
@@ -41,7 +42,7 @@ export async function createUser(label: string): Promise<{ userId: string; token
     tokenHash: hashToken(token),
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
   });
-  return { userId, token };
+  return { userId, token, email };
 }
 
 export interface Tenant {

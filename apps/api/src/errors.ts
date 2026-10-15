@@ -30,6 +30,12 @@ export const ERROR_MESSAGES = {
   activity_locked: 'This activity is locked. Unlock it before you move its dates.',
   due_date_required: 'Set the due date in Bid settings first. Templates count back from it.',
   schedule_template_exists: 'This schedule already has template activities. Replace them to apply a template again.',
+  invite_invalid: 'This invite link is not valid. Ask the owner to send a new invite.',
+  invite_expired: 'This invite has expired. Ask the owner to send a new one.',
+  invite_used: 'This invite was already used.',
+  invite_email_mismatch: 'This invite was sent to a different email address. Sign in with that address to accept it.',
+  already_in_org: 'You already belong to an organization. An account can belong to one organization.',
+  seats_full: 'The organization has no free seat right now. Ask the owner to upgrade or to free a seat, then open this invite again.',
 } as const;
 
 export type ErrorCode = keyof typeof ERROR_MESSAGES;

@@ -6,6 +6,7 @@ import { registerAuth } from './auth.js';
 import { registerBids } from './bids.js';
 import { registerDocuments } from './documents.js';
 import { registerJobs } from './jobs.js';
+import { registerInvites } from './invites.js';
 import { registerOrg } from './org.js';
 import { assertOutOfBandDelivery } from './security.js';
 import { registerTabs } from './tabs.js';
@@ -60,6 +61,7 @@ export async function buildApp(options: { logger?: boolean } = {}): Promise<Fast
 
   await registerAuth(fastify);
   await registerOrg(fastify);
+  await registerInvites(fastify);
   await registerBids(fastify);
   await registerUploads(fastify);
   await registerDocuments(fastify);
