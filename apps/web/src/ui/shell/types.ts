@@ -1,9 +1,9 @@
-import type { Tab, AuthStatus } from '@/types';
+import type { Tab } from '@/types';
 export type {
   OutsidePage,
   TabSignal,
-  ShellBid,
   Plan,
+  ShellBid,
   AppShellProps,
   UpgradeReason,
   UpgradeDialogProps,
@@ -11,4 +11,6 @@ export type {
 } from '@/types';
 
 export const PAID_TABS: Tab[] = ['outline', 'resumes', 'reviews', 'production', 'orals', 'lessons'];
-export type { Tab, AuthStatus };
+
+export type { Tab };
+export type { AuthStatus } from '@/types';
