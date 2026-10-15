@@ -1,0 +1,5 @@
+import { useState } from 'react'
+import { DocumentsPanel } from './DocumentsPanel'
+import { documentNotices, documentSamples, documentUploads } from './sample-data'
+import type { FileKind } from './types'
+export function Preview() { const [noticeIds,setNoticeIds]=useState(documentNotices.map((notice)=>notice.id)); return <main className="min-h-screen bg-canvas p-4 md:p-8"><div className="mx-auto max-w-[1500px]"><DocumentsPanel docs={documentSamples} usedBytes={133000000} capMb={150} plan="free" isOwner overridesLeft={2} notices={documentNotices.filter((notice)=>noticeIds.includes(notice.id))} uploads={documentUploads} onUpload={(files,kind:FileKind)=>console.log('[v0] upload',files.length,kind)} onDismissNotice={(id)=>setNoticeIds((current)=>current.filter((item)=>item!==id))} onOpen={(id)=>console.log('[v0] open',id)} onDelete={(id)=>console.log('[v0] delete',id)} onRestore={(id)=>console.log('[v0] restore',id)} onConfirmMarking={(id)=>console.log('[v0] confirm marking',id)} onOverrideKey={(id,reason)=>console.log('[v0] override',id,reason)} onUpgrade={()=>console.log('[v0] upgrade')} /></div></main> }
