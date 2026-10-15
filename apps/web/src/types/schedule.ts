@@ -2,6 +2,7 @@
 // src/schedule/ (09 s6), using the prototype on origin/v0/schedule-prototype as a visual reference.
 // Dates are 'YYYY-MM-DD'. The date rules (workdays, US federal holidays, shift, scale, keep,
 // templates) are shared with the api: import them from '@pd/core/schedule', never re-implement them.
+import type { DateChangePromptProps } from './documents';
 import type { AmendmentMark } from './shared';
 
 /** packages/core ACTIVITY_KINDS. */
@@ -90,7 +91,7 @@ export interface ScheduleTabProps {
   onDeleteActivity: (id: string) => void;
   onMoveActivity: (id: string, start: string, end: string) => void;
   onToggleLock: (id: string, locked: boolean) => void;
-  /** `replace`: the unlocked activities are removed first. */
+  /** `replace`: the unlocked activities from a template or added by hand are removed first; AI rows and locked rows stay. */
   onApplyTemplate: (templateId: ScheduleTemplateId, replace: boolean) => void;
   onSetWorkdaysOnly: (workdaysOnly: boolean) => void;
   onResolveDateChange: (mode: DateChangeMode) => void;
@@ -98,4 +99,13 @@ export interface ScheduleTabProps {
   onOpenRow: (id: string) => void;
   onOpenSource: (id: string) => void;
   onExport: (format: ScheduleExportFormat) => void;
+}
+
+/** 09 s5.11 DateChangePrompt as the schedule draws it, with what each answer would do. */
+export interface ScheduleDateChangePromptProps extends DateChangePromptProps {
+  amendmentNo: number | null;
+  /** From the container (planScheduleAdjust); null shows the fallback sentences. */
+  summary: Record<DateChangeMode, string> | null;
+  workdaysOnly: boolean;
+  busy: boolean;
 }

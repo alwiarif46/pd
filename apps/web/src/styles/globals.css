@@ -16,6 +16,7 @@
 /* Scan only new code. Legacy class names (for example .grow) must not generate utilities. */
 @source "../ui";
 @source "../features";
+@source "../schedule";
 @source "../components/ui";
 @source "../lib";
 
