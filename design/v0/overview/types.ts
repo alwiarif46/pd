@@ -1,0 +1,1 @@
+export type OverviewTabProps = import('./OverviewTab').OverviewTabProps; export interface BidFact{id:string;field:string;value:string;sourcePage:number|null;confirmed:boolean}; export interface KickoffItem{id:string;label:string;owner:string|null;done:boolean;note:string}; export type Countdown={days:number;workdays:number;dueLabel:string}|null;
