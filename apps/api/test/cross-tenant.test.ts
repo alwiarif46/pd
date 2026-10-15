@@ -14,6 +14,7 @@ import { as, createTenant, ROW_TABLES, seedBidRows, TABS, type Tenant } from './
 vi.mock('../src/queue.js', () => ({
   enqueueScan: vi.fn(async () => undefined),
   enqueueClassify: vi.fn(async () => undefined),
+  enqueueAmendment: vi.fn(async () => undefined),
 }));
 
 const unavailable = inject('dbUnavailable');

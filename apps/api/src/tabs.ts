@@ -734,6 +734,10 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
         return respond(404, { error: 'Row not found' });
       }
       const [keep, ...rest] = rows;
+      // Amendment links first, then rows (lock order).
+      for (const row of rest) {
+        await detachComplianceRow(db, orgId, row.id);
+      }
       await db.update(schema.complianceRows).set({
         requirementText: rows.map((row) => row.requirementText).join(' '),
         updatedAt: new Date(),
@@ -784,6 +788,53 @@ export async function registerTabs(app: FastifyInstance): Promise<void> {
       return respond(201, created);
     });
   });
+}
+
+/**
+ * Before a compliance row is deleted (row delete, merge; 05 s3.3): an amendment proposal that
+ * would bring the row in can no longer be confirmed, so it becomes 'rejected' (and an amendment
+ * left with no proposal is applied); a row the deleted row replaced stays 'superseded' with no
+ * pointer. Lock order: amendments (by id), then their links, then rows (apps/api/src/credits.ts).
+ */
+async function detachComplianceRow(db: Db, orgId: string, rowId: string): Promise<void> {
+  const proposed = await db.select({ amendmentId: schema.amendmentLinks.amendmentId }).from(schema.amendmentLinks).where(and(
+    eq(schema.amendmentLinks.newRowId, rowId),
+    eq(schema.amendmentLinks.orgId, orgId),
+    eq(schema.amendmentLinks.rowTable, 'compliance_rows'),
+    eq(schema.amendmentLinks.status, 'proposed'),
+  ));
+  const amendmentIds = [...new Set(proposed.map((link) => link.amendmentId))].sort();
+  const now = new Date();
+  if (amendmentIds.length > 0) {
+    await db.select({ id: schema.amendments.id }).from(schema.amendments).where(and(
+      inArray(schema.amendments.id, amendmentIds),
+      eq(schema.amendments.orgId, orgId),
+    )).orderBy(asc(schema.amendments.id)).for('update');
+    await db.update(schema.amendmentLinks).set({ status: 'rejected', updatedAt: now }).where(and(
+      eq(schema.amendmentLinks.newRowId, rowId),
+      eq(schema.amendmentLinks.orgId, orgId),
+      eq(schema.amendmentLinks.rowTable, 'compliance_rows'),
+      eq(schema.amendmentLinks.status, 'proposed'),
+    ));
+    for (const amendmentId of amendmentIds) {
+      const [open] = await db.select({ id: schema.amendmentLinks.id }).from(schema.amendmentLinks).where(and(
+        eq(schema.amendmentLinks.amendmentId, amendmentId),
+        eq(schema.amendmentLinks.orgId, orgId),
+        eq(schema.amendmentLinks.status, 'proposed'),
+      )).limit(1);
+      if (!open) {
+        await db.update(schema.amendments).set({ status: 'applied', updatedAt: now }).where(and(
+          eq(schema.amendments.id, amendmentId),
+          eq(schema.amendments.orgId, orgId),
+          eq(schema.amendments.status, 'needs_confirmation'),
+        ));
+      }
+    }
+  }
+  await db.update(schema.complianceRows).set({ supersededByRowId: null, updatedAt: now }).where(and(
+    eq(schema.complianceRows.supersededByRowId, rowId),
+    eq(schema.complianceRows.orgId, orgId),
+  ));
 }
 
 /** True when `id` names a row of `table` on this bid in this organization. */
@@ -882,6 +933,7 @@ async function deleteRow(db: Db, orgId: string, bidId: string, table: RowTable, 
       await db.delete(schema.scheduleActivities).where(and(eq(schema.scheduleActivities.id, rowId), eq(schema.scheduleActivities.orgId, orgId)));
       return true;
     case 'compliance_rows':
+      await detachComplianceRow(db, orgId, rowId);
       await db.delete(schema.complianceRows).where(and(eq(schema.complianceRows.id, rowId), eq(schema.complianceRows.orgId, orgId)));
       return true;
     case 'outline_items': {

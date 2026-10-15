@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { rm, stat } from 'node:fs/promises';
 import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, max, or, sql } from 'drizzle-orm';
@@ -11,6 +12,7 @@ import {
   isUuid,
   keyOverridesLeft,
   keyOverridesPerBid,
+  nextAmendmentToRun,
   type Plan,
   resolveOrgPath,
   restoreSettings,
@@ -24,7 +26,7 @@ import { requireAuth } from './context.js';
 import { lockBid, releaseBidCredit, shareOrg } from './credits.js';
 import { apiError } from './errors.js';
 import { type Db, findBid, inOrg, findDocument, type Outcome, queueAfterCommit } from './scope.js';
-import { enqueueClassify } from './queue.js';
+import { enqueueAmendment, enqueueClassify } from './queue.js';
 import { newToken } from './security.js';
 
 const dataDir = process.env.DATA_DIR || '/data/files';
@@ -670,6 +672,7 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
     const orgId = auth.orgId!;
     const documentId = (request.params as { id: string }).id;
     const files: string[] = [];
+    let kickBid: string | null = null;
     const result = await inOrg(reply, orgId, async (db, respond) => {
       // The audit row inserted at the end takes FOR KEY SHARE on the organization; take it before
       // the document and the bid (lock order, credits.ts shareOrg).
@@ -690,6 +693,9 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       )).returning({ id: schema.documents.id });
       if (!deleted) {
         return { ok: true };
+      }
+      if (document.kind === 'amendment') {
+        kickBid = document.bidId;
       }
       // The bid's last solicitation is gone before its compliance matrix settled the credit:
       // release the reservation (the worker skips a deleted document, so it will not consume).
@@ -733,6 +739,50 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       return { ok: true, creditReleased };
     });
     await Promise.all(files.map((file) => rm(file, { force: true }).catch(() => undefined)));
+    // An amendment waiting behind the deleted one (number order, 04 s3.1) may run now. The rows
+    // and closures an applied amendment wrote stay (05 s3.10).
+    if (kickBid) {
+      await kickAmendments(orgId, kickBid);
+    }
     return result;
   });
+}
+
+/**
+ * Queues ai:amendment for the bid's next amendment (the lowest-numbered one in processing with a
+ * live document), after COMMIT. A queue failure is logged and recorded as a failed classify step
+ * the user can retry; it never fails the request that called it.
+ */
+async function kickAmendments(orgId: string, bidId: string): Promise<void> {
+  try {
+    const next = await withOrg(orgId, (db) => nextAmendmentToRun(db, orgId, bidId));
+    if (!next) {
+      return;
+    }
+    try {
+      await enqueueAmendment({
+        orgId,
+        bidId,
+        documentId: next.documentId,
+        jobId: randomUUID(),
+        storagePath: next.storagePath ?? '',
+        kind: 'amendment',
+      }, `ai:amendment:${next.documentId}:${Date.now()}`);
+    } catch (error) {
+      console.error(`Could not queue amendment ${next.documentId}`, error);
+      await withOrg(orgId, async (db) => {
+        await db.insert(schema.jobs).values({
+          orgId,
+          bidId,
+          documentId: next.documentId,
+          type: 'classify',
+          status: 'failed',
+          error: 'The amendment step could not be queued. Retry it.',
+          finishedAt: new Date(),
+        });
+      });
+    }
+  } catch (error) {
+    console.error(`Could not queue the next amendment of bid ${bidId}`, error);
+  }
 }
