@@ -24,7 +24,12 @@ import type { Db } from './scope.js';
  *   amendment) and PATCH of the number (organization key share, document, bid, amendment, rows).
  *   The worker's amendment write (apps/worker/src/amendment-job.ts) takes organization key
  *   share, document, its check_these rows, bid, amendment, then the old rows its links close (by
- *   id); the matrix write takes document, check_these, bid (for req id allocation), credit. Link
+ *   id); the matrix write takes organization key share, document, check_these, bid (for req id
+ *   allocation), credit. The worker's credit gate (apps/worker/src/credit-gate.ts: classify of the
+ *   solicitation set, and the matrix run before its AI call), when the credit looks missing,
+ *   takes organization key share, document, bid, and writes a held job row under them; a failed pipeline step
+ *   (apps/worker/src/steps.ts) takes organization key share, writes its failed job row, then
+ *   releases a solicitation's reservation (bid, credit). Link
  *   confirm and reject take organization key share, bid, amendment, link, rows (by id). Row
  *   delete and merge of compliance rows lock the check_these hits promoted to the removed rows,
  *   then the bid, then the amendments of proposals to the removed rows (one ordered statement),

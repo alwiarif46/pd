@@ -60,6 +60,10 @@ describe.skipIf(Boolean(unavailable))('tab rows', () => {
     worker = await import('../../worker/src/ai-jobs.js');
     a = await createTenant(app, 'ta');
     b = await createTenant(app, 'tb');
+    // The worker builds a matrix only while the bid's solicitation holds a credit (06 s4).
+    for (const tenant of [a, b]) {
+      await withOrg(tenant.orgId, (db) => db.update(schema.bids).set({ creditStatus: 'consumed' }).where(eq(schema.bids.id, tenant.bidId)));
+    }
     asA = as(app, a.token);
     asB = as(app, b.token);
   });

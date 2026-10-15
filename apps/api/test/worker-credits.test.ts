@@ -6,12 +6,13 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { and, eq } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import pg from 'pg';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it, vi } from 'vitest';
 import { closeDb, getPool, schema, withOrg } from '@pd/core';
 import { as, createTenant, type Tenant } from './helpers.js';
+import { fulfilled, raceInOrder } from './races.js';
 
 vi.mock('../src/queue.js', () => ({
   enqueueScan: vi.fn(async () => undefined),
@@ -26,13 +27,16 @@ vi.mock('../../worker/src/enqueue.js', () => ({
   }),
 }));
 
-const extract = vi.hoisted(() => ({ impl: null as null | (() => Promise<unknown>) }));
+const extract = vi.hoisted(() => ({ impl: null as null | (() => Promise<unknown>), calls: 0 }));
 vi.mock('@pd/ai', async (importOriginal) => {
   const original = await importOriginal<typeof import('@pd/ai')>();
   return {
     ...original,
     getProvider: () => ({}),
-    extractComplianceMatrix: vi.fn(async () => extract.impl!()),
+    extractComplianceMatrix: vi.fn(async () => {
+      extract.calls += 1;
+      return extract.impl!();
+    }),
   };
 });
 
@@ -62,6 +66,10 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
   let dataDir: string;
   let worker: typeof import('../../worker/src/ai-jobs.js');
   let classify: typeof import('../../worker/src/classify-job.js');
+  let steps: typeof import('../../worker/src/steps.js');
+  let scan: typeof import('../../worker/src/scan.js');
+  let marking: typeof import('../../worker/src/marking-job.js');
+  let rows: typeof import('../../worker/src/rows.js');
 
   beforeAll(async () => {
     dataDir = await mkdtemp(join(tmpdir(), 'pd-api-worker-'));
@@ -71,6 +79,10 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
     app = await buildApp({ logger: false });
     worker = await import('../../worker/src/ai-jobs.js');
     classify = await import('../../worker/src/classify-job.js');
+    steps = await import('../../worker/src/steps.js');
+    scan = await import('../../worker/src/scan.js');
+    marking = await import('../../worker/src/marking-job.js');
+    rows = await import('../../worker/src/rows.js');
   });
 
   afterAll(async () => {
@@ -81,7 +93,11 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
   beforeEach(() => {
     enqueued.length = 0;
     extract.impl = async () => matrix('x');
+    extract.calls = 0;
   });
+
+  /** How many times the matrix AI ran since the test started. */
+  const extractCalls = () => extract.calls;
 
   async function setup(label: string, creditStatus: 'reserved' | 'released' | null, allowed = 5) {
     const tenant = await createTenant(app, label);
@@ -107,14 +123,18 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
     });
   }
 
-  const payload = (tenant: Tenant, documentId: string, kind: 'solicitation' | 'attachment' | 'resume' | 'draft') => ({
-    orgId: tenant.orgId, bidId: tenant.bidId, documentId, jobId: randomUUID(), storagePath: 'docs/x.pdf', kind,
+  const payload = (tenant: Tenant, documentId: string, kind: 'solicitation' | 'attachment' | 'amendment' | 'resume' | 'draft') => ({
+    orgId: tenant.orgId, bidId: tenant.bidId, documentId, jobId: randomUUID() as string, storagePath: 'docs/x.pdf', kind,
   });
   const state = (tenant: Tenant, creditId: string) => withOrg(tenant.orgId, async (db) => {
     const [credit] = await db.select().from(schema.rfpCredits).where(eq(schema.rfpCredits.id, creditId));
     const [bid] = await db.select().from(schema.bids).where(eq(schema.bids.id, tenant.bidId));
     return { reserved: credit.reserved, used: credit.used, status: bid.creditStatus };
   });
+  /** The document's job rows, oldest first. */
+  const jobsOf = (tenant: Tenant, documentId: string) => withOrg(tenant.orgId, async (db) => (await db.select({
+    type: schema.jobs.type, status: schema.jobs.status, error: schema.jobs.error,
+  }).from(schema.jobs).where(eq(schema.jobs.documentId, documentId)).orderBy(asc(schema.jobs.createdAt), asc(schema.jobs.id))));
 
   it('an attachment matrix run neither consumes nor releases the solicitation credit', async () => {
     const { tenant, creditId, attachmentId } = await setup('attach-run', 'reserved');
@@ -278,13 +298,16 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
       fileName: 'cv.pdf', kind: 'resume', declaredSize: 10, sha256: randomBytes(32).toString('hex'), chunkCount: 1,
     })).statusCode).toBe(201);
 
-    // An attachment already on a bid whose credit was released: no AI steps, no rows.
+    // An attachment already on a bid whose credit was released: no AI steps, no rows, and a
+    // failed classify row saying it waits for the solicitation (not a silent drop).
     const { tenant: other, attachmentId } = await setup('attach-released', 'released');
     await classify.processClassify(payload(other, attachmentId, 'attachment'));
     expect(enqueued).toEqual([]);
+    expect(await jobsOf(other, attachmentId)).toEqual([{ type: 'classify', status: 'failed', error: rows.HELD_FOR_CREDIT }]);
     await worker.processCompliance(payload(other, attachmentId, 'attachment'));
-    const rows = await withOrg(other.orgId, (db) => db.select().from(schema.complianceRows).where(eq(schema.complianceRows.documentId, attachmentId)));
-    expect(rows).toHaveLength(0);
+    const matrix = await withOrg(other.orgId, (db) => db.select().from(schema.complianceRows).where(eq(schema.complianceRows.documentId, attachmentId)));
+    expect(matrix).toHaveLength(0);
+    expect(extractCalls()).toBe(0);
   });
 
   it('a later numberless solicitation is refused on a bid whose key is still PENDING', async () => {
@@ -431,5 +454,221 @@ describe.skipIf(Boolean(unavailable))('credits across api and worker', () => {
     expect(await readdir(docsDir)).toContain(`${sessionId}.pdf`);
     await expect(stat(chunkDir)).rejects.toThrow();
   });
-});
 
+  // ---------------------------------------------------------------------------------------------
+  // Credit gaps: failures release and leave a retry, held files rerun, a released credit never
+  // builds a matrix.
+
+  /** Inserts a job row for the document and returns its id. */
+  const jobRow = (tenant: Tenant, documentId: string, type: 'scan' | 'classify', status: string) => withOrg(tenant.orgId, async (db) => {
+    const [job] = await db.insert(schema.jobs).values({ orgId: tenant.orgId, bidId: tenant.bidId, documentId, type, status }).returning();
+    return job.id;
+  });
+
+  /** A live document of the bid with one page of `text`. */
+  const addDocument = (tenant: Tenant, kind: 'solicitation' | 'attachment' | 'amendment', text = 'shall') => withOrg(tenant.orgId, async (db) => {
+    const [row] = await db.insert(schema.documents).values({
+      orgId: tenant.orgId, bidId: tenant.bidId, fileName: `${kind}.pdf`, mime: 'application/pdf', sizeBytes: 5,
+      sha256: randomUUID(), kind, storagePath: `docs/${randomUUID()}.pdf`, liveStatus: 'live',
+    }).returning();
+    await db.insert(schema.pages).values({ orgId: tenant.orgId, documentId: row.id, pageNo: 1, text });
+    return row.id;
+  });
+
+  /** createTenant's own (archived) solicitation would count as live; delete it. */
+  const dropTenantSolicitation = (tenant: Tenant) => withOrg(tenant.orgId, (db) => db.update(schema.documents)
+    .set({ liveStatus: 'deleted' }).where(eq(schema.documents.id, tenant.documentId)));
+
+  const latestJob = (tenant: Tenant, documentId: string) => withOrg(tenant.orgId, async (db) => {
+    const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.documentId, documentId))
+      .orderBy(desc(schema.jobs.createdAt), desc(schema.jobs.id)).limit(1);
+    return job;
+  });
+
+  const matrixRows = (tenant: Tenant, documentId: string) => withOrg(tenant.orgId, (db) => db.select().from(schema.complianceRows)
+    .where(eq(schema.complianceRows.documentId, documentId)));
+
+  type Payload = ReturnType<typeof payload>;
+
+  it('a scan, file, marking or classify failure on a solicitation releases its credit and leaves a retryable failed job', async () => {
+    const boom = async () => {
+      throw new Error('internal detail');
+    };
+    const cases: {
+      label: string;
+      queue: 'scan' | 'file' | 'marking' | 'classify' | 'ai:compliance';
+      handler: (p: Payload) => Promise<unknown>;
+      scanPending?: boolean;
+      type: string;
+      error: string;
+      text?: string;
+      modelDown?: boolean;
+    }[] = [
+      { label: 'scan', queue: 'scan', handler: (p) => scan.processScan({ ...p, storagePath: '../../escape.pdf' }), scanPending: true, type: 'scan', error: 'The stored file path is not valid' },
+      { label: 'file', queue: 'file', handler: boom, type: 'scan', error: 'The text could not be read from this file. Retry it.' },
+      { label: 'reject', queue: 'marking', handler: (p) => marking.processMarking(p), type: 'scan', error: marking.MARKING_REJECTED, text: 'SECRET\nHandle accordingly.' },
+      { label: 'classify', queue: 'classify', handler: boom, type: 'classify', error: 'Processing failed. Retry it.' },
+      { label: 'matrix', queue: 'ai:compliance', handler: (p) => worker.processCompliance(p), type: 'classify', error: 'The compliance matrix could not be built. Retry it.', modelDown: true },
+    ];
+    for (const step of cases) {
+      const { tenant, creditId, solicitationId } = await setup(`fail-${step.label}`, 'reserved');
+      if (step.text) {
+        await withOrg(tenant.orgId, (db) => db.update(schema.pages).set({ text: step.text }).where(eq(schema.pages.documentId, solicitationId)));
+      }
+      if (step.modelDown) {
+        extract.impl = boom;
+      }
+      // The upload's scan row: pending while the scan runs, completed after it.
+      const scanJob = await jobRow(tenant, solicitationId, 'scan', step.scanPending ? 'pending' : 'completed');
+      const run = steps.guardStep(step.queue, step.handler);
+      await expect(run({ ...payload(tenant, solicitationId, 'solicitation'), jobId: scanJob }), step.label).rejects.toThrow();
+      expect(await state(tenant, creditId), step.label).toEqual({ reserved: 0, used: 0, status: 'released' });
+      const failed = await latestJob(tenant, solicitationId);
+      expect({ type: failed.type, status: failed.status, error: failed.error }, step.label).toEqual({ type: step.type, status: 'failed', error: step.error });
+      expect((await jobsOf(tenant, solicitationId)).filter((job) => job.status === 'failed'), step.label).toHaveLength(1);
+      expect(await matrixRows(tenant, solicitationId), step.label).toHaveLength(0);
+      // The user can retry it, and the retry reserves the credit again.
+      const retried = await as(app, tenant.token)('POST', `/api/jobs/${failed.id}/retry`);
+      expect(retried.statusCode, step.label).toBe(200);
+      expect(await state(tenant, creditId), step.label).toEqual({ reserved: 1, used: 0, status: 'reserved' });
+      extract.impl = async () => matrix('x');
+    }
+  });
+
+  it('a failure of an attachment never touches the solicitation credit', async () => {
+    const { tenant, creditId, attachmentId } = await setup('fail-attachment', 'reserved');
+    const run = steps.guardStep('classify', async () => {
+      throw new Error('boom');
+    });
+    await expect(run(payload(tenant, attachmentId, 'attachment'))).rejects.toThrow('boom');
+    expect(await state(tenant, creditId)).toEqual({ reserved: 1, used: 0, status: 'reserved' });
+    expect((await latestJob(tenant, attachmentId)).status).toBe('failed');
+  });
+
+  it('a file paused at the marking check keeps its credit until the user confirms or deletes it', async () => {
+    const { tenant, creditId, solicitationId } = await setup('marking-block', 'reserved');
+    await dropTenantSolicitation(tenant);
+    await withOrg(tenant.orgId, (db) => db.update(schema.pages).set({ text: 'CUI\nThe offeror shall submit a plan.' }).where(eq(schema.pages.documentId, solicitationId)));
+    const run = steps.guardStep('marking', (p) => marking.processMarking(p));
+    await run(payload(tenant, solicitationId, 'solicitation'));
+    expect(enqueued).toEqual([]);
+    expect(await state(tenant, creditId)).toEqual({ reserved: 1, used: 0, status: 'reserved' });
+    expect(await jobsOf(tenant, solicitationId)).toEqual([]);
+    // Removing the paused file releases the reservation it held.
+    const deleted = await as(app, tenant.token)('DELETE', `/api/documents/${solicitationId}`);
+    expect(deleted.json<{ creditReleased: boolean }>().creditReleased).toBe(true);
+    expect(await state(tenant, creditId)).toEqual({ reserved: 0, used: 0, status: 'released' });
+  });
+
+  it('a confirmed marking keeps the same reservation through to the matrix', async () => {
+    const { tenant, creditId, solicitationId } = await setup('marking-confirm', 'reserved');
+    await withOrg(tenant.orgId, (db) => db.update(schema.pages).set({ text: 'CUI\nThe offeror shall submit a plan.' }).where(eq(schema.pages.documentId, solicitationId)));
+    await steps.guardStep('marking', (p) => marking.processMarking(p))(payload(tenant, solicitationId, 'solicitation'));
+    const confirmed = await as(app, tenant.token)('POST', `/api/documents/${solicitationId}/confirm-marking`);
+    expect(confirmed.statusCode).toBe(200);
+    const job = await latestJob(tenant, solicitationId);
+    await classify.processClassify({ ...payload(tenant, solicitationId, 'solicitation'), jobId: job.id });
+    expect((await latestJob(tenant, solicitationId)).status).toBe('completed');
+    await worker.processCompliance(payload(tenant, solicitationId, 'solicitation'));
+    expect(await state(tenant, creditId)).toEqual({ reserved: 0, used: 1, status: 'consumed' });
+  });
+
+  it('a failed retry releases the credit it reserved', async () => {
+    const { tenant, creditId, solicitationId } = await setup('retry-fails', 'released');
+    const call = as(app, tenant.token);
+    const first = await jobRow(tenant, solicitationId, 'classify', 'failed');
+    const retryId = (await call('POST', `/api/jobs/${first}/retry`)).json<{ id: string }>().id;
+    expect(await state(tenant, creditId)).toEqual({ reserved: 1, used: 0, status: 'reserved' });
+    // The retry's classify throws before the matrix step.
+    const run = steps.guardStep('classify', async () => {
+      throw new Error('boom');
+    });
+    await expect(run({ ...payload(tenant, solicitationId, 'solicitation'), jobId: retryId })).rejects.toThrow('boom');
+    expect(await state(tenant, creditId)).toEqual({ reserved: 0, used: 0, status: 'released' });
+    const [retryRow] = await withOrg(tenant.orgId, (db) => db.select().from(schema.jobs).where(eq(schema.jobs.id, retryId)));
+    expect(retryRow.status).toBe('failed');
+    expect((await call('POST', `/api/jobs/${retryId}/retry`)).statusCode).toBe(200);
+    expect(await state(tenant, creditId)).toEqual({ reserved: 1, used: 0, status: 'reserved' });
+  });
+
+  it('a sibling solicitation that fails and releases the credit stops the matrix from being built for free', async () => {
+    const { tenant, creditId, solicitationId } = await setup('sibling', 'reserved');
+    const sibling = await addDocument(tenant, 'solicitation');
+    extract.impl = async () => {
+      // While this run waits on the model, the second solicitation file fails and releases.
+      await steps.recordStepFailure('file', payload(tenant, sibling, 'solicitation'), new Error('sandbox down'));
+      return matrix('free');
+    };
+    await worker.processCompliance(payload(tenant, solicitationId, 'solicitation'));
+    expect(await state(tenant, creditId)).toEqual({ reserved: 0, used: 0, status: 'released' });
+    expect(await matrixRows(tenant, solicitationId)).toHaveLength(0);
+    const held = await latestJob(tenant, solicitationId);
+    expect({ type: held.type, status: held.status, error: held.error }).toEqual({ type: 'classify', status: 'failed', error: rows.SOLICITATION_CREDIT_RELEASED });
+    // A run that starts after the release spends no AI at all.
+    extract.impl = async () => matrix('x');
+    await worker.processCompliance(payload(tenant, solicitationId, 'solicitation'));
+    expect(extractCalls()).toBe(1);
+    // The retry reserves again, and the matrix is built and paid for.
+    const retryId = (await as(app, tenant.token)('POST', `/api/jobs/${held.id}/retry`)).json<{ id: string }>().id;
+    await worker.processCompliance({ ...payload(tenant, solicitationId, 'solicitation'), jobId: retryId });
+    expect(await state(tenant, creditId)).toEqual({ reserved: 0, used: 1, status: 'consumed' });
+    expect(await matrixRows(tenant, solicitationId)).toHaveLength(1);
+  });
+
+  it('an attachment or amendment held while the credit is released runs after a retry consumes it', async () => {
+    const { tenant, creditId, solicitationId, attachmentId } = await setup('held-runs', 'released');
+    const amendmentId = await addDocument(tenant, 'amendment', 'Amendment 0001 to solicitation SOL-held-runs');
+    await classify.processClassify(payload(tenant, attachmentId, 'attachment'));
+    await classify.processClassify(payload(tenant, amendmentId, 'amendment'));
+    expect(enqueued).toEqual([]);
+    for (const id of [attachmentId, amendmentId]) {
+      expect((await latestJob(tenant, id)).error).toBe(rows.HELD_FOR_CREDIT);
+    }
+
+    const failed = await jobRow(tenant, solicitationId, 'classify', 'failed');
+    expect((await as(app, tenant.token)('POST', `/api/jobs/${failed}/retry`)).statusCode).toBe(200);
+    await worker.processCompliance(payload(tenant, solicitationId, 'solicitation'));
+    expect(await state(tenant, creditId)).toEqual({ reserved: 0, used: 1, status: 'consumed' });
+    // The consume kicked classify for both held files, each with a pending classify row.
+    expect(enqueued.filter((name) => name === 'classify')).toHaveLength(2);
+    const kicked = await latestJob(tenant, attachmentId);
+    expect({ type: kicked.type, status: kicked.status }).toEqual({ type: 'classify', status: 'pending' });
+    expect((await latestJob(tenant, amendmentId)).status).toBe('pending');
+
+    enqueued.length = 0;
+    await classify.processClassify({ ...payload(tenant, attachmentId, 'attachment'), jobId: kicked.id });
+    expect(enqueued).toEqual(['ai:overview', 'ai:dates', 'ai:compliance']);
+    expect((await latestJob(tenant, attachmentId)).status).toBe('completed');
+    await worker.processCompliance(payload(tenant, attachmentId, 'attachment'));
+    expect(await matrixRows(tenant, attachmentId)).toHaveLength(1);
+    // Nothing is held any more (the attachment went through; the amendment's kicked row is
+    // pending): another kick reruns nothing.
+    enqueued.length = 0;
+    const { kickHeldDocuments } = await import('../../worker/src/kick.js');
+    await kickHeldDocuments(tenant.orgId, tenant.bidId);
+    expect(enqueued).toEqual([]);
+  });
+
+  it('a held attachment and the retry that reserves the credit race without stranding the attachment', async () => {
+    for (const order of ['classify first', 'retry first', 'classify first', 'retry first']) {
+      const { tenant, creditId, solicitationId, attachmentId } = await setup(`held-race-${randomUUID().slice(0, 8)}`, 'released');
+      const failed = await jobRow(tenant, solicitationId, 'classify', 'failed');
+      enqueued.length = 0;
+      const runClassify = () => classify.processClassify(payload(tenant, attachmentId, 'attachment'));
+      const retry = () => as(app, tenant.token)('POST', `/api/jobs/${failed}/retry`);
+      // The bid row is held, so both queue on it (or on the organization behind it) in this order.
+      const contenders = order === 'classify first' ? [runClassify, retry] : [retry, runClassify];
+      const { waiting, results } = await raceInOrder(tenant.orgId, 'select id from bids where id = $1 for update', [tenant.bidId], contenders);
+      expect(waiting, order).toBe(2);
+      results.forEach((result) => fulfilled(result));
+      const proceeded = enqueued.includes('ai:compliance');
+      // The retry reserved; the solicitation's matrix then consumes and kicks what is held.
+      await worker.processCompliance(payload(tenant, solicitationId, 'solicitation'));
+      expect(await state(tenant, creditId), order).toEqual({ reserved: 0, used: 1, status: 'consumed' });
+      const kicked = enqueued.includes('classify');
+      // Exactly one of the two: classify saw the credit and went on, or it was held and kicked.
+      expect(proceeded !== kicked, `${order}: proceeded ${proceeded}, kicked ${kicked}`).toBe(true);
+      expect(order === 'classify first' ? kicked : proceeded, order).toBe(true);
+    }
+  });
+});
