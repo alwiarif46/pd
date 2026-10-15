@@ -1,0 +1,15 @@
+{
+  "sourceCommit": "3a2c0cd971a6e4acb377d5886324c4bbd05be2ff",
+  "files": [
+    "AmendmentConfirm.tsx",
+    "EmptyState.tsx",
+    "LockedTab.tsx",
+    "MarkingPrompt.tsx",
+    "ProcessingBanner.tsx",
+    "SourceLink.tsx",
+    "TabFrame.tsx",
+    "sample-data.ts",
+    "types.ts"
+  ],
+  "keepLocal": []
+}

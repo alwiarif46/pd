@@ -1,0 +1,60 @@
+import { Button } from '@/components/ui/button';
+import { SourceLink } from './SourceLink';
+import type { AmendmentConfirmProps } from './types';
+export function AmendmentConfirm({ proposals, busyIds, onConfirm, onReject, onOpenSource }: AmendmentConfirmProps) {
+  return (
+    <section className="space-y-3">
+      <h3 className="font-semibold">Confirm amendment changes</h3>
+      <p className="text-sm text-muted-foreground">Until you confirm, the old row stays active.</p>
+      {proposals.map((p) => (
+        <article key={p.id} className="rounded-lg border border-line bg-paper p-4">
+          <div className="flex justify-between">
+            <b>
+              Amd {p.amendmentNo} ·{' '}
+              {p.action === 'supersede' ? 'Replaces' : p.action === 'withdraw' ? 'Withdraws' : 'Adds'}
+            </b>
+            {p.confidence !== null && <span>Confidence {Math.round(p.confidence * 100)}%</span>}
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div>
+              <b>{p.oldRow ? 'Old row' : 'New requirement'}</b>
+              <p>
+                {p.oldRow?.label} {p.oldRow?.text}
+              </p>
+              {p.oldRow && (
+                <SourceLink
+                  page={p.oldRow.sourcePage}
+                  pageEnd={null}
+                  rowLabel={p.oldRow.label}
+                  onOpen={() => onOpenSource(p.oldRow!.rowId)}
+                />
+              )}
+            </div>
+            <div>
+              <b>{p.newRow ? 'New row' : 'No replacement'}</b>
+              <p>
+                {p.newRow?.label} {p.newRow?.text}
+              </p>
+              {p.newRow && (
+                <SourceLink
+                  page={p.newRow.sourcePage}
+                  pageEnd={null}
+                  rowLabel={p.newRow.label}
+                  onOpen={() => onOpenSource(p.newRow!.rowId)}
+                />
+              )}
+            </div>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <Button disabled={busyIds.includes(p.id)} onClick={() => onConfirm(p.id)}>
+              Confirm
+            </Button>
+            <Button variant="outline" disabled={busyIds.includes(p.id)} onClick={() => onReject(p.id)}>
+              Reject
+            </Button>
+          </div>
+        </article>
+      ))}
+    </section>
+  );
+}
