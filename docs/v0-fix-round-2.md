@@ -45,6 +45,7 @@ GROUND RULES (apply to every screen in this prompt)
    16. UpgradeDialog: Growth is 20 RFPs per period. Both cards list users (5) and how long files stay live. The Free line reads "Free: 1 RFP per period (2 in the first month), 50 MB per bid, 2 users, Overview, Schedule and Compliance." Format creditsResetOn as "Nov 1", parsed as a local date.
    17. Add sample-data.ts with the bids from prompt 1 (VA EHR Support Services, City of Austin Fleet Telematics, NAVSEA Logistics Support) and Dana Reyes.
    18. Preview: AppShell on Free (locked tabs, a processing and a waiting signal), Growth with orals and a detail open, outside a bid, and 0 credits, each at 1,280, 900 and 375 px. UpgradeDialog with every reason on Free and on Starter. ConfirmDialog plain, with typeToConfirm, and busy.
+   19. Logo: put the Shaavir mark to the left of the "Shaavir PD" wordmark in the top bar: <img src="/shaavir-mark.png" alt="" className="size-7 shrink-0" />, about 28 px square, with an 8 px gap. The alt is empty because the wordmark beside it already names the app. The file is in the app's public folder, so use that path as written; do not import it, copy it, or add an image to design/v0. Below 640 px, show the mark and drop the wordmark text, but keep "Shaavir PD" as an sr-only label.
 
 2. OVERVIEW (design/v0/overview). Fix list against prompt 5 and 09 s5.3.
    1. Delete the local AmendmentMark and the OverviewProps alias. Import from @/types.

@@ -22,7 +22,15 @@ export type TabName =
   | 'orals'
   | 'lessons';
 export type SeedableTab = 'overview' | 'schedule' | 'production' | 'orals' | 'lessons';
-export type ScheduleTemplate = 'standard' | 'color-reviews';
+/** Schedule templates (packages/core SCHEDULE_TEMPLATES). The server also maps the legacy ids 'standard' and 'color-reviews'. */
+export type ScheduleTemplate = 'federal-standard' | 'federal-fast' | 'task-order';
+/** `schedule_activities.kind` (migration 0010 CHECK; packages/core ACTIVITY_KINDS). */
+export type ActivityKind = 'milestone' | 'writing' | 'review' | 'production' | 'submission' | 'custom';
+/** `schedule_activities.review_color`: only on kind 'review' (packages/core REVIEW_COLORS). */
+export type ReviewColor = 'blue' | 'pink' | 'red' | 'green' | 'gold' | 'white_glove';
+/** `schedule_activities.origin`: 'template' rows came from a schedule template. */
+export type ActivityOrigin = 'ai' | 'user' | 'template';
+export type AdjustMode = 'shift' | 'scale' | 'keep';
 export type RowTable =
   | 'bid_facts'
   | 'kickoff_items'
@@ -205,6 +213,8 @@ export interface BidDto extends OrgScopedDto {
   timeZone: string | null;
   countMode: string | null;
   oralsEnabled: boolean;
+  /** The schedule's "Workdays only" setting: shift, scale, and templates skip weekends and US federal holidays. Default true. */
+  scheduleWorkdaysOnly: boolean;
   creditId: string | null;
   creditStatus: 'reserved' | 'consumed' | 'released' | null;
   keyOverridesUsed: number;
@@ -236,6 +246,8 @@ export interface BidPatch {
   retentionExtendedUntil?: string | null;
   /** Any other value is refused with 400. */
   status?: BidStatus;
+  /** The schedule's "Workdays only" setting; anything but a boolean is refused with 400. */
+  scheduleWorkdaysOnly?: boolean;
 }
 
 /** `bids.status` (09 s5.2); the database holds only these values. New bids start in `planning`. */
@@ -429,7 +441,14 @@ export interface KickoffItemDto extends BidScopedDto {
   note: string | null;
 }
 
-export interface ScheduleActivityDto extends BidScopedDto, SourceColumnsDto {
+/**
+ * Dates are UTC-midnight timestamps ('2026-11-20T00:00:00.000Z'); the day is `startDate.slice(0, 10)`.
+ * `endDate` null means the same day as `startDate`.
+ */
+export interface ScheduleActivityDto extends BidScopedDto, Omit<SourceColumnsDto, 'origin'> {
+  origin: ActivityOrigin | null;
+  kind: ActivityKind;
+  reviewColor: ReviewColor | null;
   label: string;
   phase: string | null;
   startDate: string | null;
@@ -595,7 +614,8 @@ export interface MoveOutlineInput {
 
 export interface TabPayloadMap {
   overview: { facts: BidFactDto[]; kickoff: KickoffItemDto[] };
-  schedule: { activities: ScheduleActivityDto[] };
+  /** Activities by start date (undated last), and the bid's "Workdays only" setting. */
+  schedule: { activities: ScheduleActivityDto[]; workdaysOnly: boolean };
   compliance: { rows: ComplianceRowDto[] };
   outline: { items: OutlineItemDto[] };
   resumes: { requirements: PersonnelRequirementDto[]; candidates: CandidateDto[]; matches: ResumeMatchDto[] };
@@ -631,6 +651,12 @@ export interface RowDetailDto<T extends RowTable> {
 export interface RowPatchMap {
   bid_facts: { value?: string; confirmed?: boolean };
   kickoff_items: { done?: boolean; owner?: string | null; note?: string | null };
+  /**
+   * Dates are 'YYYY-MM-DD' (400 otherwise, or when the end is before the start). A date move on a
+   * row that is locked and stays locked is 409 `activity_locked`; send `locked: false` with the
+   * move to unlock and move at once. Changing `kind` away from 'review' clears `reviewColor`;
+   * a color on another kind is 400.
+   */
   schedule_activities: {
     label?: string;
     startDate?: string | null;
@@ -638,6 +664,8 @@ export interface RowPatchMap {
     locked?: boolean;
     owner?: string | null;
     status?: string | null;
+    kind?: ActivityKind;
+    reviewColor?: ReviewColor | null;
   };
   compliance_rows: {
     requirementText?: string;
@@ -681,7 +709,16 @@ export interface CreateComplianceRowInput {
 /** Exactly what the server's `insertRow` accepts, per tab. */
 export interface CreateRowBodyMap {
   overview: { kind: 'fact'; field: string; value: string } | { label: string };
-  schedule: { label: string; startDate?: string | null; endDate?: string | null };
+  /** Dates 'YYYY-MM-DD' only (timestamps are 400). `kind` and `reviewColor` are inferred from the label when not sent; `endDate` defaults to `startDate`. */
+  schedule: {
+    label: string;
+    startDate?: string | null;
+    endDate?: string | null;
+    kind?: ActivityKind;
+    reviewColor?: ReviewColor | null;
+    owner?: string | null;
+    locked?: boolean;
+  };
   compliance: CreateComplianceRowInput;
   outline: {
     title: string;
@@ -723,8 +760,50 @@ export interface CreatedRowMap {
   lessons: LessonDto;
 }
 
+/** POST /api/bids/:id/schedule/adjust. previousDue and nextDue ('YYYY-MM-DD') are required for shift and scale. */
 export interface AdjustScheduleInput {
-  mode: 'shift' | 'scale' | 'keep';
+  mode: AdjustMode;
   previousDue?: string;
   nextDue?: string;
+  /** Overrides the bid's setting for this call only. */
+  workdaysOnly?: boolean;
+}
+
+/** One activity the adjust moved; days are 'YYYY-MM-DD'. */
+export interface ScheduleMoveDto {
+  id: string;
+  previousStart: string;
+  previousEnd: string;
+  start: string;
+  end: string;
+  /** The locked 'submission' that was on previousDue: it is the due date itself and moves to nextDue in every mode, keep included. */
+  followsDue: boolean;
+}
+
+export interface AdjustScheduleDto {
+  ok: true;
+  requestedMode: AdjustMode;
+  /** What was done: 'shift' when a scale had no usable anchor (the bid has no start date before both due dates). */
+  mode: AdjustMode;
+  workdaysOnly: boolean;
+  unit: 'workdays' | 'days';
+  /** The due date's move in `unit`s. */
+  delta: number;
+  moved: number;
+  moves: ScheduleMoveDto[];
+}
+
+/** POST /api/bids/:id/tabs/schedule/seed. 409 `due_date_required` when the bid has no due date. */
+export interface SeedScheduleInput {
+  template?: ScheduleTemplate;
+  /** true: delete the unlocked activities of origin 'template' or 'user' first (AI rows stay); default false: add to them. */
+  replace?: boolean;
+}
+
+export interface SeedScheduleDto {
+  ok: true;
+  template: ScheduleTemplate;
+  added: number;
+  replaced: number;
+  activities: ScheduleActivityDto[];
 }

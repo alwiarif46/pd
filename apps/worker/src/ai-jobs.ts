@@ -9,7 +9,7 @@ import {
   type PageText,
   type PreScanHit,
 } from '@pd/ai';
-import { schema, withOrg } from '@pd/core';
+import { inferActivityKind, schema, withOrg } from '@pd/core';
 import { checkCredit, heldUnlessCredited } from './credit-gate.js';
 import { shareOrg } from './key-check.js';
 import { kickAmendments, kickHeldDocuments } from './kick.js';
@@ -339,11 +339,19 @@ export async function processOverview(payload: JobPayload): Promise<void> {
 export async function processDates(payload: JobPayload): Promise<void> {
   const pages = await loadPages(payload.orgId, payload.documentId);
   const hits = preScan(pages).dates;
+  if (hits.length === 0) {
+    return;
+  }
+  // As migration 0010 backfilled AI dates: the label's kind, else a milestone.
+  const label = 'Date from solicitation';
+  const inferred = inferActivityKind(label);
   // A rerun adds only dates the document does not have yet, and never changes existing rows.
   await writeDocumentDates(payload, hits.map((hit) => ({
     orgId: payload.orgId,
     bidId: payload.bidId,
-    label: 'Date from solicitation',
+    label,
+    kind: inferred.kind === 'custom' ? 'milestone' as const : inferred.kind,
+    reviewColor: inferred.reviewColor,
     locked: true,
     documentId: payload.documentId,
     sourcePage: hit.pageNo,

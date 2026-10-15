@@ -30,6 +30,8 @@ export interface Bid {
   creditStatus: 'reserved' | 'consumed' | 'released' | null;
   keyOverridesUsed: number;
   retentionExtendedUntil: Date | null;
+  /** The schedule's "Workdays only" setting (migration 0010). */
+  scheduleWorkdaysOnly: boolean;
 }
 
 export interface Document {
@@ -77,6 +79,7 @@ export * from './amendment-numbers';
 export * from './job-ids';
 export * from './seats';
 export * from './document-jobs';
+export * from './schedule';
 
 // Database
 export * from './db';

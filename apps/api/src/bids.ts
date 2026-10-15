@@ -189,10 +189,16 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
       oralsEnabled?: boolean;
       retentionExtendedUntil?: string | null;
       status?: unknown;
+      /** The schedule's "Workdays only" setting (packages/core schedule.ts). */
+      scheduleWorkdaysOnly?: unknown;
     };
     if (body.status !== undefined && !isBidStatus(body.status)) {
       return reply.code(400).send({ error: `Status must be one of: ${BID_STATUSES.join(', ')}.` });
     }
+    if (body.scheduleWorkdaysOnly !== undefined && typeof body.scheduleWorkdaysOnly !== 'boolean') {
+      return reply.code(400).send({ error: 'Send scheduleWorkdaysOnly as true or false.' });
+    }
+    const scheduleWorkdaysOnly = body.scheduleWorkdaysOnly;
     const status = body.status;
     const extendsRetention = body.retentionExtendedUntil !== undefined;
     let retention: Date | null | undefined;
@@ -262,6 +268,7 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
         dueTime: body.dueTime === undefined ? bid.dueTime : body.dueTime,
         timeZone: body.timeZone === undefined ? bid.timeZone : body.timeZone,
         oralsEnabled: body.oralsEnabled === undefined ? bid.oralsEnabled : body.oralsEnabled,
+        scheduleWorkdaysOnly: scheduleWorkdaysOnly ?? bid.scheduleWorkdaysOnly,
         retentionExtendedUntil: retention === undefined ? bid.retentionExtendedUntil : retention,
         status: status === undefined ? bid.status : status,
         updatedAt: new Date(),

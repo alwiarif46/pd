@@ -34,7 +34,7 @@ import {
   updateOrg,
 } from './org';
 import { deleteRow, getRow, updateRow } from './rows';
-import { adjustSchedule } from './schedule';
+import { adjustSchedule, seedSchedule } from './schedule';
 import { setToken } from './session';
 import { createTabRow, getTab, seedTab } from './tabs';
 
@@ -98,10 +98,10 @@ const cases: RouteCase[] = [
   ['seedTab (overview sends {})', () => seedTab('b1', 'overview'), 'POST', '/api/bids/b1/tabs/overview/seed', {}],
   [
     'seedTab (schedule sends the template)',
-    () => seedTab('b1', 'schedule', { template: 'color-reviews' }),
+    () => seedTab('b1', 'schedule', { template: 'task-order' }),
     'POST',
     '/api/bids/b1/tabs/schedule/seed',
-    { template: 'color-reviews' },
+    { template: 'task-order' },
   ],
   ['seedTab (schedule, no template)', () => seedTab('b1', 'schedule'), 'POST', '/api/bids/b1/tabs/schedule/seed', {}],
   // rows.ts
@@ -153,6 +153,21 @@ const cases: RouteCase[] = [
     '/api/bids/b1/schedule/adjust',
     { mode: 'shift', previousDue: '2026-11-01', nextDue: '2026-11-08' },
   ],
+  [
+    'adjustSchedule (workdays override)',
+    () => adjustSchedule('b1', { mode: 'scale', previousDue: '2026-11-01', nextDue: '2026-11-08', workdaysOnly: false }),
+    'POST',
+    '/api/bids/b1/schedule/adjust',
+    { mode: 'scale', previousDue: '2026-11-01', nextDue: '2026-11-08', workdaysOnly: false },
+  ],
+  [
+    'seedSchedule',
+    () => seedSchedule('b1', { template: 'federal-fast', replace: true }),
+    'POST',
+    '/api/bids/b1/tabs/schedule/seed',
+    { template: 'federal-fast', replace: true },
+  ],
+  ['seedSchedule (defaults)', () => seedSchedule('b1'), 'POST', '/api/bids/b1/tabs/schedule/seed', {}],
 ];
 
 describe('resource routes', () => {
