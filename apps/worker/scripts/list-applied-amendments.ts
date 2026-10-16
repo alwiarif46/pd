@@ -5,9 +5,8 @@
  * an amendment applied then may be missing its added requirements. This lists, for each
  * organization given, every amendment in `applied` or `needs_confirmation` with its number, its
  * document, whether that document is deleted, how many links it has, and how many compliance
- * rows its document produced (0 for every amendment applied before 0009). It changes nothing:
- * there is no automatic re-run. The owner decides, per amendment, whether to delete it and upload
- * it again.
+ * rows its document produced (0 for every amendment applied before 0009). It changes nothing;
+ * backfill-amendments.ts supplies the missing rows, link rows and quotes (01 s6).
  *
  * Dry run (read-only). Run with the worker's environment (DATABASE_URL as pd_app):
  *   npx tsx apps/worker/scripts/list-applied-amendments.ts --org <uuid> [--org <uuid> ...]
