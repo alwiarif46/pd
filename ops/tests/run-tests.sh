@@ -455,8 +455,12 @@ grep -q "^docker exec srcpg pg_dump -U pd_owner -d pd -Fc" "$FAKE_CALLS" && grep
   && grep -q "DROP DATABASE IF EXISTS pd WITH (FORCE)" "$FAKE_CALLS" && grep -q "CREATE ROLE pd_app LOGIN NOSUPERUSER NOBYPASSRLS" "$FAKE_CALLS" \
   && ok "restore-drill-ci.sh uses restore.sh's SQL path from ops/lib/backup-common.sh" || bad "ci drill sql path" "$(cat "$FAKE_CALLS")"
 [[ -z "$(ls -A "$S/work")" ]] && ok "restore-drill-ci.sh removes only its own dump files" || bad "ci drill left files" "$(ls -A "$S/work")"
-out="$(FAKE_MIGRATIONS=$JOURNAL_N FAKE_ROLES='pd_app:t:t:f pd_system:f:f:f' bash ops/ci/restore-drill-ci.sh --src srcpg --dst dstpg --workdir "$S/work" --seed 2>&1)"; rc=$?
-[[ $rc != 0 ]] && grep -q "roles are" <<<"$out" && ok "restore-drill-ci.sh fails when a restored role has the wrong attributes" || bad "ci drill roles" "rc=$rc $out"
+out="$(FAKE_MIGRATIONS=$JOURNAL_N FAKE_ROLES_dstpg='pd_app:login=t,super=f,bypassrls=t,createdb=f,createrole=f,inherit=t,replication=f pd_system:login=f,super=f,bypassrls=f,createdb=f,createrole=f,inherit=t,replication=f' bash ops/ci/restore-drill-ci.sh --src srcpg --dst dstpg --workdir "$S/work" --seed 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "restored roles differ from the source" <<<"$out" && ok "restore-drill-ci.sh fails when a restored role's attributes differ from the source's" || bad "ci drill roles" "rc=$rc $out"
+out="$(FAKE_MIGRATIONS=$JOURNAL_N FAKE_ROLES_srcpg='' bash ops/ci/restore-drill-ci.sh --src srcpg --dst dstpg --workdir "$S/work" --seed 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "the source lacks pd_app or pd_system" <<<"$out" && ok "restore-drill-ci.sh refuses a source without the two roles" || bad "ci drill source roles" "rc=$rc $out"
+# the check compares source and target with one query; it never hard-codes the text form of a boolean
+! grep -qE "pd_app:t:f:f|rolcanlogin \|\|" ops/ci/restore-drill-ci.sh && ok "the role check has no hard-coded attribute string (the CI failure: bool || text gives 'true', not 't')" || bad "hard-coded role string"
 out="$(FAKE_MIGRATIONS=1 bash ops/ci/restore-drill-ci.sh --src srcpg --dst dstpg --workdir "$S/work" 2>&1)"; rc=$?
 [[ $rc != 0 ]] && grep -q "not fully migrated" <<<"$out" && ok "restore-drill-ci.sh refuses a source that is not fully migrated" || bad "ci drill migrations" "rc=$rc $out"
 

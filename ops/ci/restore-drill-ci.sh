@@ -11,7 +11,9 @@
 #      pd_system with migration 0001's attributes), pg_restore "${BK_PG_RESTORE_ARGS[@]}" (--exit-on-error
 #      --single-transaction). It runs twice: into a fresh cluster, and again over the restored database.
 #   4. checks: drizzle.__drizzle_migrations count = packages/core/src/db/migrations/meta/_journal.json entries; the
-#      row count of every table and the number of row-level-security policies match the source; both roles exist.
+#      row count of every table and the number of row-level-security policies match the source; pd_app and pd_system
+#      have exactly the attributes the migrations gave them in the SOURCE (login, superuser, bypassrls, createdb,
+#      createrole, inherit, replication), read with the same query on both sides.
 # Borg is not part of this (the archive layer is tested with the fake borg in ops/tests). No network beyond the two CI
 # service containers: every command is `docker exec` into them.
 #
@@ -70,6 +72,13 @@ SRC_MIG="$(psql_in "$SRC" pd -Atc 'SELECT count(*) FROM drizzle.__drizzle_migrat
 SRC_ORGS="$(psql_in "$SRC" pd -Atc 'SELECT count(*) FROM organizations')"
 (( SRC_ORGS > 0 )) || die "the source holds no organization: nothing would prove that rows travel (use --seed)"
 SRC_COUNTS="$(counts "$SRC")"
+# roles C: the attributes of pd_app and pd_system, one stable string (the same query on both sides, so the boolean
+# text form does not matter)
+roles() {
+  psql_in "$1" postgres -Atc "SELECT string_agg(format('%s:login=%s,super=%s,bypassrls=%s,createdb=%s,createrole=%s,inherit=%s,replication=%s', rolname, rolcanlogin, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolinherit, rolreplication), ' ' ORDER BY rolname) FROM pg_roles WHERE rolname IN ('pd_app','pd_system')"
+}
+SRC_ROLES="$(roles "$SRC")"
+[[ "$SRC_ROLES" == pd_app:*" pd_system:"* ]] || die "the source lacks pd_app or pd_system (migration 0001 creates both): '$SRC_ROLES'"
 echo "source: $SRC_MIG migrations, $SRC_ORGS organization(s), $(grep -c . <<<"$SRC_COUNTS") tables+policies line(s)"
 
 echo "== 1. pg_dump -Fc"
@@ -100,8 +109,8 @@ for round in 1 2; do
     diff <(printf '%s\n' "$SRC_COUNTS") <(printf '%s\n' "$DST_COUNTS") || true
     die "round $round: table row counts or policies differ between source and target"
   fi
-  ROLES="$(psql_in "$DST" postgres -Atc "SELECT string_agg(rolname || ':' || rolcanlogin || ':' || rolsuper || ':' || rolbypassrls, ' ' ORDER BY rolname) FROM pg_roles WHERE rolname IN ('pd_app','pd_system')")"
-  [[ "$ROLES" == "pd_app:t:f:f pd_system:f:f:f" ]] || die "round $round: roles are '$ROLES'"
-  echo "round $round: $DST_MIG migrations, identical row counts and policies, roles $ROLES"
+  DST_ROLES="$(roles "$DST")"
+  [[ "$DST_ROLES" == "$SRC_ROLES" ]] || die "round $round: restored roles differ from the source: source '$SRC_ROLES', target '$DST_ROLES'"
+  echo "round $round: $DST_MIG migrations, identical row counts, policies and roles ($DST_ROLES)"
 done
 echo "RESTORE DRILL (CI): PASS"

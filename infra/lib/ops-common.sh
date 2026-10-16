@@ -20,6 +20,8 @@ set -o errexit -o nounset -o pipefail
 
 OPS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY_RUN=0
+# OPS_ARGS: the arguments ops_init left for the calling script (backup.sh, restore.sh, ...), read only there.
+# shellcheck disable=SC2034  # read by the scripts that source this file
 OPS_ARGS=()
 
 # shellcheck source=tenant.sh
@@ -37,6 +39,7 @@ is_dry() { [[ "$DRY_RUN" == "1" ]]; }
 ops_init() {
   OPS_NAME="$1"; shift
   pd_parse_args "$@"
+  # shellcheck disable=SC2034  # read by the calling script: set -- ${OPS_ARGS[@]+"${OPS_ARGS[@]}"}
   OPS_ARGS=(${PD_REST[@]+"${PD_REST[@]}"})
   DRY_RUN="$PD_DRY_RUN"
   is_dry && log "dry-run: nothing will be changed"
@@ -148,19 +151,3 @@ ops_usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$1"; }
 # Short host name, portable (Git Bash `hostname` has no -s).
 short_host() { hostname 2>/dev/null | cut -d. -f1; }
 
-# HTTP/2 syntax depends on the nginx version: "http2 on;" exists from 1.25.1; older
-# nginx (Ubuntu 24.04 ships 1.24.0) needs "listen ... ssl http2". Sets NGX_VERSION,
-# HTTP2_LISTEN (" http2" or "") and HTTP2_DIRECTIVE ("    http2 on;" or "").
-# Version: $1, else the local nginx, else 1.24.0 (Ubuntu 24.04).
-ops_nginx_http2() {
-  NGX_VERSION="${1:-}"
-  if [[ -z "$NGX_VERSION" ]] && have nginx; then
-    NGX_VERSION="$(nginx -v 2>&1 | sed -nE 's|.*nginx/([0-9]+\.[0-9]+\.[0-9]+).*|\1|p')"
-  fi
-  NGX_VERSION="${NGX_VERSION:-1.24.0}"
-  if [[ "$(printf '%s\n%s\n' 1.25.1 "$NGX_VERSION" | sort -V | head -1)" == 1.25.1 ]]; then
-    HTTP2_LISTEN=""; HTTP2_DIRECTIVE="    http2 on;"
-  else
-    HTTP2_LISTEN=" http2"; HTTP2_DIRECTIVE=""
-  fi
-}

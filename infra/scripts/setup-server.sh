@@ -43,6 +43,7 @@ precondition() {
 
 echo "== 1. Operating system"
 if [[ -r "$OS_RELEASE" ]]; then
+  # shellcheck source=/dev/null  # /etc/os-release (PD_OS_RELEASE in tests), read in a subshell
   os="$(. "$OS_RELEASE" && echo "${ID:-?} ${VERSION_ID:-?}")"
 else
   os="unknown"

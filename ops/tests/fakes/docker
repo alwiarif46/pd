@@ -62,7 +62,10 @@ case "$1" in
       *" psql "*)
         case "$args" in
           *"__drizzle_migrations"*) echo "${FAKE_MIGRATIONS:-3}" ;;
-          *"FROM pg_roles WHERE rolname IN"*) echo "${FAKE_ROLES-pd_app:t:f:f pd_system:f:f:f}" ;;
+          *"FROM pg_roles WHERE rolname IN"*)
+            # FAKE_ROLES_<container> overrides one side (container id = $3 in `docker exec -i ID psql ...`)
+            rv="FAKE_ROLES_${3//[^A-Za-z0-9_]/_}"
+            echo "${!rv-pd_app:login=t,super=f,bypassrls=f,createdb=f,createrole=f,inherit=t,replication=f pd_system:login=f,super=f,bypassrls=f,createdb=f,createrole=f,inherit=t,replication=f}" ;;
           *"organizations"*) echo "${FAKE_ORGS:-2}" ;;
           *) : ;;
         esac

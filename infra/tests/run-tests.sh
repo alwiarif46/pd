@@ -297,9 +297,9 @@ fi
 # ------------------------------------------------------------------ cloudflare-dns.py (fake Cloudflare API)
 CFTOKEN="cf-fake-token-$(printf '%030d' 5)"
 CF_PID=""
-start_cf() { # start_cf [SEED_RECORDS_JSON]
+start_cf() { # start_cf: a fresh fake Cloudflare API with an empty zone
   [[ -n "$CF_PID" ]] && { kill "$CF_PID" 2>/dev/null; wait "$CF_PID" 2>/dev/null; }
-  printf '{"zone":{"id":"z1","name":"shaavir.com"},"records":%s}' "${1:-[]}" >"$S/cf.json"; : >"$S/cf.calls"; rm -f "$S/cf.port"
+  printf '{"zone":{"id":"z1","name":"shaavir.com"},"records":[]}' >"$S/cf.json"; : >"$S/cf.calls"; rm -f "$S/cf.port"
   "$PY" infra/tests/fakes/cloudflare_fake.py "$(np "$S/cf.json")" "$(np "$S/cf.calls")" "$(np "$S/cf.port")" "$CFTOKEN" </dev/null >/dev/null 2>&1 &
   CF_PID=$!
   local _; for _ in $(seq 1 50); do [[ -s "$S/cf.port" ]] && break; sleep 0.1; done
