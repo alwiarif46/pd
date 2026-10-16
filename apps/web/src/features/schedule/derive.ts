@@ -4,10 +4,11 @@ import {
   SCHEDULE_TEMPLATES,
   type AdjustPlan,
 } from '@pd/core/schedule';
-import type { BidDto, CreateRowBodyMap, RowPatchMap, ScheduleActivityDto } from '@/api';
+import type { BidDto, CreateRowBodyMap, PendingDateChangeDto, RowPatchMap, ScheduleActivityDto } from '@/api';
 import type {
   ActivityDraft,
   DateChangeMode,
+  DueMove,
   ScheduleActivity,
   ScheduleDateChange,
   ScheduleHoliday,
@@ -136,7 +137,7 @@ const MODES: readonly DateChangeMode[] = ['shift', 'scale', 'keep'];
 /** One sentence per mode saying what it would do (09 s5.11), from the same plan the api runs. */
 export function dateChangeSummary(
   activities: readonly ScheduleActivity[],
-  change: Pick<ScheduleDateChange, 'previousDue' | 'nextDue'>,
+  change: DueMove,
   opts: { anchor: string | null; workdaysOnly: boolean },
 ): Record<DateChangeMode, string> {
   const dated = activities.filter((a) => a.start !== null);
@@ -218,4 +219,24 @@ export function toRowPatch(p: Partial<ActivityDraft>): RowPatchMap['schedule_act
   if ('owner' in p) patch.owner = p.owner;
   if ('locked' in p) patch.locked = p.locked;
   return patch;
+}
+
+/** The schedule tab's pending amendment date change, as the date-change prompt takes it. */
+export function toAmendmentDateChange(dto: PendingDateChangeDto): ScheduleDateChange {
+  return {
+    origin: 'amendment',
+    previousDue: dto.previousDue,
+    nextDue: dto.nextDue,
+    amendmentNo: dto.amendmentNo,
+    sourcePage: dto.sourcePage,
+    sourceQuote: dto.sourceQuote,
+  };
+}
+
+/**
+ * Names one amendment date change on one bid, for the prompt's answered and cancelled record. A later
+ * change from the same amendment with another nextDue is a new change, and opens on its own.
+ */
+export function amendmentChangeKey(bidId: string, dto: Pick<PendingDateChangeDto, 'amendmentId' | 'nextDue'>): string {
+  return `${bidId}/${dto.amendmentId}/${dto.nextDue}`;
 }

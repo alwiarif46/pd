@@ -201,6 +201,10 @@ describe('toProposals', () => {
     ]);
   });
 
+  it('ignores fact and date links', () => {
+    expect(toProposals([linkDto({ rowTable: 'bid_facts' }), linkDto({ id: 'd', rowTable: 'schedule_activities' })])).toEqual([]);
+  });
+
   it('reads confidence strings', () => {
     expect(toConfidence('0.5')).toBe(0.5);
     expect(toConfidence('abc')).toBeNull();
@@ -227,6 +231,7 @@ describe('tabSignals', () => {
     expect(tabSignals([docDto({ kind: 'amendment', keyCheck: 'mismatch' })], [], [])).toEqual([{ tab: 'documents', signal: 'waiting' }]);
     expect(tabSignals([docDto()], [], [linkDto()])).toEqual([{ tab: 'compliance', signal: 'waiting' }]);
     expect(tabSignals([docDto()], [], [linkDto({ action: 'add' })])).toEqual([]);
+    expect(tabSignals([docDto()], [], [linkDto({ rowTable: 'bid_facts' })])).toEqual([]);
   });
 
   it('marks failed until a later run succeeds, and waiting wins over failed over processing', () => {

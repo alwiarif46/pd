@@ -277,9 +277,13 @@ export function ScheduleTab(p: ScheduleTabProps) {
       {p.dateChange && (
         <DateChangePrompt
           open
+          origin={p.dateChange.origin}
           previousDue={p.dateChange.previousDue}
           nextDue={p.dateChange.nextDue}
           amendmentNo={p.dateChange.amendmentNo}
+          sourcePage={p.dateChange.sourcePage}
+          sourceQuote={p.dateChange.sourceQuote}
+          onOpenSource={p.onOpenDateChangeSource}
           summary={p.dateChangeSummary}
           workdaysOnly={p.workdaysOnly}
           busy={p.dateChangeBusy}

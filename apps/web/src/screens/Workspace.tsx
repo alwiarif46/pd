@@ -3,6 +3,7 @@ import { ApiError, api, uploadFile } from '../legacy-api';
 import { Dialog } from '../components/Dialog';
 import { RowDetail } from '../components/RowDetail';
 import { SourceViewer } from '../components/SourceViewer';
+import { amendmentTabsNote } from '../features/shared/amendment-tabs-status';
 import { downloadCsv, downloadDocx, downloadXlsx } from '../export';
 import {
   type Bid,
@@ -61,7 +62,7 @@ export function Workspace({
   const [bid, setBid] = useState<Bid | null>(null);
   const [docs, setDocs] = useState<DocumentRow[]>([]);
   const [jobs, setJobs] = useState<JobRow[]>([]);
-  const [links, setLinks] = useState<{ id: string; status: string; action: string; oldRowId: string | null; newRowId: string | null; confidence: string | null }[]>([]);
+  const [links, setLinks] = useState<{ id: string; status: string; rowTable: string; action: string; oldRowId: string | null; newRowId: string | null; confidence: string | null }[]>([]);
   const [data, setData] = useState<Record<string, unknown> | null>(null);
   const [menu, setMenu] = useState(false);
   const [selected, setSelected] = useState<{ table: string; id: string } | null>(null);
@@ -124,7 +125,8 @@ export function Workspace({
   const activeJobs = jobs.filter((job) => job.status === 'pending' || job.status === 'running');
   const failed = jobs.find((job) => job.status === 'failed');
   const blocked = docs.find((doc) => doc.markingStatus === 'blocked');
-  const proposed = links.filter((link) => link.status === 'proposed');
+  // Fact and date proposals are inserted on Overview (features/overview) and Schedule, not here.
+  const proposed = links.filter((link) => link.status === 'proposed' && link.rowTable === 'compliance_rows');
   const credits = org?.credits;
   const creditsLeft = credits ? credits.allowed - credits.used - credits.reserved : null;
   const usedBytes = docs.reduce((sum, doc) => sum + doc.sizeBytes, 0);
@@ -692,6 +694,12 @@ function Lessons({ bid, data, onReload, onError }: Panel) {
   );
 }
 
+/** The amendment tabs status beside a document's status (legacy tag classes). */
+function TabsNote({ doc }: { doc: DocumentRow }) {
+  const note = amendmentTabsNote(doc);
+  return note ? <span className={note.tone === 'bad' ? 'tag withdrawn' : 'tag'}>{note.text}</span> : null;
+}
+
 function Documents({ bid, plan, docs, onReload, onError, onNotice }: Panel) {
   const [kind, setKind] = useState('attachment');
   const [reason, setReason] = useState('');
@@ -739,7 +747,11 @@ function Documents({ bid, plan, docs, onReload, onError, onNotice }: Panel) {
                   <td className="num">{mb(doc.sizeBytes)}</td>
                   <td className="num">{doc.createdAt.slice(0, 10)}</td>
                   <td className="num">{doc.liveUntil?.slice(0, 10) ?? '—'}</td>
-                  <td>{doc.liveStatus || doc.extractStatus || doc.scanStatus || 'processing'}</td>
+                  <td>
+                    {doc.liveStatus || doc.extractStatus || doc.scanStatus || 'processing'}
+                    {' '}
+                    <TabsNote doc={doc} />
+                  </td>
                   <td>{doc.markingStatus || 'none'}</td>
                   <td className="row">
                     {doc.liveStatus === 'archived' ? <button className="btn secondary" type="button" onClick={() => api(`/api/documents/${doc.id}/restore`, { method: 'POST' }).then(() => onNotice('Restore requested')).then(onReload).catch((err: Error) => onError(err.message))}>Restore</button> : null}

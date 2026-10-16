@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { bidDto, scheduleActivity, scheduleActivityDto } from '@/test/fixtures';
 import {
   ACTIVITY_OPTIONS,
+  amendmentChangeKey,
   dateChangeSummary,
   dayOf,
   dueLabelOf,
@@ -11,6 +12,7 @@ import {
   templateOptions,
   toCreateBody,
   toRowPatch,
+  toAmendmentDateChange,
   toScheduleActivity,
 } from './derive';
 
@@ -154,5 +156,33 @@ describe('toCreateBody and toRowPatch', () => {
     ).toEqual({ label: 'Kickoff', kind: 'milestone', reviewColor: null, startDate: '2026-11-02', endDate: '2026-11-02', owner: null, locked: false });
     expect(toRowPatch({ owner: 'Sam' })).toEqual({ owner: 'Sam' });
     expect(toRowPatch({ start: '2026-11-03', end: null })).toEqual({ startDate: '2026-11-03', endDate: null });
+  });
+});
+
+describe('toAmendmentDateChange and amendmentChangeKey', () => {
+  const dto = {
+    amendmentId: 'amd-3',
+    amendmentNo: 3,
+    previousDue: null,
+    nextDue: '2026-12-02',
+    sourcePage: 4,
+    sourceQuote: 'Proposals are now due December 2.',
+  };
+
+  it('copies the change with origin amendment', () => {
+    expect(toAmendmentDateChange(dto)).toEqual({
+      origin: 'amendment',
+      previousDue: null,
+      nextDue: '2026-12-02',
+      amendmentNo: 3,
+      sourcePage: 4,
+      sourceQuote: 'Proposals are now due December 2.',
+    });
+  });
+
+  it('keys by bid, amendment, and next due date', () => {
+    expect(amendmentChangeKey('bid-1', dto)).toBe('bid-1/amd-3/2026-12-02');
+    expect(amendmentChangeKey('bid-1', { ...dto, nextDue: '2026-12-09' })).not.toBe(amendmentChangeKey('bid-1', dto));
+    expect(amendmentChangeKey('bid-2', dto)).not.toBe(amendmentChangeKey('bid-1', dto));
   });
 });
