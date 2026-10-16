@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, count, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, count, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import {
   costOf,
   coverage,
@@ -39,12 +39,19 @@ import { allocateReqIds } from './req-ids.js';
  * an audit_log row (`amendment_backfill`), which is also what makes a second run a no-op. It
  * never closes or reopens a row, never creates or decides a proposal, never changes the
  * amendment's status, and never touches a credit: the live amendment run settles none either.
+ *
+ * An amendment with a later amendment of the bid (applied, needs_confirmation or processing) is
+ * skipped: the later one diffed against rows without this one's, so this one's rows would sit
+ * active next to the later replacements of the same clauses.
  */
 
 export const BACKFILL_ACTION = 'amendment_backfill';
 export const BACKFILL_TASK = 'amendment_backfill';
 
 export const BACKFILL_USAGE = 'Usage: backfill-amendments.ts --org <uuid> [--org <uuid> ...] [--bid <uuid>] [--limit N] [--apply]';
+
+/** Statuses of a later amendment that hold an earlier one back (it wrote, or will write, rows). */
+const LATER_BLOCKS: schema.AmendmentStatus[] = ['applied', 'needs_confirmation', 'processing'];
 
 export interface BackfillArgs {
   orgIds: string[];
@@ -98,8 +105,19 @@ export function parseBackfillArgs(argv: readonly string[]): BackfillArgs | { err
 export interface OldLink {
   id: string;
   action: 'supersede' | 'withdraw' | 'add';
+  status: 'auto' | 'proposed' | 'confirmed' | 'rejected';
   oldRowId: string | null;
   newRowId: string | null;
+  sourceQuote: string | null;
+}
+
+export interface BackfillPair {
+  linkId: string;
+  oldRowId: string;
+  newRowId: string;
+  /** The diff's confidence for this pairing. */
+  confidence: number | null;
+  sourcePage: number | null;
   sourceQuote: string | null;
 }
 
@@ -107,7 +125,7 @@ export interface BackfillPlan {
   /** Every new row, with its code-generated id. */
   inserts: (ComplianceRequirement & { id: string })[];
   /** A supersede link with no new row, and the new row the diff names for it. */
-  pairs: { linkId: string; oldRowId: string; newRowId: string; sourcePage: number | null; sourceQuote: string | null }[];
+  pairs: BackfillPair[];
   /** A withdraw link with no quote, and the quote the diff found. */
   quoteFills: { linkId: string; sourcePage: number | null; sourceQuote: string | null }[];
   /** New rows no link pairs: each gets an add link. */
@@ -116,10 +134,13 @@ export interface BackfillPlan {
 
 /**
  * The backfill's writes, pure. Every new row is inserted. Each supersede link of the amendment
- * with no new row takes the new row the diff links to its old row with the highest confidence at
- * or above `threshold` (a less certain pairing leaves the link as it is); a withdraw link with no
- * quote takes the quote of a confident diff withdraw of its row. Diff links to rows the
- * amendment's links do not name are ignored. A new row no link takes gets an add link.
+ * with no new row takes the new row of the diff's highest-confidence quoted supersede of its old
+ * row; a withdraw link with no quote takes the quote of the diff's best quoted withdraw of its
+ * row. For an auto, confirmed or rejected link the diff's confidence must reach `threshold` (a
+ * less certain pairing leaves the link as it is). A proposed link takes any confidence: the
+ * pre-#22 proposals were the ones below it, and pairing only names the row the user decides on.
+ * Diff links to rows the amendment's links do not name are ignored. A new row no link takes gets
+ * an add link.
  */
 export function planBackfill(
   oldLinks: readonly OldLink[],
@@ -129,23 +150,28 @@ export function planBackfill(
   newId: () => string = randomUUID,
 ): BackfillPlan {
   const inserts = newRows.map((row) => ({ ...row, flags: [...row.flags], id: newId() }));
-  const confident = diffLinks.filter((link) => (link.confidence ?? 0) >= threshold && link.sourceQuote);
-  const best = (action: 'supersede' | 'withdraw', oldRowId: string) => confident
-    .filter((link) => link.action === action && link.oldRowId === oldRowId && (action === 'withdraw' || (link.newIndex !== null && inserts[link.newIndex])))
+  const quoted = diffLinks.filter((link) => link.sourceQuote);
+  const best = (action: 'supersede' | 'withdraw', oldRowId: string, floor: number) => quoted
+    .filter((link) => link.action === action && link.oldRowId === oldRowId && (link.confidence ?? 0) >= floor
+      && (action === 'withdraw' || (link.newIndex !== null && inserts[link.newIndex])))
     .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0];
-  const pairs: BackfillPlan['pairs'] = [];
+  const pairs: BackfillPair[] = [];
   const quoteFills: BackfillPlan['quoteFills'] = [];
   for (const link of [...oldLinks].sort((a, b) => a.id.localeCompare(b.id))) {
     if (!link.oldRowId) {
       continue;
     }
+    const floor = link.status === 'proposed' ? 0 : threshold;
     if (link.action === 'supersede' && link.newRowId === null) {
-      const match = best('supersede', link.oldRowId);
+      const match = best('supersede', link.oldRowId, floor);
       if (match && match.newIndex !== null) {
-        pairs.push({ linkId: link.id, oldRowId: link.oldRowId, newRowId: inserts[match.newIndex].id, sourcePage: match.sourcePage, sourceQuote: match.sourceQuote });
+        pairs.push({
+          linkId: link.id, oldRowId: link.oldRowId, newRowId: inserts[match.newIndex].id,
+          confidence: match.confidence, sourcePage: match.sourcePage, sourceQuote: match.sourceQuote,
+        });
       }
     } else if (link.action === 'withdraw' && link.sourceQuote === null) {
-      const match = best('withdraw', link.oldRowId);
+      const match = best('withdraw', link.oldRowId, floor);
       if (match) {
         quoteFills.push({ linkId: link.id, sourcePage: match.sourcePage, sourceQuote: match.sourceQuote });
       }
@@ -164,8 +190,19 @@ interface Facts {
   bid: { creditStatus: string | null; solicitationKey: string } | undefined;
   links: LinkRow[];
   rowsFromText: number;
+  /** check_these rows of the document: only the post-#22 amendment run writes them. */
+  hits: number;
   backfilled: boolean;
   pages: number;
+  /** Numbers of the bid's later amendments that are applied, needs_confirmation or processing. */
+  later: number[];
+}
+
+/** The statement that makes a read transaction read-only (the dry run, and every pre-read). */
+export const READ_ONLY_SQL = 'set transaction read only';
+
+async function readOnly(db: Db): Promise<void> {
+  await db.execute(sql.raw(READ_ONLY_SQL));
 }
 
 /**
@@ -175,7 +212,8 @@ interface Facts {
  * then the amendment's links (link confirm and reject take amendment, link, rows; the rows are
  * locked by the caller after this).
  */
-async function readFacts(db: Db, orgId: string, amendmentId: string, documentId: string, bidId: string, lock: boolean): Promise<Facts | null> {
+async function readFacts(db: Db, orgId: string, target: Target, lock: boolean): Promise<Facts | null> {
+  const { amendmentId, documentId, bidId } = target;
   if (lock) {
     await lockDocumentJobs(db, documentId);
     await shareOrg(db, orgId);
@@ -186,12 +224,11 @@ async function readFacts(db: Db, orgId: string, amendmentId: string, documentId:
     storagePath: schema.documents.storagePath,
   }).from(schema.documents).where(and(eq(schema.documents.id, documentId), eq(schema.documents.orgId, orgId)));
   const [document] = lock ? await documentQuery.for('update') : await documentQuery;
-  if (lock) {
-    await db.select({ id: schema.checkThese.id }).from(schema.checkThese).where(and(
-      eq(schema.checkThese.documentId, documentId),
-      eq(schema.checkThese.orgId, orgId),
-    )).orderBy(asc(schema.checkThese.id)).for('update');
-  }
+  const hitQuery = db.select({ id: schema.checkThese.id }).from(schema.checkThese).where(and(
+    eq(schema.checkThese.documentId, documentId),
+    eq(schema.checkThese.orgId, orgId),
+  )).orderBy(asc(schema.checkThese.id));
+  const hits = lock ? await hitQuery.for('update') : await hitQuery;
   const bidQuery = db.select({ creditStatus: schema.bids.creditStatus, solicitationKey: schema.bids.solicitationKey })
     .from(schema.bids).where(and(eq(schema.bids.id, bidId), eq(schema.bids.orgId, orgId)));
   const [bid] = lock ? await bidQuery.for('update') : await bidQuery;
@@ -221,14 +258,26 @@ async function readFacts(db: Db, orgId: string, amendmentId: string, documentId:
     eq(schema.pages.documentId, documentId),
     eq(schema.pages.orgId, orgId),
   ));
-  return { amendment, document, bid, links, rowsFromText: rows?.n ?? 0, backfilled: Boolean(marker), pages: pages?.n ?? 0 };
+  // Deleted documents count too: a deleted amendment that applied keeps its rows.
+  const later = amendment.amendmentNo === null ? [] : (await db.select({ amendmentNo: schema.amendments.amendmentNo }).from(schema.amendments).where(and(
+    eq(schema.amendments.orgId, orgId),
+    eq(schema.amendments.bidId, amendment.bidId),
+    gt(schema.amendments.amendmentNo, amendment.amendmentNo),
+    inArray(schema.amendments.status, LATER_BLOCKS),
+  )).orderBy(asc(schema.amendments.amendmentNo))).flatMap((row) => (row.amendmentNo === null ? [] : [row.amendmentNo]));
+  return {
+    amendment, document, bid, links, rowsFromText: rows?.n ?? 0, hits: hits.length, backfilled: Boolean(marker), pages: pages?.n ?? 0, later,
+  };
 }
 
 /** Why the amendment is not backfilled, or null when it is in the pre-#22 shape and may be. */
-function skipReason(facts: Facts): string | null {
+function skipReason(facts: Facts, target: Target): string | null {
   const { amendment, document, bid } = facts;
   if (facts.backfilled) {
     return 'already backfilled';
+  }
+  if (amendment.documentId !== target.documentId || amendment.bidId !== target.bidId) {
+    return 'amendment no longer matches its document and bid';
   }
   if (amendment.status !== 'applied' && amendment.status !== 'needs_confirmation') {
     return `status is ${amendment.status}`;
@@ -260,6 +309,15 @@ function skipReason(facts: Facts): string | null {
   if (facts.links.some((link) => link.newRowId !== null || link.sourceQuote !== null)) {
     return 'links written by the post-#22 run';
   }
+  if (facts.hits > 0) {
+    return 'check these written by the post-#22 run';
+  }
+  if (facts.links.length === 0) {
+    return 'no links; cannot tell pre/post-#22';
+  }
+  if (facts.later.length > 0) {
+    return `later amendment ${facts.later[0]} exists; rows could duplicate`;
+  }
   if (facts.pages === 0) {
     return 'no extracted text';
   }
@@ -276,6 +334,7 @@ export interface BackfillReport {
   backfilled: number;
   /** Not in the pre-#22 shape, including one that changed between the read and the lock. */
   skipped: number;
+  /** Any failure: a read, a model pass or the write. The amendment is left as it was. */
   failed: number;
 }
 
@@ -287,84 +346,96 @@ function field(value: string): string {
 
 /**
  * Runs the backfill for the organizations named (each read under its own `app.org_id`, as the
- * worker does; there is no cross-tenant path). Dry run unless `apply`: it lists each applied or
- * needs_confirmation amendment with what would change, and makes no model call. With `apply`,
- * each eligible amendment (lowest number first, per bid) runs on its own: the model passes, then
- * one transaction. A failure is logged and leaves that amendment as it was. One line per
- * amendment, `key=value`, plus a summary line.
+ * worker does; there is no cross-tenant path). Dry run unless `apply`: it lists each amendment
+ * of the organization with what would change, reading in read-only transactions, and makes no
+ * model call. With `apply`, each eligible amendment runs on its own: the model passes, then one
+ * transaction. A failure is logged and leaves that amendment as it was. One line per amendment,
+ * `key=value`, plus a summary line.
  */
 export async function runBackfill(options: BackfillOptions): Promise<BackfillReport> {
   const log = options.log ?? ((line: string) => console.log(line));
   const mode = options.apply ? 'apply' : 'dry-run';
   const report: BackfillReport = { eligible: 0, backfilled: 0, skipped: 0, failed: 0 };
-  const line = (target: Target, amendmentNo: number | null, parts: Record<string, string | number>) => log([
+  const line = (target: Target, amendmentNo: number | null | undefined, parts: Record<string, string | number>) => log([
     'backfill-amendments', `mode=${mode}`, `org=${target.orgId}`, `bid=${target.bidId}`, `amendment=${target.amendmentId}`,
     `document=${target.documentId}`, `amd=${amendmentNo ?? '?'}`,
     ...Object.entries(parts).map(([key, value]) => `${key}=${typeof value === 'number' ? value : field(value)}`),
   ].join(' '));
+  const failed = (target: Target, amendmentNo: number | null | undefined, error: unknown) => {
+    report.failed += 1;
+    line(target, amendmentNo, { result: 'failed', error: error instanceof Error ? error.message : String(error) });
+  };
 
   for (const orgId of options.orgIds) {
-    const targets: Target[] = await withOrg(orgId, (db) => db.select({
-      orgId: schema.amendments.orgId,
-      bidId: schema.amendments.bidId,
-      amendmentId: schema.amendments.id,
-      documentId: schema.amendments.documentId,
-    }).from(schema.amendments)
-      .innerJoin(schema.documents, eq(schema.documents.id, schema.amendments.documentId))
-      .where(and(
-        eq(schema.amendments.orgId, orgId),
-        eq(schema.documents.orgId, orgId),
-        eq(schema.documents.kind, 'amendment'),
-        inArray(schema.amendments.status, ['applied', 'needs_confirmation']),
-        options.bidId ? eq(schema.amendments.bidId, options.bidId) : undefined,
-      ))
-      .orderBy(asc(schema.amendments.bidId), asc(schema.amendments.amendmentNo), asc(schema.amendments.id)));
+    let targets: Target[];
+    try {
+      targets = await withOrg(orgId, async (db) => {
+        await readOnly(db);
+        return db.select({
+          orgId: schema.amendments.orgId,
+          bidId: schema.amendments.bidId,
+          amendmentId: schema.amendments.id,
+          documentId: schema.amendments.documentId,
+        }).from(schema.amendments)
+          .innerJoin(schema.documents, eq(schema.documents.id, schema.amendments.documentId))
+          .where(and(
+            eq(schema.amendments.orgId, orgId),
+            eq(schema.documents.orgId, orgId),
+            eq(schema.documents.kind, 'amendment'),
+            options.bidId ? eq(schema.amendments.bidId, options.bidId) : undefined,
+          ))
+          .orderBy(asc(schema.amendments.bidId), asc(schema.amendments.amendmentNo), asc(schema.amendments.id));
+      });
+    } catch (error) {
+      report.failed += 1;
+      log(`backfill-amendments mode=${mode} org=${orgId} result=failed error=${field(error instanceof Error ? error.message : String(error))}`);
+      continue;
+    }
     for (const target of targets) {
       if (options.limit !== undefined && report.eligible >= options.limit) {
         break;
       }
-      const facts = await withOrg(orgId, (db) => readFacts(db, orgId, target.amendmentId, target.documentId, target.bidId, false));
-      if (!facts) {
-        continue;
-      }
-      const reason = skipReason(facts);
-      if (reason) {
-        report.skipped += 1;
-        line(target, facts.amendment.amendmentNo, { status: facts.amendment.status, result: 'skip', reason });
-        continue;
-      }
-      report.eligible += 1;
-      if (!options.apply) {
-        const quoteless = facts.links.filter((link) => link.action !== 'add' && link.sourceQuote === null).length;
-        line(target, facts.amendment.amendmentNo, {
-          status: facts.amendment.status,
-          result: 'would-backfill',
-          file: facts.document?.fileName ?? '',
-          pages: facts.pages,
-          links: facts.links.length,
-          unpaired_supersedes: facts.links.filter((link) => link.action === 'supersede' && link.oldRowId && link.newRowId === null).length,
-          links_without_quote: quoteless,
-          open_proposals: facts.links.filter((link) => link.status === 'proposed').length,
-          writes: 'rows from its text, link new rows and quotes, replacement pointers, check these, ai_runs, audit_log; no status, credit or closure change',
-        });
-        continue;
-      }
+      let facts: Facts | null = null;
       try {
+        facts = await withOrg(orgId, async (db) => {
+          await readOnly(db);
+          return readFacts(db, orgId, target, false);
+        });
+        if (!facts) {
+          continue;
+        }
+        const reason = skipReason(facts, target);
+        const common = { status: facts.amendment.status, later_amendments: facts.later.length };
+        if (reason) {
+          report.skipped += 1;
+          line(target, facts.amendment.amendmentNo, { ...common, result: 'skip', reason });
+          continue;
+        }
+        report.eligible += 1;
+        if (!options.apply) {
+          line(target, facts.amendment.amendmentNo, {
+            ...common,
+            result: 'would-backfill',
+            file: facts.document?.fileName ?? '',
+            pages: facts.pages,
+            links: facts.links.length,
+            unpaired_supersedes: facts.links.filter((link) => link.action === 'supersede' && link.oldRowId && link.newRowId === null).length,
+            links_without_quote: facts.links.filter((link) => link.action !== 'add' && link.sourceQuote === null).length,
+            open_proposals: facts.links.filter((link) => link.status === 'proposed').length,
+            writes: 'rows from its text, link new rows and quotes, replacement pointers, check these, ai_runs, audit_log; no status, credit or closure change',
+          });
+          continue;
+        }
         const outcome = await backfillOne(target, facts);
         if ('skip' in outcome) {
           report.skipped += 1;
-          line(target, facts.amendment.amendmentNo, { status: facts.amendment.status, result: 'skip', reason: outcome.skip });
+          line(target, facts.amendment.amendmentNo, { ...common, result: 'skip', reason: outcome.skip });
         } else {
           report.backfilled += 1;
-          line(target, facts.amendment.amendmentNo, { status: facts.amendment.status, result: 'backfilled', ...outcome });
+          line(target, facts.amendment.amendmentNo, { ...common, result: 'backfilled', ...outcome });
         }
       } catch (error) {
-        report.failed += 1;
-        line(target, facts.amendment.amendmentNo, {
-          status: facts.amendment.status,
-          result: 'failed',
-          error: error instanceof Error ? error.message : String(error),
-        });
+        failed(target, facts?.amendment.amendmentNo, error);
       }
     }
   }
@@ -386,8 +457,11 @@ interface Written {
   add_links: number;
   quotes_filled: number;
   pointers_set: number;
+  proposals_unpaired: number;
   hits: number;
 }
+
+const byConfidence = (a: BackfillPair, b: BackfillPair) => (b.confidence ?? 0) - (a.confidence ?? 0) || a.linkId.localeCompare(b.linkId);
 
 /** One amendment: the model passes outside any transaction, then one write transaction. */
 async function backfillOne(target: Target, read: Facts): Promise<Written | { skip: string }> {
@@ -403,17 +477,20 @@ async function backfillOne(target: Target, read: Facts): Promise<Written | { ski
   // tells which new row replaced each one. The bid's other active rows are not offered, so
   // nothing the earlier run or the user decided is reopened.
   const namedIds = [...new Set(read.links.flatMap((link) => (link.action !== 'add' && link.oldRowId ? [link.oldRowId] : [])))];
-  const named: ExistingRow[] = namedIds.length === 0 ? [] : await withOrg(orgId, (db) => db.select({
-    id: schema.complianceRows.id,
-    reqId: schema.complianceRows.reqId,
-    sectionRef: schema.complianceRows.sectionRef,
-    requirementText: schema.complianceRows.requirementText,
-    sourceQuote: schema.complianceRows.sourceQuote,
-  }).from(schema.complianceRows).where(and(
-    inArray(schema.complianceRows.id, namedIds),
-    eq(schema.complianceRows.bidId, bidId),
-    eq(schema.complianceRows.orgId, orgId),
-  )));
+  const named: ExistingRow[] = namedIds.length === 0 ? [] : await withOrg(orgId, async (db) => {
+    await readOnly(db);
+    return db.select({
+      id: schema.complianceRows.id,
+      reqId: schema.complianceRows.reqId,
+      sectionRef: schema.complianceRows.sectionRef,
+      requirementText: schema.complianceRows.requirementText,
+      sourceQuote: schema.complianceRows.sourceQuote,
+    }).from(schema.complianceRows).where(and(
+      inArray(schema.complianceRows.id, namedIds),
+      eq(schema.complianceRows.bidId, bidId),
+      eq(schema.complianceRows.orgId, orgId),
+    ));
+  });
   const diff = named.length === 0 || extracted.requirements.length === 0
     ? { links: [] as DiffLink[], dropped: 0, tokensUsed: 0 }
     : await diffAmendment({ newRows: extracted.requirements, existing: named, amendmentPages, provider, config });
@@ -422,14 +499,14 @@ async function backfillOne(target: Target, read: Facts): Promise<Written | { ski
   const tokens = extracted.tokensUsed + diff.tokensUsed + map.tokensUsed;
 
   return withOrg(orgId, async (db): Promise<Written | { skip: string }> => {
-    const facts = await readFacts(db, orgId, target.amendmentId, documentId, bidId, true);
-    const reason = facts ? skipReason(facts) : 'amendment not found';
+    const facts = await readFacts(db, orgId, target, true);
+    const reason = facts ? skipReason(facts, target) : 'amendment not found';
     if (!facts || reason) {
       return { skip: reason ?? 'amendment not found' };
     }
     const now = facts.amendment.amendmentNo!;
     const plan = planBackfill(facts.links.map((link) => ({
-      id: link.id, action: link.action, oldRowId: link.oldRowId, newRowId: link.newRowId, sourceQuote: link.sourceQuote,
+      id: link.id, action: link.action, status: link.status, oldRowId: link.oldRowId, newRowId: link.newRowId, sourceQuote: link.sourceQuote,
     })), extracted.requirements, diff.links, threshold);
     // The old rows the pairs name, locked by id after the links (credits.ts lock order).
     const pairedIds = [...new Set(plan.pairs.map((pair) => pair.oldRowId))];
@@ -444,14 +521,18 @@ async function backfillOne(target: Target, read: Facts): Promise<Written | { ski
     const pairs = plan.pairs.filter((pair) => oldById.has(pair.oldRowId));
     const pairedNew = new Set(pairs.map((pair) => pair.newRowId));
     const addRowIds = plan.inserts.filter((row) => !pairedNew.has(row.id)).map((row) => row.id);
+    const pairedLinks = new Set(pairs.map((pair) => pair.linkId));
+    const proposalsUnpaired = facts.links.filter((link) => link.action === 'supersede' && link.status === 'proposed'
+      && link.newRowId === null && !pairedLinks.has(link.id)).length;
     // A replacement the earlier run applied (auto) or the user confirmed: the new row takes the
-    // references the map left empty from the row it replaces, and that row points at it.
+    // references the map left empty from the row it replaces, the highest-confidence one first
+    // (as the live run's inheritReferences), and that row points at it.
     const replaces = pairs.filter((pair) => {
       const status = linkById.get(pair.linkId)?.status;
       return status === 'auto' || status === 'confirmed';
-    });
+    }).sort(byConfidence);
     const insertById = new Map(plan.inserts.map((row) => [row.id, row]));
-    for (const pair of [...replaces].sort((a, b) => a.linkId.localeCompare(b.linkId))) {
+    for (const pair of replaces) {
       const row = insertById.get(pair.newRowId)!;
       const old = oldById.get(pair.oldRowId)!;
       row.instrRef ??= old.instrRef ?? undefined;
@@ -484,7 +565,7 @@ async function backfillOne(target: Target, read: Facts): Promise<Written | { ski
         supersedeStatus: 'active' as const,
       })));
     }
-    const filled: string[] = [];
+    const filled = new Set<string>();
     let quotesFilled = 0;
     const fill = async (linkId: string, values: { newRowId?: string; sourcePage: number | null; sourceQuote: string | null }) => {
       const link = linkById.get(linkId)!;
@@ -497,7 +578,7 @@ async function backfillOne(target: Target, read: Facts): Promise<Written | { ski
         ...(quote ? { sourcePage: values.sourcePage, sourceQuote: values.sourceQuote } : {}),
         updatedAt: new Date(),
       }).where(and(eq(schema.amendmentLinks.id, linkId), eq(schema.amendmentLinks.orgId, orgId)));
-      filled.push(linkId);
+      filled.add(linkId);
     };
     for (const pair of pairs) {
       await fill(pair.linkId, { newRowId: pair.newRowId, sourcePage: pair.sourcePage, sourceQuote: pair.sourceQuote });
@@ -505,12 +586,12 @@ async function backfillOne(target: Target, read: Facts): Promise<Written | { ski
     for (const quote of plan.quoteFills) {
       await fill(quote.linkId, quote);
     }
-    // Only an empty pointer on a row that is still superseded is set; changed_by_amendment only
-    // when 0009 could not set it.
-    const pointed: string[] = [];
+    // Only an empty pointer on a row that is still superseded is set, to its highest-confidence
+    // replacement; changed_by_amendment only when 0009 could not set it.
+    const pointed: { rowId: string; prevChangedByAmendment: number | null }[] = [];
     for (const pair of replaces) {
       const old = oldById.get(pair.oldRowId)!;
-      if (old.supersedeStatus !== 'superseded' || old.supersededByRowId !== null || pointed.includes(old.id)) {
+      if (old.supersedeStatus !== 'superseded' || old.supersededByRowId !== null || pointed.some((item) => item.rowId === old.id)) {
         continue;
       }
       await db.update(schema.complianceRows).set({
@@ -524,7 +605,7 @@ async function backfillOne(target: Target, read: Facts): Promise<Written | { ski
         eq(schema.complianceRows.supersedeStatus, 'superseded'),
         isNull(schema.complianceRows.supersededByRowId),
       ));
-      pointed.push(old.id);
+      pointed.push({ rowId: old.id, prevChangedByAmendment: old.changedByAmendment });
     }
     const addLinks = addRowIds.length === 0 ? [] : await db.insert(schema.amendmentLinks).values(addRowIds.map((newRowId) => ({
       orgId,
@@ -558,9 +639,12 @@ async function backfillOne(target: Target, read: Facts): Promise<Written | { ski
       add_links: addLinks.length,
       quotes_filled: quotesFilled,
       pointers_set: pointed.length,
+      proposals_unpaired: proposalsUnpaired,
       hits: checkThese.length,
     };
     // The record of what was written (to undo it by id) and the marker a second run stops at.
+    // Filled links had null new_row_id, source_page and source_quote before; pointed rows had a
+    // null superseded_by_row_id and the changed_by_amendment recorded here.
     await db.insert(schema.auditLog).values({
       orgId,
       action: BACKFILL_ACTION,
@@ -571,8 +655,8 @@ async function backfillOne(target: Target, read: Facts): Promise<Written | { ski
         amendmentNo: now,
         insertedRowIds: plan.inserts.map((row) => row.id),
         addLinkIds: addLinks.map((link) => link.id),
-        filledLinkIds: [...new Set(filled)],
-        pointedRowIds: pointed,
+        filledLinkIds: [...filled].sort(),
+        pointedRows: pointed,
         ...written,
       },
     });

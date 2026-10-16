@@ -6,8 +6,10 @@
  * Dry run by default (read-only, no model call). Run with the worker's environment (DATABASE_URL
  * as pd_app, AI_PROVIDER and its key):
  *   npx tsx apps/worker/scripts/backfill-amendments.ts --org <uuid> [--org <uuid> ...] [--bid <uuid>] [--limit N] [--apply]
+ * The worker image has no scripts/: run it from a checkout at the deployed commit (01 s6).
  * Row-level security shows pd_app one organization at a time, so organizations are named. Exit
- * code 1 when an amendment failed (it is left as it was; run again), 2 on bad arguments.
+ * code 1 on any failure (a read, a model pass or a write; that amendment is left as it was, so
+ * run again), 2 on bad arguments.
  */
 import { closeDb, enforceTenantRole } from '@pd/core';
 import { BACKFILL_USAGE, parseBackfillArgs, runBackfill } from '../src/amendment-backfill.js';
