@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2034  # a sourced library: its variables are read by the scripts that source it
 # ops/lib/backup-common.sh - shared by infra/scripts/backup.sh, infra/scripts/restore.sh and
 # ops/backup/offsite-sync.sh (sourced after infra/lib/ops-common.sh, never executed).
 #
