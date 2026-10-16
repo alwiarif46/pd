@@ -41,6 +41,8 @@ export type UploadOptions = CallOptions & {
   onProgress?: (progress: UploadProgress) => void;
   /** Defaults to `CHUNK_BYTES`, clamped to `[1, CHUNK_BYTES]`. Exists for tests. */
   chunkBytes?: number;
+  /** Amendments only: the amendment's number, 1 to 999. Sent only for `kind` `amendment`. */
+  amendmentNo?: number;
 };
 
 export type UploadResult =
@@ -57,7 +59,7 @@ export async function uploadFile(
   kind: FileKind,
   options: UploadOptions = {},
 ): Promise<UploadResult> {
-  const { signal, onProgress } = options;
+  const { signal, onProgress, amendmentNo } = options;
   if (file.size === 0) {
     throw new ApiError('This file is empty', 400);
   }
@@ -68,7 +70,14 @@ export async function uploadFile(
 
   const session = await openUploadSession(
     bidId,
-    { fileName: file.name, kind, declaredSize: bytes.byteLength, sha256, chunkCount },
+    {
+      fileName: file.name,
+      kind,
+      declaredSize: bytes.byteLength,
+      sha256,
+      chunkCount,
+      ...(kind === 'amendment' && amendmentNo !== undefined ? { amendmentNo } : {}),
+    },
     { signal },
   );
   if ('duplicate' in session) {
