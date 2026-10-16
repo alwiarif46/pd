@@ -61,7 +61,7 @@ export function Workspace({
   const [bid, setBid] = useState<Bid | null>(null);
   const [docs, setDocs] = useState<DocumentRow[]>([]);
   const [jobs, setJobs] = useState<JobRow[]>([]);
-  const [links, setLinks] = useState<{ id: string; status: string; action: string; oldRowId: string | null; newRowId: string | null; confidence: string | null }[]>([]);
+  const [links, setLinks] = useState<{ id: string; status: string; rowTable: string; action: string; oldRowId: string | null; newRowId: string | null; confidence: string | null }[]>([]);
   const [data, setData] = useState<Record<string, unknown> | null>(null);
   const [menu, setMenu] = useState(false);
   const [selected, setSelected] = useState<{ table: string; id: string } | null>(null);
@@ -124,7 +124,8 @@ export function Workspace({
   const activeJobs = jobs.filter((job) => job.status === 'pending' || job.status === 'running');
   const failed = jobs.find((job) => job.status === 'failed');
   const blocked = docs.find((doc) => doc.markingStatus === 'blocked');
-  const proposed = links.filter((link) => link.status === 'proposed');
+  // Fact and date proposals are inserted on Overview (features/overview) and Schedule, not here.
+  const proposed = links.filter((link) => link.status === 'proposed' && link.rowTable === 'compliance_rows');
   const credits = org?.credits;
   const creditsLeft = credits ? credits.allowed - credits.used - credits.reserved : null;
   const usedBytes = docs.reduce((sum, doc) => sum + doc.sizeBytes, 0);

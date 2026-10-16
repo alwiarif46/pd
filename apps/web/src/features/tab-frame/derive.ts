@@ -174,10 +174,13 @@ export function toConfidence(value: string | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Proposed supersede and withdraw links, as cards. Adds are always applied, so they are never proposed. */
+/**
+ * Proposed supersede and withdraw links on compliance rows, as cards. Adds are always applied, so they are never
+ * proposed. Fact and date proposals are shown on Overview and Schedule from their tab payloads, not here.
+ */
 export function toProposals(links: AmendmentLinkDto[]): AmendmentProposal[] {
   return links
-    .filter((link) => link.status === 'proposed' && link.action !== 'add')
+    .filter((link) => link.rowTable === 'compliance_rows' && link.status === 'proposed' && link.action !== 'add')
     .map((link) => ({
       id: link.id,
       amendmentNo: link.amendmentNo ?? 0,

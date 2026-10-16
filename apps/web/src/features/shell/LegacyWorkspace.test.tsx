@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // The legacy Workspace as the shell embeds it (until v0 replaces the tabs).
-import { render, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Workspace } from '@/screens/Workspace';
 import { jsonResponse } from '@/test/fetch';
@@ -59,5 +59,23 @@ describe('Workspace embedded in the shell', () => {
     view.rerender(workspace('job-1:running'));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(jobLoads()).toBe(1);
+  });
+
+  it('shows Confirm only for proposed compliance links, not fact or date links', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/amendment-links')) {
+        return jsonResponse(200, [
+          { id: 'l1', status: 'proposed', rowTable: 'compliance_rows', action: 'supersede', oldRowId: 'a', newRowId: 'b', confidence: '0.9' },
+          { id: 'l2', status: 'proposed', rowTable: 'bid_facts', action: 'supersede', oldRowId: 'c', newRowId: 'd', confidence: '0.9' },
+        ]);
+      }
+      if (/\/api\/bids\/[^/]+$/.test(url)) return jsonResponse(200, bidDto());
+      if (/\/tabs\//.test(url)) return jsonResponse(200, { rows: [] });
+      return jsonResponse(200, []);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(workspace(''));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Confirm' })).toHaveLength(1));
   });
 });
