@@ -46,7 +46,7 @@ and never appear in argv. Scripts print `STATE.md:` lines for the log table in `
    `python .githooks/secret_scan.py --all`. Then `bash infra/provision.sh --dry-run` against your tenant file.
 1. **Provision.** Pick the provider in `config/tenant.toml` (H-02). `bash infra/provision.sh --dry-run`, then (a purchase, your
    call) `--confirm-purchase`. The `ssh` adapter only probes a server you ordered by hand.
-2. **DNS.** `python infra/dns/cloudflare-dns.py apply --from-provider --dry-run`, then without `--dry-run`. Records are proxied.
+2. **DNS.** `python infra/dns/cloudflare-dns.py apply --from-provider --dry-run`, then without `--dry-run`. Records are proxied. Creating a record needs nothing more; changing an existing one (another server) needs `--confirm`.
 3. **Temporary SSH and the admin network.** `bash infra/firewall-temp-ssh.sh add` (API providers), the first-boot window opens
    from `ADMIN_IP`; for hand-ordered or adopted servers `bash infra/server/bootstrap-existing.sh --confirm`. Join the admin
    network (`sudo infra/headscale/server-join.sh`, H-06), then `bash infra/firewall-temp-ssh.sh remove --check-host <tailnet IP>`.

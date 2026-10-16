@@ -13,7 +13,7 @@ independently. No secret is shared with Drive or with any other Shaavir system (
 
 | Secret | Where it lives | Who can read it | Notes |
 |---|---|---|---|
-| Laptop secrets file `C:/projects/secrets/pd.env` | the admin's laptop, never in git | the admin | keys in `config/secrets.env.example`: provider key (`OS_*` / `HCLOUD_TOKEN`), `CLOUDFLARE_DNS_TOKEN`, `B2_KEY_ID`, `B2_APP_KEY`; plus `SSH_PUBKEY_PATH` and `ADMIN_IP` (not secret). Scoped keys, not account master keys. |
+| Laptop secrets file `C:/projects/secrets/pd.env` | the admin's laptop, never in git | the admin | keys in `config/secrets.env.example`: provider key (`OS_*` / `HCLOUD_TOKEN`), `CLOUDFLARE_DNS_TOKEN` (no B2 key: the server's is in `/etc/pd/rclone.env`); plus `SSH_PUBKEY_PATH` and `ADMIN_IP` (not secret). Scoped keys, not account master keys. |
 | `/opt/pd/.env` | the server, root, mode 600; copy in the vault | root | app settings: `POSTGRES_PASSWORD`, `PD_APP_PASSWORD`, API keys of the integrations. Read by docker compose; never printed by `deploy.sh`. |
 | `/etc/pd/borg.pass` | the server, root, 0400; copy in the vault | root | Borg repository passphrase, read through `BORG_PASSCOMMAND` only. |
 | Borg key export | the vault only (`/etc/pd/borg-key.txt` is shredded after `backup.sh --init`) | admins | needed to open a repository when the key in the repo header is lost with the server |

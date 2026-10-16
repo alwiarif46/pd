@@ -24,6 +24,8 @@ guard_no_luksformat
 np() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }  # native path for python.exe
 TOKEN="hz-TEST-token-$(printf '%040d' 7)"     # 64 chars like a real token; must never leak
 export PD_HCLOUD_POLL=0
+# fail closed until start_fake runs: a dead loopback port, never the real API
+export PD_HCLOUD_API="http://127.0.0.1:9/v1" PD_CLOUDFLARE_API="http://127.0.0.1:9/client/v4"
 
 # tenant variants -------------------------------------------------------------------------------
 BASE_T="config/tenants/hetzner.example.toml"

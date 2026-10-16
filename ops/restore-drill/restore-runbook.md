@@ -49,17 +49,23 @@ sudo infra/scripts/deploy.sh              # builds/pulls the images; the migrati
 sudo infra/scripts/restore.sh --list
 sudo infra/scripts/restore.sh --archive latest --confirm
 ```
-Then set the `pd_app` password (plan 01 s6: it is not in the dump). `restore.sh` takes a safety backup first, recreates
-the database, and streams `borg extract` into `pg_restore --single-transaction`.
+Then set the `pd_app` password (plan 01 s6: it is not in the dump). `restore.sh` first checks the archive (`latest` is the
+newest regular `pd-<time>` archive, never a `-pre-restore` copy; the archive must read back through
+`pg_restore --file=/dev/null`, or nothing is touched), takes a safety backup, recreates the database, and streams
+`borg extract` into `pg_restore --single-transaction`.
 
 ## 5. Checks, then DNS
 
 1. `curl --resolve <domain>:443:<new IPv4> https://<domain>/health -k` (origin certificate; Cloudflare is bypassed).
 2. Log in, open a pursuit, check the migrations: `drizzle.__drizzle_migrations` count equals the entries in
    `packages/core/src/db/migrations/meta/_journal.json`.
-3. Point DNS: `python infra/dns/cloudflare-dns.py apply --from-provider --tenant <file>` (proxied records), then
+3. Point DNS: `python infra/dns/cloudflare-dns.py apply --from-provider --tenant <file> --confirm` (proxied records;
+   `--confirm` because the existing records change to the new server), then
    `python infra/dns/cloudflare-dns.py check --from-provider --tenant <file>`.
-4. `sudo infra/scripts/backup.sh --init` is **not** needed if the repository came back; run `sudo infra/scripts/backup.sh`
-   once by hand and check `pd/last-offsite-ok` in B2 moved.
+4. `sudo infra/scripts/backup.sh --init` is **not** needed if the repository came back. If the old server can still be
+   reached, disable its timer first (`sudo systemctl disable --now pd-backup.timer pd-backup-check.timer`): two servers
+   must never sync one B2 prefix. Then run `sudo infra/scripts/backup.sh --adopt-offsite` once by hand (B2's
+   `pd/last-offsite-ok` names the old machine, so a plain sync is refused), check that the marker moved and names this
+   machine (`machine=` = `/etc/machine-id`), and install the timers: `sudo ops/install.sh`.
 5. Log the incident and the restore time in `STATE.md`; update `config/tenant.toml` if the provider changed
    (counsel check for the hosting subprocessor: H-09).

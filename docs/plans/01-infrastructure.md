@@ -95,7 +95,7 @@ That leaves about 2.4 GB for the OS, nginx, the sandbox runner, and disk cache.
 
 | What | How | Kept |
 |---|---|---|
-| Database | Built: hourly `pg_dump -Fc` into encrypted Borg on `/mnt/pdbackup`, then an rclone crypt copy to Backblaze B2 (`infra/scripts/backup.sh`, `ops/backup/`). WAL archiving is not built | 2 days hourly, 30 days daily |
+| Database | Built: hourly `pg_dump -Fc` into encrypted Borg on `/mnt/pdbackup` (`borg create --content-from-command`: a failed dump leaves no archive; every new archive is read back through `pg_restore --file=/dev/null`, and a bad one is deleted before prune), then an rclone crypt copy to Backblaze B2 (`infra/scripts/backup.sh`, `ops/backup/`). WAL archiving is not built | 2 days hourly, 30 days daily |
 | Live files | Not backed up. Users hold the originals, and files past their live date go to the archive | n/a |
 | Archive | Originals and viewer copies past their live date, encrypted, in off-server object storage (03 s5, 07 s2). This is the only off-server copy of files | Archive lifetime (07 s2) |
 | Server | Provider backups and snapshots stay **off**: they would copy the LUKS keyfiles on the root disk | n/a |
@@ -105,7 +105,36 @@ That leaves about 2.4 GB for the OS, nginx, the sandbox runner, and disk cache.
 - 🟨 **OPEN:** archive provider (for example another region of the hosting provider, or Backblaze B2). It becomes a subprocessor (07 s4).
 - Archive files are encrypted before they leave the server. The key is held outside the archive: in a root-only file on the server, plus an offline copy Amaan holds.
 
-Restore test, once a month: `ops/restore-drill/drill.sh run` restores the latest Borg archive (or the B2 copy, `--from-offsite`) into a throwaway Postgres container, times it against the RTO, and prints a log line. Restore one archived file the same day.
+Restore test, once a month: `ops/restore-drill/drill.sh run` restores the latest Borg archive (or the B2 copy, `--from-offsite`) into a throwaway Postgres container, times it against the RTO, and prints a log line. Restore one archived file the same day. CI runs the SQL half of it on every push (`ops/ci/restore-drill-ci.sh`, job `restore-drill`: a real `pg_dump -Fc` of the migrated schema through restore.sh's validation and SQL path into a second Postgres). The first real drill against a Borg archive from the server is the acceptance test of this section.
+
+`restore.sh --archive latest` takes the newest **regular** archive (`pd-<UTC time>`), never a `-pre-restore` safety copy or a `.checkpoint`, and validates it before it stops anything or drops the database.
+
+Backup monitoring: `pd-backup-check.timer` (every 30 minutes, `ops/backup/backup-age-check.sh`) fails when the newest regular archive or `pd/last-offsite-ok` (written after a complete B2 sync) is older than `[backup] max_backup_age_hours`. A failure of it or of `pd-backup.service` starts `pd-alert@<unit>.service` (`OnFailure=`), which records `/var/lib/pd/alerts/<unit>.failed`, logs at priority err, and calls `/etc/pd/alert-hook` if present. The notifier behind that hook is HUMAN-TODO H-11.
+
+One server per B2 prefix: `pd/last-offsite-ok` names the machine that wrote it (`/etc/machine-id`), and `offsite-sync.sh` refuses to sync when B2's marker came from another machine. After a provider switch or a restore the new server takes the prefix over once with `backup.sh --adopt-offsite`, after `pd-backup.timer` is disabled on the old one (`infra/switch-provider.sh plan`, step 0).
+
+### 4.1 Moving data off the old named volumes
+
+Servers deployed before the data moved to the encrypted volume keep Postgres and Redis in Docker named volumes (`<project>_postgres_data`, `<project>_redis_data`, on the root disk) and the uploaded files inside the api and worker containers (`/data/files` had no mount). `infra/scripts/deploy.sh` finds those by label (`com.docker.compose.volume=postgres_data` / `redis_data`, any project name) and refuses while they exist, or while an api/worker container has no bind mount on `/data/files`, because recreating the containers would delete the files. Move the data once, by hand, with the LUKS volumes mounted (`infra/luks/README.md`):
+
+```bash
+cd /opt/pd
+sudo infra/scripts/backup.sh --no-offsite          # only if this server already has the Borg repository; otherwise take a pg_dump first
+# 1. the uploaded files, while the old containers still exist (they live in the container layer)
+sudo docker cp "$(sudo docker ps -aq --filter label=com.docker.compose.service=api | head -1)":/data/files/. /mnt/pddata/files/
+sudo chown -R 1000:1000 /mnt/pddata/files
+# 2. stop the whole stack, so nothing writes to the volumes
+sudo docker compose --env-file .env -f infra/docker-compose.yml stop
+# 3. copy the volumes (names from: sudo docker volume ls --filter label=com.docker.compose.volume)
+sudo docker run --rm -v <project>_postgres_data:/from -v /mnt/pddata/postgres:/to alpine cp -a /from/. /to/
+sudo docker run --rm -v <project>_redis_data:/from -v /mnt/pddata/redis:/to alpine cp -a /from/. /to/
+# 4. check the copies (sizes, file counts), then record the move; the old volumes may stay as a fallback
+sudo du -sh /mnt/pddata/postgres /mnt/pddata/redis /mnt/pddata/files
+sudo touch /mnt/pddata/.migrated-from-named-volumes
+sudo infra/scripts/deploy.sh
+```
+
+If the worker ever wrote files the api did not see, copy its `/data/files` the same way. Remove the old volumes (`docker volume rm`) only after a successful deploy and a restore drill from the new place; log the move in `STATE.md`.
 
 ## 5. Monitoring and alerts
 
@@ -114,6 +143,7 @@ Restore test, once a month: `ops/restore-drill/drill.sh run` restores the latest
 - Daily AI spend report from the usage table (see 04-ai-pipeline.md). Alert when spend passes 80% of the monthly cap.
 - Daily Telnyx SMS spend alert (06 s1).
 - Alert on failed archive moves, failed restores, and sandbox jobs stopped by a limit.
+- Built: backup age check and `OnFailure=` alerts for the backup units (s4, "Backup monitoring"); the notifier is HUMAN-TODO H-11.
 - Error tracking for api and worker. 🟨 **OPEN:** service choice. The service must scrub request bodies, headers, and cookies before sending, since request bodies can hold document text and phone numbers.
 - Logs: Docker logs rotated daily, kept 14 days. Logs never contain document text, resumes, or phone numbers.
 
@@ -121,7 +151,7 @@ Restore test, once a month: `ops/restore-drill/drill.sh run` restores the latest
 
 - Code in a private GitHub repository under the Shaavir organization.
 - GitHub Actions: run tests (including the offline infrastructure tests), build Docker images. Pushing images to GitHub Container Registry is available but off by default: manual dispatch, or the repository variable `PD_PUSH_IMAGES=true` (question Q-16).
-- Deploy: a manual `deploy` job (behind the `production` environment, inert without its secrets) SSHes to the server as the `pddeploy` user, whose key can only run `deploy.sh --ci` through a forced command (`infra/server/deploy-user.sh`). `deploy.sh` pulls images (`--pull-tag`) or builds them, then `docker compose up -d`. Database migrations run as the owner role `pd_owner` in a separate step before the api restarts. The running app uses `pd_app` (02 s4).
+- Deploy: a manual `deploy` job (behind the `production` environment, inert without its secrets) SSHes to the server as the `pddeploy` user, whose key can only run `deploy.sh --ci` through a forced command (`infra/server/deploy-user.sh`). Only a dispatch from `master` deploys (the `production` environment's branch policy is `master` only, H-07), the job waits for `push-images`, and `deploy.sh --ci` accepts only `master` or a release tag `v<N>[.<N>[.<N>]]` (checked before any git command). `:master` images are tagged only from `refs/heads/master`. `deploy.sh` pulls images (`--pull-tag`) or builds them, then `docker compose up -d`. Database migrations run as the owner role `pd_owner` in a separate step before the api restarts. The running app uses `pd_app` (02 s4).
 - `infra/scripts/deploy.sh` does this in order: pull, build images (build context is the repo root), start `postgres` and `redis`, run `db:migrate` as `pd_owner` in the one-off `migrate` compose service, then `docker compose up -d`. A failed migration stops the deploy before the api and worker restart. The script never prints secrets; they come from `/opt/pd/.env` (root-only, mode 600).
 - **Setting the `pd_app` password (out of band, never in a script or a migration).** The migration creates `pd_app` with `LOGIN` and no password. After the first successful migration on a server, set it once from the server shell, reading the value from the root-only env file so it never lands in shell history or a process list:
 

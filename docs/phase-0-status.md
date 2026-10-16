@@ -29,7 +29,7 @@
 
 From the plan, Phase 0 requires:
 
-- [x] Server at the provider set in `config/tenant.toml` (pluggable hosting; provider OPEN, H-02), Ubuntu, firewall, Docker, nginx, Cloudflare DNS for the subdomain. Root and SSH: Amaan only until decided (01 s1).
+- [ ] Server at the provider set in `config/tenant.toml` (pluggable hosting; provider OPEN, H-02; scripts built, no server yet), Ubuntu, firewall, Docker, nginx, Cloudflare DNS for the subdomain. Root and SSH: Amaan only until decided (01 s1).
 - [x] Compose layout with the `sandbox` service and its host runner (01 s2.1). clamd limits at 300 MB or more and `ConcurrentDatabaseReload no`.
 - [x] Database roles `pd_owner`, `pd_app`, and `pd_system` (02 s4).
 - [x] GitHub repository, CI, container registry, staging environment (a separate small VPS if chosen; 🟨 **OPEN** in 01 s6).

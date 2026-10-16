@@ -5,12 +5,14 @@ Design: `docs/plans/01-infrastructure.md` s4. Scripts run on the server, as root
 
 | File | What it does |
 |---|---|
-| `infra/scripts/backup.sh` | `pg_dump -Fc` piped into `borg create` (encrypted repo `/mnt/pdbackup/borg`), prune, compact, then `offsite-sync.sh`. `--init` creates the repository. Hourly via `pd-backup.timer`. |
+| `infra/scripts/backup.sh` | `borg create --content-from-command -- pg_dump -Fc` (encrypted repo `/mnt/pdbackup/borg`; a failed dump leaves no archive), the new archive read back through `pg_restore --file=/dev/null` (a bad one is deleted), prune, compact, then `offsite-sync.sh`. `--init` creates the repository. Hourly via `pd-backup.timer`. |
 | `infra/scripts/restore.sh` | `--list`, `--archive NAME\|latest --confirm`: safety backup, stop api/worker, recreate the database, roles, `borg extract --stdout \| pg_restore`, start. No file is written to `/tmp`. |
-| `offsite-sync.sh` | `rclone sync` of the Borg repository to `b2crypt:borg`, then `pd/last-offsite-ok` LAST. Refuses on the guards listed in its header. |
+| `offsite-sync.sh` | `rclone sync` of the Borg repository to `b2crypt:borg`, then `pd/last-offsite-ok` (time, host, machine id) LAST. Refuses on the guards listed in its header, including a B2 marker written by another machine (`--adopt-offsite` takes the prefix over once, after a move). |
+| `backup-age-check.sh` | fails when the newest regular archive or `pd/last-offsite-ok` is older than `[backup] max_backup_age_hours`; `pd-backup-check.timer`, every 30 min. |
+| `alert.sh` | `pd-alert@<unit>.service` (from `OnFailure=`): records `/var/lib/pd/alerts/<unit>.failed`, logs at priority err, calls `/etc/pd/alert-hook` if present (notifier: HUMAN-TODO H-11). `--status`, `--clear UNIT`. |
 | `rclone-setup.sh` | renders `/etc/pd/rclone.conf` (no secrets) and writes `/etc/pd/rclone.env` (0600) from hidden prompts. |
 | `rclone.conf.template` | remotes `b2` and `b2crypt` (`b2:{{BUCKET}}/{{CRYPT_PREFIX}}`), `hard_delete = false`. |
-| `../systemd/pd-backup.{service,timer}.template`, `../install.sh` | the hourly timer. |
+| `../systemd/pd-backup{,-check}.{service,timer}.template`, `../systemd/pd-alert@.service.template`, `../install.sh` | the hourly backup timer, the age-check timer and the alert unit. |
 
 ## What is backed up
 

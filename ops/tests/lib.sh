@@ -59,12 +59,22 @@ guard_fakes() {
     case "$f" in *.py | *__pycache__*) continue ;; esac
     [[ -x "$f" ]] || { printf 'GUARD  fake is not executable in the working tree: %s\n' "$f"; missing=1; }
   done < <(find "$REPO" -path '*/tests/fakes/*' -type f -not -path '*/node_modules/*' 2>/dev/null)
-  if command -v git >/dev/null 2>&1 && git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+  # Under sudo (CI runs test-root-container.sh as root) git refuses a checkout owned by another user ("dubious
+  # ownership") and rev-parse fails: the index check would be skipped silently. So the repository is named safe on
+  # the command line for these read-only calls, and a checkout git still cannot read aborts the suite.
+  local git_ro=(git -c "safe.directory=$REPO" -C "$REPO")
+  if [[ -e "$REPO/.git" ]] && ! command -v git >/dev/null 2>&1; then
+    echo "ABORT: $REPO is a git checkout but git is not installed: cannot check the fakes' mode in the index (Drive D-150)"; exit 1
+  fi
+  if [[ -e "$REPO/.git" ]] && ! "${git_ro[@]}" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "ABORT: git cannot read $REPO (as $(id -un 2>/dev/null || echo ?)): cannot check the fakes' mode in the index (Drive D-150)"; exit 1
+  fi
+  if command -v git >/dev/null 2>&1 && "${git_ro[@]}" rev-parse --git-dir >/dev/null 2>&1; then
     while IFS=$'\t' read -r meta f; do
       mode="${meta%% *}"
       case "$f" in */tests/fakes/*.py | */tests/fakes/__pycache__/*) continue ;; */tests/fakes/*) ;; *) continue ;; esac
       [[ "$mode" == 100755 ]] || { printf 'GUARD  fake is mode %s in the git index, need 100755: %s (run ops/ci/set-exec-bits.sh)\n' "$mode" "$f"; missing=1; }
-    done < <(git -C "$REPO" ls-files -s)
+    done < <("${git_ro[@]}" ls-files -s)
   fi
   if (( missing )); then
     echo "ABORT: a test fake without the executable bit would let the real tool run (Drive D-150). Run ops/ci/set-exec-bits.sh."

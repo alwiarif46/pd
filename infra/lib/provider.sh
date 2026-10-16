@@ -126,8 +126,7 @@ provider_subprocessor() {
   v="$(tenant_get infra.subprocessor "")"
   if [[ -z "${v// /}" ]]; then v="$(provider_conf subprocessor "$p")"; fi
   [[ -n "${v// /}" ]] || pd_die "set [infra] subprocessor (the hosting company's legal name) for provider '$p'"
-  printf '%s
-' "$v"
+  printf '%s\n' "$v"
 }
 
 # What to do instead when an adapter lacks a verb (printed by provider_dispatch).

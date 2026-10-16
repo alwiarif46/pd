@@ -28,10 +28,14 @@ APPSECRET="appcred-SECRET-value-9f8e7d6c"
 HOST="$("$PY" infra/lib/tenant.py get tenant.hostname)"
 KEYNAME="$("$PY" infra/lib/tenant.py get tenant.ssh_key_name)"
 
+DEAD_SINK="http://127.0.0.1:9"
 setup() {
   S="$TMP/$1"; rm -rf "$S"; mkdir -p "$S"
   export FAKE_CALLS="$S/calls" FAKE_OS_STATE="$S/os.json" PATH="$FAKES:$ORIG_PATH" PD_SECRETS="$S/secrets.env" TMPDIR="$S"
-  unset FAKE_OS_FAIL FAKE_OS_PORT_SECURITY OS_CLOUD OS_APPLICATION_CREDENTIAL_ID OS_APPLICATION_CREDENTIAL_SECRET PD_TENANT PD_ETC PD_HCLOUD_API PD_CLOUDFLARE_API HCLOUD_TOKEN
+  unset FAKE_OS_FAIL FAKE_OS_PORT_SECURITY OS_CLOUD OS_APPLICATION_CREDENTIAL_ID OS_APPLICATION_CREDENTIAL_SECRET PD_TENANT PD_ETC HCLOUD_TOKEN
+  # Fail closed: until a test starts a fake, the API bases point at a dead loopback port (9, discard), so a test that
+  # forgot its fake gets "connection refused" and can never reach api.hetzner.cloud or api.cloudflare.com.
+  export PD_HCLOUD_API="$DEAD_SINK/v1" PD_CLOUDFLARE_API="$DEAD_SINK/client/v4"
   : >"$FAKE_CALLS"
   # a throwaway ed25519 key made for this test run only (deleted with the temp dir)
   ssh-keygen -q -t ed25519 -N "" -C t@test -f "$S/key" >/dev/null 2>&1 \
@@ -350,7 +354,7 @@ out="$("${CFPY[@]}" apply --from-provider --tenant "$(np "$S/ssh.toml")" 2>&1)";
 out="$("${CFPY[@]}" apply --from-provider --dry-run --tenant "$(np "$S/ssh.toml")" 2>&1)"
 grep -q "from the 'ssh' adapter" <<<"$out" && ok "dry-run --from-provider names the adapter and makes no call" || bad "cf from-provider dry" "$out"
 [[ -n "$CF_PID" ]] && { kill "$CF_PID" 2>/dev/null; CF_PID=""; }
-unset PD_CLOUDFLARE_API PD_BASH
+export PD_CLOUDFLARE_API="$DEAD_SINK/client/v4"; unset PD_BASH
 
 
 # ------------------------------------------------------------------ provider layer
