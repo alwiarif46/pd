@@ -628,7 +628,7 @@ badsyntax=""
 for f in "${SH[@]}"; do bash -n "$f" 2>"$TMP/syn.txt" || badsyntax+="$f: $(head -1 "$TMP/syn.txt")"$'\n'; done
 [[ -z "$badsyntax" ]] && ok "bash -n on every ops/ and infra/scripts script (${#SH[@]} files)" || bad "bash -n" "$badsyntax"
 if command -v shellcheck >/dev/null 2>&1; then
-  if shellcheck -S warning -x -P SCRIPTDIR "${SH[@]}" >"$TMP/sc.txt" 2>&1; then ok "shellcheck clean (ops, infra/scripts)"; else bad "shellcheck" "$(head -20 "$TMP/sc.txt")"; fi
+  if shellcheck -S warning -x -P SCRIPTDIR "${SH[@]}" >"$TMP/sc.txt" 2>&1; then ok "shellcheck clean (ops, infra/scripts)"; else bad "shellcheck" "$(cat "$TMP/sc.txt")"; fi
 else
   skip "shellcheck not installed"
 fi

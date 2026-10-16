@@ -303,14 +303,14 @@ start_cf() { # start_cf: a fresh fake Cloudflare API with an empty zone
   "$PY" infra/tests/fakes/cloudflare_fake.py "$(np "$S/cf.json")" "$(np "$S/cf.calls")" "$(np "$S/cf.port")" "$CFTOKEN" </dev/null >/dev/null 2>&1 &
   CF_PID=$!
   local _; for _ in $(seq 1 50); do [[ -s "$S/cf.port" ]] && break; sleep 0.1; done
-  export PD_CLOUDFLARE_API="http://127.0.0.1:$(cat "$S/cf.port")/client/v4"
+  PD_CLOUDFLARE_API="http://127.0.0.1:$(cat "$S/cf.port")/client/v4"; export PD_CLOUDFLARE_API
 }
 cf() { "$PY" -c "import json,sys; d=json.load(open(sys.argv[2])); print(eval(sys.argv[1]))" "$1" "$(np "$S/cf.json")"; }
 CFPY=("$PY" infra/dns/cloudflare-dns.py)
 IP4=93.184.216.34 IP6=2606:2800:220:1:248:1893:25c8:1946
 setup dns
 printf 'CLOUDFLARE_DNS_TOKEN=%s\n' "$CFTOKEN" >"$S/secrets.env"
-export PD_BASH="$(np "$(command -v bash)")"
+PD_BASH="$(np "$(command -v bash)")"; export PD_BASH
 out="$("${CFPY[@]}" apply --ipv4 $IP4 --ipv6 $IP6 --dry-run 2>&1)"; rc=$?
 [[ $rc == 0 ]] && grep -q "proxied: true" <<<"$out" && grep -q "TTL 1" <<<"$out" && ! grep -qF -- "$CFTOKEN" <<<"$out" && ok "cloudflare-dns apply --dry-run shows proxied records, TTL 1, no token" || bad "cf dry-run" "$out"
 ! grep -qE "CAA|letsencrypt" <<<"$out" && ok "no CAA / ACME records (origin certificate, no certbot)" || bad "CAA in plan"
@@ -324,7 +324,7 @@ out="$("${CFPY[@]}" apply --ipv4 $IP4 --ipv6 $IP6 2>&1)"; rc=$?
 n2="$(grep -cE '^(POST|PATCH)' "$S/cf.calls")"
 out="$("${CFPY[@]}" apply --ipv4 93.184.216.35 --ipv6 $IP6 2>&1)"; rc=$?
 [[ $rc == 1 && "$(grep -cE '^(POST|PATCH)' "$S/cf.calls")" == "$n2" ]] && grep -q "would update: A" <<<"$out" && grep -q "Re-run with --confirm" <<<"$out" \
-  && [[ "$(cf '[r["content"] for r in d["records"] if r["type"]=="A"][0]')" == $IP4 ]] && ok "changing an existing record without --confirm is refused before any write" || bad "cf update without confirm" "rc=$rc $out"
+  && [[ "$(cf '[r["content"] for r in d["records"] if r["type"]=="A"][0]')" == "$IP4" ]] && ok "changing an existing record without --confirm is refused before any write" || bad "cf update without confirm" "rc=$rc $out"
 out="$("${CFPY[@]}" apply --ipv4 93.184.216.35 --ipv6 $IP6 --confirm 2>&1)"
 [[ "$(cf '[r["content"] for r in d["records"] if r["type"]=="A"][0]')" == 93.184.216.35 ]] && grep -q "^updated" <<<"$out" && ok "with --confirm a changed address updates the record in place (never deletes)" || bad "cf update" "$out"
 "${CFPY[@]}" apply --ipv4 93.184.216.35 --ipv6 $IP6 >/dev/null 2>&1
@@ -367,7 +367,7 @@ badsyntax=""
 for f in "${SH[@]}"; do bash -n "$f" 2>"$TMP/syn.txt" || badsyntax+="$f: $(head -1 "$TMP/syn.txt")"$'\n'; done
 [[ -z "$badsyntax" ]] && ok "bash -n on every infra/ and ops/ script (${#SH[@]} files)" || bad "bash -n" "$badsyntax"
 if command -v shellcheck >/dev/null 2>&1; then
-  if shellcheck -S warning -x -P SCRIPTDIR "${SH[@]}" >"$TMP/sc.txt" 2>&1; then ok "shellcheck clean (infra, ops)"; else bad "shellcheck" "$(head -20 "$TMP/sc.txt")"; fi
+  if shellcheck -S warning -x -P SCRIPTDIR "${SH[@]}" >"$TMP/sc.txt" 2>&1; then ok "shellcheck clean (infra, ops)"; else bad "shellcheck" "$(cat "$TMP/sc.txt")"; fi
 else
   skip "shellcheck not installed"
 fi
