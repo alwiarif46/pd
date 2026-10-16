@@ -1,0 +1,10 @@
+{
+  "sourceCommit": "fa5ad4c28d1a26142916d687568427a1c57c2ff2",
+  "files": [
+    "BidSettings.tsx",
+    "DateChangePrompt.tsx",
+    "sample-data.ts",
+    "types.ts"
+  ],
+  "keepLocal": []
+}
