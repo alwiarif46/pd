@@ -1,6 +1,7 @@
 import type {
   AmendmentLinkDto,
   BidDto,
+  BidFactDto,
   DocumentDto,
   JobDto,
   MeDto,
@@ -8,6 +9,7 @@ import type {
   OrgPayloadDto,
   RfpCreditDto,
   ScheduleActivityDto,
+  TabProposalDto,
 } from '@/api';
 import type { ScheduleActivity } from '@/types';
 
@@ -216,6 +218,46 @@ export function scheduleActivity(over: Partial<ScheduleActivity> = {}): Schedule
     sourcePageEnd: null,
     sourceQuote: null,
     amendment: { kind: 'original' },
+    ...over,
+  };
+}
+
+export function bidFactDto(over: Partial<BidFactDto> = {}): BidFactDto {
+  return {
+    ...base,
+    bidId: 'bid-1',
+    id: 'fact-1',
+    field: 'Agency',
+    value: 'VA',
+    confirmed: true,
+    factKey: 'agency',
+    documentId: null,
+    sourcePage: null,
+    sourcePageEnd: null,
+    sourceQuote: null,
+    quoteVerified: false,
+    amendmentNo: 0,
+    supersedeStatus: null,
+    supersededByRowId: null,
+    changedByAmendment: null,
+    origin: 'user',
+    confidence: null,
+    flags: null,
+    ...over,
+  };
+}
+
+/** An open tab proposal (overview or schedule) around `row`. */
+export function tabProposalDto<T>(row: T, over: Partial<TabProposalDto<T>> = {}): TabProposalDto<T> {
+  return {
+    linkId: 'link-a',
+    linkIds: ['link-a'],
+    amendmentId: 'amd-2',
+    amendmentNo: 2,
+    oldRowIds: [],
+    sourcePage: null,
+    sourceQuote: null,
+    row,
     ...over,
   };
 }
