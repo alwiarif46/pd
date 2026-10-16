@@ -56,12 +56,21 @@ export interface ScheduleTemplateOption {
   description: string;
 }
 
+/** A due date and the one it replaces, as the schedule math takes them. */
+export interface DueMove {
+  previousDue: string;
+  nextDue: string;
+}
+
 /**
- * A due-date change waiting for the shift, scale, or keep answer. From Bid settings it has no
- * source; PR5 adds amendment changes with the page and quote they came from.
+ * A due-date change waiting for the shift, scale, or keep answer. From Bid settings (origin 'user') it has no
+ * source; an amendment's change carries the page and quote it came from.
  */
 export interface ScheduleDateChange {
-  previousDue: string;
+  /** 'user': "Change due date" here; 'amendment': the tab's pendingDateChange (the answer sets the due date). */
+  origin: 'user' | 'amendment';
+  /** null only for an amendment when the bid had no due date: only "Keep dates" applies. */
+  previousDue: string | null;
   nextDue: string;
   amendmentNo: number | null;
   sourcePage: number | null;
@@ -109,12 +118,20 @@ export interface ScheduleTabProps {
   onChangeDueDate: (nextDue: string) => void;
   onOpenRow: (id: string) => void;
   onOpenSource: (id: string) => void;
+  /** Opens the source of the amendment date change (page and quote). */
+  onOpenDateChangeSource: () => void;
   onExport: (format: ScheduleExportFormat) => void;
 }
 
 /** 09 s5.11 DateChangePrompt as the schedule draws it, with what each answer would do. */
-export interface ScheduleDateChangePromptProps extends DateChangePromptProps {
+export interface ScheduleDateChangePromptProps extends Omit<DateChangePromptProps, 'previousDue'> {
+  /** null when an amendment set the due date on a bid that had none: only "Keep dates" applies. */
+  previousDue: string | null;
+  origin: 'user' | 'amendment';
   amendmentNo: number | null;
+  sourcePage: number | null;
+  sourceQuote: string | null;
+  onOpenSource: () => void;
   /** From the container (planScheduleAdjust); null shows the fallback sentences. */
   summary: Record<DateChangeMode, string> | null;
   workdaysOnly: boolean;

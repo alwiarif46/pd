@@ -11,9 +11,13 @@ function setup(over: Partial<ScheduleDateChangePromptProps> = {}) {
   render(
     <DateChangePrompt
       open
+      origin="user"
       previousDue="2026-11-25"
       nextDue="2026-12-02"
       amendmentNo={null}
+      sourcePage={null}
+      sourceQuote={null}
+      onOpenSource={vi.fn()}
       summary={null}
       workdaysOnly
       busy={false}
@@ -64,9 +68,13 @@ describe('DateChangePrompt', () => {
     const { unmount } = render(
       <DateChangePrompt
         open
+        origin="user"
         previousDue="2026-11-25"
         nextDue="2026-12-02"
         amendmentNo={null}
+        sourcePage={null}
+        sourceQuote={null}
+        onOpenSource={vi.fn()}
         summary={{ shift: 'S sentence.', scale: 'C sentence.', keep: 'K sentence.' }}
         workdaysOnly
         busy={false}
@@ -119,6 +127,55 @@ describe('DateChangePrompt', () => {
   it('names the amendment in the title', () => {
     setup({ amendmentNo: 3 });
     expect(screen.getByText('Amendment 3 moved the due date')).toBeTruthy();
+  });
+
+  it('names an amendment without a number', () => {
+    setup({ origin: 'amendment', amendmentNo: null });
+    expect(screen.getByText('An amendment moved the due date')).toBeTruthy();
+  });
+
+  it('says what an amendment answer does, and shows its quote and source', async () => {
+    const user = userEvent.setup();
+    const onOpenSource = vi.fn();
+    setup({
+      origin: 'amendment',
+      amendmentNo: 3,
+      sourcePage: 4,
+      sourceQuote: 'Proposals are now due December 2.',
+      onOpenSource,
+    });
+    expect(screen.getByText("Your answer sets the bid's due date to Wed, Dec 2, 2026.")).toBeTruthy();
+    expect(screen.getByText('“Proposals are now due December 2.”')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Open source for Amendment 3, page 4' }));
+    expect(onOpenSource).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows no quote or source for the user\'s own change', () => {
+    setup();
+    expect(screen.queryByText(/Your answer sets/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Open source/ })).toBeNull();
+    expect(screen.queryByText('No source')).toBeNull();
+  });
+
+  it('offers only Keep dates when the bid had no due date', async () => {
+    const user = userEvent.setup();
+    const { onChoose } = setup({ origin: 'amendment', previousDue: null, amendmentNo: 3 });
+    expect(screen.getByText('Amendment 3 set the due date')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Amendment 3 sets the due date to Wed, Dec 2, 2026. The bid had no due date, so the schedule dates stay as they are.',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Shift dates' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Scale dates' })).toBeNull();
+    expect(document.activeElement).toBe(button('Keep dates'));
+    await user.click(button('Keep dates'));
+    expect(onChoose).toHaveBeenCalledWith('keep');
+  });
+
+  it('names an amendment that set the due date without a number', () => {
+    setup({ origin: 'amendment', previousDue: null, amendmentNo: null });
+    expect(screen.getByText('An amendment set the due date')).toBeTruthy();
   });
 
   it('disables every button while busy', () => {

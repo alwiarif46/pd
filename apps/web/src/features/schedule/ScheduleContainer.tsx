@@ -5,7 +5,7 @@ import { RowDetail } from '@/components/RowDetail';
 import { SourceViewer } from '@/components/SourceViewer';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import type { ActivityDraft, DateChangeMode, ScheduleDateChange, ScheduleExportFormat, ScheduleTemplateId } from '@/types';
+import type { ActivityDraft, DateChangeMode, DueMove, ScheduleDateChange, ScheduleExportFormat, ScheduleTemplateId } from '@/types';
 import { messageOf } from '@/features/shared/messages';
 import { useRequiredShell } from '@/features/shell/bid-context';
 import { jobsKey } from '@/features/shell/controller';
@@ -62,6 +62,8 @@ interface Source {
 interface PendingChange {
   bidId: string;
   change: ScheduleDateChange;
+  /** The user's move, typed for resolveDateChange (the change above keeps previousDue nullable for amendments). */
+  due: DueMove;
   /** What earlier tries already wrote (controller.ts DateChangeProgress). */
   progress: DateChangeProgress;
   /** A try saved the new due date but did not move the schedule. */
@@ -155,7 +157,10 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
   const holidays = useMemo(() => holidaysFor({ today, startDate, dueDate, activities }), [today, startDate, dueDate, activities]);
   const hasAiRows = activities.some((a) => a.origin === 'ai');
   const summary = useMemo(
-    () => (dateChange ? dateChangeSummary(activities, dateChange, { anchor: startDate, workdaysOnly }) : null),
+    () =>
+      dateChange && dateChange.previousDue !== null
+        ? dateChangeSummary(activities, { previousDue: dateChange.previousDue, nextDue: dateChange.nextDue }, { anchor: startDate, workdaysOnly })
+        : null,
     [activities, dateChange, startDate, workdaysOnly],
   );
 
@@ -261,7 +266,8 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     if (next === dueDate || busyRef.current.has(bidId)) return;
     setPending({
       bidId,
-      change: { previousDue: dueDate, nextDue: next, amendmentNo: null, sourcePage: null, sourceQuote: null },
+      change: { origin: 'user', previousDue: dueDate, nextDue: next, amendmentNo: null, sourcePage: null, sourceQuote: null },
+      due: { previousDue: dueDate, nextDue: next },
       progress: NO_PROGRESS,
       dueSaved: false,
     });
@@ -278,7 +284,7 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     busyRef.current.add(record.bidId);
     setBusyBids((ids) => [...ids, record.bidId]);
     try {
-      const outcome = await resolveDateChange(api, record.bidId, record.change, mode, record.progress);
+      const outcome = await resolveDateChange(api, record.bidId, record.due, mode, record.progress);
       switch (outcome.kind) {
         case 'done':
           toast.success(doneMessage(outcome.result));
@@ -391,6 +397,7 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
         onChangeDueDate={onChangeDueDate}
         onOpenRow={(id) => shell.openRow(id)}
         onOpenSource={onOpenSource}
+        onOpenDateChangeSource={() => undefined} // wired with the amendment answer (next step)
         onExport={onExport}
       />
     );

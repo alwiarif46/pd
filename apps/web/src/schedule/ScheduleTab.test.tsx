@@ -51,6 +51,7 @@ function renderTab(over: Partial<ScheduleTabProps> = {}) {
     onChangeDueDate: vi.fn(),
     onOpenRow: vi.fn(),
     onOpenSource: vi.fn(),
+    onOpenDateChangeSource: vi.fn(),
     onExport: vi.fn(),
     ...over,
   };
@@ -421,7 +422,7 @@ describe('date-change prompt', () => {
   it('shows while a change is waiting and answers through the callbacks', async () => {
     const { user, props } = renderTab({
       activities: [aiRow],
-      dateChange: { previousDue: '2026-11-25', nextDue: '2026-12-02', amendmentNo: 2, sourcePage: null, sourceQuote: null },
+      dateChange: { origin: 'amendment', previousDue: '2026-11-25', nextDue: '2026-12-02', amendmentNo: 2, sourcePage: null, sourceQuote: null },
     });
     expect(screen.getByText('Amendment 2 moved the due date')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Scale dates' }));

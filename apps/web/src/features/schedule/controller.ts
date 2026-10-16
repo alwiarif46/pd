@@ -1,6 +1,6 @@
 import * as api from '@/api';
 import { ApiError, type AdjustScheduleDto, type ScheduleActivityDto } from '@/api';
-import type { DateChangeMode, ScheduleDateChange } from '@/types';
+import type { DateChangeMode, DueMove } from '@/types';
 import { messageOf } from '@/features/shared/messages';
 import { plural } from '@/schedule/format';
 import { dayOf } from './derive';
@@ -96,7 +96,7 @@ export function scheduleMoved(before: readonly ActivitySnapshot[], now: readonly
 export async function resolveDateChange(
   deps: Pick<ScheduleApi, 'getBid' | 'updateBid' | 'getTab' | 'adjustSchedule'>,
   bidId: string,
-  change: Pick<ScheduleDateChange, 'previousDue' | 'nextDue'>,
+  change: DueMove,
   mode: DateChangeMode,
   progress: DateChangeProgress = NO_PROGRESS,
 ): Promise<DateChangeOutcome> {

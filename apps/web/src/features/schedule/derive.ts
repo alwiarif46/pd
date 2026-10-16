@@ -8,8 +8,8 @@ import type { BidDto, CreateRowBodyMap, RowPatchMap, ScheduleActivityDto } from 
 import type {
   ActivityDraft,
   DateChangeMode,
+  DueMove,
   ScheduleActivity,
-  ScheduleDateChange,
   ScheduleHoliday,
   ScheduleTemplateId,
   ScheduleTemplateOption,
@@ -136,7 +136,7 @@ const MODES: readonly DateChangeMode[] = ['shift', 'scale', 'keep'];
 /** One sentence per mode saying what it would do (09 s5.11), from the same plan the api runs. */
 export function dateChangeSummary(
   activities: readonly ScheduleActivity[],
-  change: Pick<ScheduleDateChange, 'previousDue' | 'nextDue'>,
+  change: DueMove,
   opts: { anchor: string | null; workdaysOnly: boolean },
 ): Record<DateChangeMode, string> {
   const dated = activities.filter((a) => a.start !== null);
