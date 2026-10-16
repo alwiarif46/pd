@@ -559,6 +559,36 @@ describe.skipIf(Boolean(unavailable))('amendment backfill', () => {
     expect(lines.filter((line) => line.includes('amendment=')).every((line) => line.includes('reason="already backfilled"'))).toBe(true);
   });
 
+  it('a lower-numbered amendment that ran after #22 holds the backfill back: no duplicate rows', async () => {
+    // Amd 1 failed before #22 and was retried after it, inserting R1; Amd 2 (pre-#22) closed A.
+    const fixture = await setup('bf-dup-lower');
+    const amd1 = await amendment(fixture.tenant, 1, 'applied');
+    await withOrg(fixture.tenant.orgId, (db) => db.insert(schema.complianceRows).values({
+      orgId: fixture.tenant.orgId, bidId: fixture.tenant.bidId, documentId: amd1.documentId, reqId: 'C.3.1-04', sectionRef: 'C.3.1',
+      requirementText: 'The contractor shall staff the help desk from 7 to 7.', amendmentNo: 1, origin: 'ai', supersedeStatus: 'active',
+    }));
+    const before = await snapshot(fixture.tenant);
+    expect(await run([fixture.tenant.orgId], { apply: true })).toMatchObject({ eligible: 0, backfilled: 0, skipped: 2 });
+    expect(await snapshot(fixture.tenant)).toEqual(before);
+    expect(ai.calls.extract).toBe(0);
+    expect(lineOf(fixture.amd2!.amendmentId)).toContain('reason="amendment 1 ran after #22; rows could duplicate"');
+    expect(lineOf(amd1.amendmentId)).toContain('reason="already has rows from its text"');
+  });
+
+  it('a post-#22 amendment that lands between the pre-read and the lock is caught under the lock', async () => {
+    const fixture = await setup('bf-dup-lower-race');
+    ai.afterExtract = async () => {
+      const amd1 = await amendment(fixture.tenant, 1, 'applied');
+      await withOrg(fixture.tenant.orgId, (db) => db.insert(schema.complianceRows).values({
+        orgId: fixture.tenant.orgId, bidId: fixture.tenant.bidId, documentId: amd1.documentId, reqId: 'C.3.1-04', sectionRef: 'C.3.1',
+        requirementText: 'Inserted by the retried Amd 1', amendmentNo: 1, origin: 'ai', supersedeStatus: 'active',
+      }));
+    };
+    expect(await run([fixture.tenant.orgId], { apply: true, limit: 1 })).toMatchObject({ eligible: 1, backfilled: 0, skipped: 1 });
+    expect(lineOf(fixture.amd2!.amendmentId)).toContain('reason="amendment 1 ran after #22; rows could duplicate"');
+    expect(await rowsOfDoc(fixture.tenant, fixture.amd2!.documentId)).toEqual([]);
+  });
+
   it('two amendments revising the same clause: the earlier is skipped while a later one is applied or processing, so no duplicate rows', async () => {
     // Amd 2 (pre-#22) revised C.3.1; Amd 3, applied after #22, revised it again and inserted R3.
     const applied = await setup('bf-dup-applied', { amd3: 'applied' });

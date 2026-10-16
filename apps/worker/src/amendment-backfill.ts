@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, count, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gt, inArray, isNull, ne, sql } from 'drizzle-orm';
 import {
   costOf,
   coverage,
@@ -42,7 +42,9 @@ import { allocateReqIds } from './req-ids.js';
  *
  * An amendment with a later amendment of the bid (applied, needs_confirmation or processing) is
  * skipped: the later one diffed against rows without this one's, so this one's rows would sit
- * active next to the later replacements of the same clauses.
+ * active next to the later replacements of the same clauses. So is an amendment of a bid with
+ * another applied or needs_confirmation amendment that has rows from its own text (it ran after
+ * #22, such as a retried earlier one): its rows may already cover the same clauses.
  */
 
 export const BACKFILL_ACTION = 'amendment_backfill';
@@ -196,6 +198,8 @@ interface Facts {
   pages: number;
   /** Numbers of the bid's later amendments that are applied, needs_confirmation or processing. */
   later: number[];
+  /** Numbers of the bid's other applied or needs_confirmation amendments with rows from their own text (they ran after #22). */
+  modern: number[];
 }
 
 /** The statement that makes a read transaction read-only (the dry run, and every pre-read). */
@@ -265,8 +269,21 @@ async function readFacts(db: Db, orgId: string, target: Target, lock: boolean): 
     gt(schema.amendments.amendmentNo, amendment.amendmentNo),
     inArray(schema.amendments.status, LATER_BLOCKS),
   )).orderBy(asc(schema.amendments.amendmentNo))).flatMap((row) => (row.amendmentNo === null ? [] : [row.amendmentNo]));
+  // Any other amendment of the bid that ran after #22 (a retry of an earlier one, say) diffed
+  // against rows without this one's replacements, so it may have added the same clauses.
+  const modern = (await db.select({ amendmentNo: schema.amendments.amendmentNo }).from(schema.amendments)
+    .innerJoin(schema.documents, eq(schema.documents.id, schema.amendments.documentId)).where(and(
+    eq(schema.documents.orgId, orgId),
+    eq(schema.documents.kind, 'amendment'),
+    eq(schema.amendments.orgId, orgId),
+    eq(schema.amendments.bidId, amendment.bidId),
+    ne(schema.amendments.id, amendment.id),
+    inArray(schema.amendments.status, ['applied', 'needs_confirmation']),
+    sql`exists (select 1 from ${schema.complianceRows} where ${schema.complianceRows.documentId} = ${schema.amendments.documentId} and ${schema.complianceRows.orgId} = ${orgId})`,
+  )).orderBy(asc(schema.amendments.amendmentNo))).map((row) => row.amendmentNo);
   return {
     amendment, document, bid, links, rowsFromText: rows?.n ?? 0, hits: hits.length, backfilled: Boolean(marker), pages: pages?.n ?? 0, later,
+    modern: modern.flatMap((no) => (no === null ? [] : [no])),
   };
 }
 
@@ -317,6 +334,9 @@ function skipReason(facts: Facts, target: Target): string | null {
   }
   if (facts.later.length > 0) {
     return `later amendment ${facts.later[0]} exists; rows could duplicate`;
+  }
+  if (facts.modern.length > 0) {
+    return `amendment ${facts.modern[0]} ran after #22; rows could duplicate`;
   }
   if (facts.pages === 0) {
     return 'no extracted text';
