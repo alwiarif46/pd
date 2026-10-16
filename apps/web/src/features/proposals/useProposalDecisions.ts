@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { TabProposal } from '@/types';
 import { decideProposal, type ProposalApi, type ProposalDecision } from './controller';
@@ -17,6 +17,12 @@ export function useProposalDecisions(opts: { api: ProposalApi; onSettled: () => 
   const busyRef = useRef(new Set<string>());
   const [busyIds, setBusyIds] = useState<readonly string[]>([]);
   const { api, onSettled } = opts;
+  // The latest onSettled runs when a decision settles, so it sees the state of that moment (the shell's
+  // job key for Overview), not the state of the click.
+  const settledRef = useRef(onSettled);
+  useEffect(() => {
+    settledRef.current = onSettled;
+  });
 
   const decide = (p: TabProposal, decision: ProposalDecision) => {
     const id = p.id;
@@ -31,7 +37,7 @@ export function useProposalDecisions(opts: { api: ProposalApi; onSettled: () => 
       .finally(() => {
         busyRef.current.delete(id);
         setBusyIds((ids) => ids.filter((x) => x !== id));
-        onSettled();
+        settledRef.current();
       });
   };
 

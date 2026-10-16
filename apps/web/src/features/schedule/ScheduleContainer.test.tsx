@@ -629,23 +629,45 @@ describe('ScheduleContainer: amendment date change', () => {
     ]);
   });
 
-  it('closes the prompt to open the amendment source, and the notice stays', async () => {
+  it('closes the prompt to open the amendment source, and brings it back when the viewer closes', async () => {
     const fetchMock = mockFetch();
     const amendment = docDto({ id: 'doc-amd', kind: 'amendment', amendmentNo: 3 });
     const { user } = renderContainer({ api: pendingApi(), shell: { docs: [docDto(), amendment] } });
     await user.click(within(await prompt()).getByRole('button', { name: 'Open source for Amendment 3, page 4' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: TITLE })).toBeNull());
     expect(screen.getByText('Amendment 3 moves the due date to Wed, Dec 2, 2026.')).toBeTruthy();
-    expect(document.querySelector('.app-shell [aria-label="Source viewer"]')).toBeTruthy();
+    const viewer = document.querySelector('.app-shell [aria-label="Source viewer"]') as HTMLElement;
+    expect(viewer).toBeTruthy();
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/documents/doc-amd/view-token'))).toBe(true));
+    await user.click(within(viewer).getByRole('button', { name: 'Close' }));
+    const dialog = await prompt();
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    expect(document.querySelector('[aria-label="Source viewer"]')).toBeNull();
   });
 
-  it('says when the amendment source cannot be found', async () => {
-    const { user } = renderContainer({ api: pendingApi() });
-    await user.click(within(await prompt()).getByRole('button', { name: 'Open source for Amendment 3, page 4' }));
-    expect(toast.info).toHaveBeenCalledWith('No source page for this change.');
+  it('opens the source from the notice, and the notice stays when the viewer closes', async () => {
+    mockFetch();
+    const amendment = docDto({ id: 'doc-amd', kind: 'amendment', amendmentNo: 3 });
+    const { user } = renderContainer({ api: pendingApi(), shell: { docs: [docDto(), amendment] } });
+    await user.click(button(await prompt(), 'Cancel'));
+    const notice = screen.getByRole('region', { name: 'Amendment date change' });
+    await user.click(within(notice).getByRole('button', { name: 'Open source for Amendment 3, page 4' }));
+    const viewer = document.querySelector('.app-shell [aria-label="Source viewer"]') as HTMLElement;
+    await user.click(within(viewer).getByRole('button', { name: 'Close' }));
     expect(screen.queryByRole('dialog', { name: TITLE })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Review date change' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Amendment date change' })).toBeTruthy();
+  });
+
+  it('shows No source and keeps the quote when no amendment document resolves', async () => {
+    const { user } = renderContainer({ api: pendingApi(), shell: { docs: [docDto(), docDto({ id: 'gone', kind: 'amendment', amendmentNo: 3, liveStatus: 'deleted' })] } });
+    const dialog = await prompt();
+    expect(within(dialog).getByText('No source')).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: /^Open source/ })).toBeNull();
+    expect(within(dialog).getByText('“Proposals are now due December 2.”')).toBeTruthy();
+    await user.click(button(dialog, 'Cancel'));
+    const notice = screen.getByRole('region', { name: 'Amendment date change' });
+    expect(within(notice).getByText('No source')).toBeTruthy();
+    expect(within(notice).getByText('“Proposals are now due December 2.”')).toBeTruthy();
   });
 
   it('closes only the answered bid when the shell switches bids during the answer', async () => {
@@ -703,7 +725,7 @@ describe('ScheduleContainer: amendment proposals', () => {
   it('inserts, then reloads the tab and the shell', async () => {
     const api = proposalApi();
     const { shell, user } = renderContainer({ api });
-    await user.click(within(await card()).getByRole('button', { name: 'Insert' }));
+    await user.click(within(await card()).getByRole('button', { name: 'Insert Amendment 2: Proposal due' }));
     await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
     expect(api.confirmAmendmentLink).toHaveBeenCalledWith('link-a');
     expect(toast.success).toHaveBeenCalledWith('Inserted the change from Amendment 2.');
@@ -715,7 +737,7 @@ describe('ScheduleContainer: amendment proposals', () => {
   it('dismisses', async () => {
     const api = proposalApi();
     const { user } = renderContainer({ api });
-    await user.click(within(await card()).getByRole('button', { name: 'Dismiss' }));
+    await user.click(within(await card()).getByRole('button', { name: 'Dismiss Amendment 2: Proposal due' }));
     await waitFor(() => expect(api.rejectAmendmentLink).toHaveBeenCalledWith('link-a'));
     await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
     expect(toast.success).toHaveBeenCalledWith('Dismissed the change from Amendment 2. Your row stays.');
@@ -727,7 +749,7 @@ describe('ScheduleContainer: amendment proposals', () => {
   ])('shows the web wording for 409 %s and reloads', async (code, message) => {
     const api = proposalApi({ confirmAmendmentLink: vi.fn(async () => Promise.reject(new ApiError('API text.', 409, code))) });
     const { user } = renderContainer({ api });
-    await user.click(within(await card()).getByRole('button', { name: 'Insert' }));
+    await user.click(within(await card()).getByRole('button', { name: 'Insert Amendment 2: Proposal due' }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(message));
     await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
   });
@@ -736,10 +758,10 @@ describe('ScheduleContainer: amendment proposals', () => {
     const confirm = deferred<never>();
     const api = proposalApi({ confirmAmendmentLink: vi.fn(() => confirm.promise) });
     renderContainer({ api });
-    const insert = within(await card()).getByRole('button', { name: 'Insert' });
+    const insert = within(await card()).getByRole('button', { name: 'Insert Amendment 2: Proposal due' });
     fireEvent.click(insert);
     fireEvent.click(insert);
-    fireEvent.click(within(await card()).getByRole('button', { name: 'Dismiss' }));
+    fireEvent.click(within(await card()).getByRole('button', { name: 'Dismiss Amendment 2: Proposal due' }));
     expect(api.confirmAmendmentLink).toHaveBeenCalledTimes(1);
     expect(api.rejectAmendmentLink).not.toHaveBeenCalled();
     await waitFor(() => expect((insert as HTMLButtonElement).disabled).toBe(true));
@@ -763,8 +785,27 @@ describe('ScheduleContainer: amendment proposals', () => {
     expect(document.querySelector('[aria-label="Source viewer"]')).toBeNull();
   });
 
+});
+
+describe('ScheduleContainer: amendment date change, guards and sources', () => {
+  const change: PendingDateChangeDto = {
+    amendmentId: 'amd-3',
+    amendmentNo: 3,
+    previousDue: '2026-11-25',
+    nextDue: '2026-12-02',
+    sourcePage: 4,
+    sourceQuote: 'Proposals are now due December 2.',
+  };
+  const TITLE = 'Amendment 3 moved the due date';
+  const pendingApi = (pending: PendingDateChangeDto = change, over: Partial<ScheduleApi> = {}) =>
+    mockApi([userRow, aiRow], {
+      getTab: vi.fn(async () => ({ activities: [userRow, aiRow], workdaysOnly: true, proposals: [], pendingDateChange: pending })) as unknown as ScheduleApi['getTab'],
+      ...over,
+    });
+  const prompt = () => screen.findByRole('dialog', { name: TITLE });
+  const button = (dialog: HTMLElement, name: string) => within(dialog).getByRole('button', { name }) as HTMLButtonElement;
+
   it('does not guess the source document of an amendment without a number', async () => {
-    mockFetch();
     const numberless = docDto({ id: 'doc-x', kind: 'amendment', amendmentNo: null });
     const api = mockApi([userRow], {
       getTab: vi.fn(async () => ({
@@ -774,10 +815,70 @@ describe('ScheduleContainer: amendment proposals', () => {
         pendingDateChange: { amendmentId: 'amd-9', amendmentNo: null, previousDue: '2026-11-25', nextDue: '2026-12-02', sourcePage: 2, sourceQuote: null },
       })) as unknown as ScheduleApi['getTab'],
     });
-    const { user } = renderContainer({ api, shell: { docs: [docDto(), numberless] } });
+    renderContainer({ api, shell: { docs: [docDto(), numberless] } });
     const dialog = await screen.findByRole('dialog', { name: 'An amendment moved the due date' });
-    await user.click(within(dialog).getByRole('button', { name: 'Open source for the amendment, page 2' }));
-    expect(toast.info).toHaveBeenCalledWith('No source page for this change.');
+    expect(within(dialog).getByText('No source')).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: /^Open source/ })).toBeNull();
+  });
+
+  it('opens a different change by itself when the reload after an answer returns one', async () => {
+    const api = pendingApi();
+    const later: PendingDateChangeDto = { ...change, amendmentId: 'amd-4', amendmentNo: 4, nextDue: '2026-12-09', sourceQuote: null };
+    vi.mocked(api.getTab)
+      .mockResolvedValueOnce({ activities: [userRow, aiRow], workdaysOnly: true, proposals: [], pendingDateChange: change } as never)
+      .mockResolvedValueOnce({ activities: [userRow, aiRow], workdaysOnly: true, proposals: [], pendingDateChange: later } as never);
+    const { user } = renderContainer({ api });
+    await user.click(button(await prompt(), 'Keep dates'));
+    const next = await screen.findByRole('dialog', { name: 'Amendment 4 moved the due date' });
+    expect(within(next).getByText("Your answer sets the bid's due date to Wed, Dec 9, 2026.")).toBeTruthy();
+    expect(api.adjustSchedule).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores Change due date while an amendment answer is being applied', async () => {
+    const adjust = deferred<AdjustScheduleDto>();
+    const api = pendingApi(change, { adjustSchedule: vi.fn(() => adjust.promise) });
+    const { user } = renderContainer({ api });
+    await user.click(button(await prompt(), 'Shift dates'));
+    await waitFor(() => expect(api.adjustSchedule).toHaveBeenCalledTimes(1));
+    // The modal hides the header; drive it directly, as a stray click or a second tab of focus could.
+    fireEvent.click(screen.getByRole('button', { name: 'Change due date', hidden: true }));
+    fireEvent.change(await screen.findByLabelText('New due date'), { target: { value: '2026-12-09' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue', hidden: true }));
+    adjust.resolve(adjusted);
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('dialog', { name: 'The due date changed' })).toBeNull();
+    expect(api.getBid).not.toHaveBeenCalled();
+    expect(api.updateBid).not.toHaveBeenCalled();
+  });
+
+  it('offers no amendment answer while the user change is being applied, and brings the notice back afterwards', async () => {
+    const bid = deferred<ReturnType<typeof bidDto>>();
+    const api = pendingApi(change, { getBid: vi.fn(() => bid.promise) });
+    const { user } = renderContainer({ api });
+    await user.click(button(await prompt(), 'Cancel'));
+    await changeDueTo(user, '2026-12-09');
+    const mine = await screen.findByRole('dialog', { name: 'The due date changed' });
+    await user.click(button(mine, 'Shift dates'));
+    await waitFor(() => expect(api.getBid).toHaveBeenCalled());
+    // The user's prompt takes precedence: no amendment prompt or notice to answer from.
+    expect(screen.queryByRole('dialog', { name: TITLE })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Review date change', hidden: true })).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'The due date changed' })).toBeTruthy();
+    bid.resolve(bidDto({ dueDate: ts('2026-11-25') }));
+    await waitFor(() => expect(api.adjustSchedule).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.adjustSchedule).mock.calls[0]![1]).not.toHaveProperty('amendmentId');
+    // The amendment's change comes back as the notice once the user's is done.
+    expect(await screen.findByRole('button', { name: 'Review date change' })).toBeTruthy();
+  });
+
+  it("hides a source opened on one bid after the shell switches to another", async () => {
+    mockFetch();
+    const { user, switchTo } = renderContainer({ api: mockApi([{ ...aiRow, documentId: 'doc-1' }]) });
+    await ready();
+    await user.click(screen.getByRole('button', { name: 'Open source for Proposal due, page 12' }));
+    expect(document.querySelector('[aria-label="Source viewer"]')).toBeTruthy();
+    switchTo('bid-2', { bid: bidDto({ id: 'bid-2', dueDate: ts('2026-12-15') }) });
     expect(document.querySelector('[aria-label="Source viewer"]')).toBeNull();
   });
 });

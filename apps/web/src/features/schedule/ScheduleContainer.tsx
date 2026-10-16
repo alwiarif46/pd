@@ -127,7 +127,8 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
   /** Per bid and row: moves being saved (one PATCH at a time, latest target last) and lock toggles. */
   const movesRef = useRef(new Map<string, MoveQueue>());
   const locksRef = useRef(new Set<string>());
-  const [source, setSource] = useState<Source | null>(null);
+  /** The open source viewer, with the bid it was opened on; back names the amendment prompt to reopen on close. */
+  const [sourceState, setSourceState] = useState<(Source & { bidId: string; back: string | null }) | null>(null);
   /** The bid whose schedule is on screen (set when a load succeeds). */
   const shownRef = useRef<string | null>(null);
   const jobKey = jobsKey({ jobs: shell.jobs });
@@ -182,7 +183,18 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
   const amendmentKey = amendmentDto ? amendmentChangeKey(bidId, amendmentDto) : null;
   const amendmentClosed = amendmentKey ? closedChanges[amendmentKey] : undefined;
   const amendmentOpen = !open && amendmentDto && !amendmentClosed ? amendmentDto : null;
-  const amendmentChange = useMemo(() => (amendmentOpen ? toAmendmentDateChange(amendmentOpen) : null), [amendmentOpen]);
+  // PendingDateChangeDto has no documentId: the source is the live amendment document with its number
+  // (none without one). With no document the prompt and the notice show No source, and the quote inline.
+  const amendmentNo = amendmentDto?.amendmentNo ?? null;
+  const amendmentDoc =
+    amendmentNo === null
+      ? null
+      : (shell.docs.find((d) => d.kind === 'amendment' && d.amendmentNo === amendmentNo && d.liveStatus !== 'deleted') ?? null);
+  const amendmentSourcePage = amendmentDoc ? (amendmentDto?.sourcePage ?? null) : null;
+  const amendmentChange = useMemo(
+    () => (amendmentOpen ? { ...toAmendmentDateChange(amendmentOpen), sourcePage: amendmentSourcePage } : null),
+    [amendmentOpen, amendmentSourcePage],
+  );
   const dateChange = open?.change ?? amendmentChange;
   const dateBusy = busyBids.includes(bidId);
   const bid = shell.bid;
@@ -214,6 +226,9 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
         : null,
     [activities, dateChange, startDate, workdaysOnly],
   );
+
+  const setSource = (s: Source, back: string | null = null) => setSourceState({ ...s, bidId, back });
+  const source = sourceState?.bidId === bidId ? sourceState : null;
 
   const reload = () => setVersion((n) => n + 1);
   const afterSave = () => {
@@ -429,18 +444,30 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
   };
 
   // Radix's modal dialog blocks the SourceViewer (a LegacyFrame outside it), so opening the source puts
-  // the change off first: the prompt closes, and the notice brings it back.
-  const onOpenDateChangeSource = () => {
+  // the change off first, and only when the viewer will open: the prompt closes, and closing the viewer
+  // brings the prompt back (focus returns into it). From the notice, the notice simply stays.
+  const openDateChangeSource = (from: 'prompt' | 'notice') => {
     if (!amendmentDto || busyRef.current.has(bidId)) return;
-    putOffAmendment();
-    // PendingDateChangeDto has no documentId: find the amendment by its number (none without one).
-    const no = amendmentDto.amendmentNo;
-    const doc = no === null ? undefined : shell.docs.find((d) => d.kind === 'amendment' && d.amendmentNo === no && d.liveStatus !== 'deleted');
-    if (!doc || amendmentDto.sourcePage === null) {
-      toast.info('No source page for this change.');
+    if (!amendmentDoc || amendmentSourcePage === null) {
+      toast.info('No source page for this change.'); // not reachable from SourceLink, which shows No source
       return;
     }
-    setSource({ documentId: doc.id, page: amendmentDto.sourcePage, pageEnd: null, quote: amendmentDto.sourceQuote });
+    const back = from === 'prompt' && amendmentKey && !closedChanges[amendmentKey] ? amendmentKey : null;
+    putOffAmendment();
+    setSource({ documentId: amendmentDoc.id, page: amendmentSourcePage, pageEnd: null, quote: amendmentDto.sourceQuote }, back);
+  };
+
+  const closeSource = () => {
+    const back = sourceState?.back ?? null;
+    setSourceState(null);
+    if (back) {
+      setClosedChanges((c) => {
+        if (c[back] !== 'cancelled') return c;
+        const rest = { ...c };
+        delete rest[back];
+        return rest;
+      });
+    }
   };
 
   const onDecideProposal = (id: string, decision: ProposalDecision) => {
@@ -489,10 +516,10 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
       <AmendmentDateNotice
         amendmentNo={amendmentDto.amendmentNo}
         nextDue={amendmentDto.nextDue}
-        sourcePage={amendmentDto.sourcePage}
+        sourcePage={amendmentSourcePage}
         sourceQuote={amendmentDto.sourceQuote}
         onReview={reviewAmendment}
-        onOpenSource={onOpenDateChangeSource}
+        onOpenSource={() => openDateChangeSource('notice')}
       />
     ) : null;
 
@@ -560,7 +587,7 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
           onChangeDueDate={onChangeDueDate}
           onOpenRow={(id) => shell.openRow(id)}
           onOpenSource={onOpenSource}
-          onOpenDateChangeSource={onOpenDateChangeSource}
+          onOpenDateChangeSource={() => openDateChangeSource('prompt')}
           onExport={onExport}
         />
       </div>
@@ -597,7 +624,13 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
       )}
       {source && (
         <LegacyFrame>
-          <SourceViewer {...source} onClose={() => setSource(null)} />
+          <SourceViewer
+            documentId={source.documentId}
+            page={source.page}
+            pageEnd={source.pageEnd}
+            quote={source.quote}
+            onClose={closeSource}
+          />
         </LegacyFrame>
       )}
     </>

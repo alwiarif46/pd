@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
+import { useEffect } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { ApiError, type BidFactDto, type TabProposalDto } from '@/api';
 import type { Workspace } from '@/screens/Workspace';
-import { NEW_ROW_MISSING_MESSAGE, ROW_ALREADY_CLOSED_MESSAGE } from '@/features/proposals/controller';
+import { NEW_ROW_MISSING_MESSAGE, PROPOSAL_GONE_MESSAGE, ROW_ALREADY_CLOSED_MESSAGE } from '@/features/proposals/controller';
 import { ShellContext, type ShellContextValue } from '@/features/shell/bid-context';
 import { jsonResponse, mockFetch } from '@/test/fetch';
 import { bidDto, bidFactDto, docDto, jobDto, meDto, orgPayload, organizationDto, tabProposalDto } from '@/test/fixtures';
@@ -57,17 +58,25 @@ function renderContainer(opts: { api?: OverviewApi; shell?: Partial<ShellContext
   const api = opts.api ?? mockApi();
   const shell = shellValue(opts.shell);
   const legacy: LegacyProps[] = [];
-  const Legacy = ((props: LegacyProps) => {
+  const mounts = { count: 0 };
+  function Stub(props: LegacyProps) {
     legacy.push(props);
+    useEffect(() => {
+      mounts.count += 1;
+    }, []);
     return <p>Legacy overview</p>;
-  }) as unknown as typeof Workspace;
-  const view = render(
-    <ShellContext.Provider value={shell}>
-      <OverviewContainer bidId="bid-1" tab="overview" selectedRowId={null} api={api} Legacy={Legacy} />
-    </ShellContext.Provider>,
+  }
+  const Legacy = Stub as unknown as typeof Workspace;
+  const tree = (bidId: string, value: ShellContextValue) => (
+    <ShellContext.Provider value={value}>
+      <OverviewContainer bidId={bidId} tab="overview" selectedRowId={null} api={api} Legacy={Legacy} />
+    </ShellContext.Provider>
   );
+  const view = render(tree('bid-1', shell));
+  /** The shell reloading or switching bids without remounting the container. */
+  const update = (over: Partial<ShellContextValue>, bidId = 'bid-1') => view.rerender(tree(bidId, shellValue({ ...opts.shell, bidId, ...over })));
   const last = () => legacy[legacy.length - 1]!;
-  return { api, shell, last, user: userEvent.setup(), ...view };
+  return { api, shell, last, mounts, update, user: userEvent.setup(), ...view };
 }
 
 const card = () => screen.findByRole('article', { name: 'Amendment 2: Agency' });
@@ -85,13 +94,16 @@ describe('OverviewContainer', () => {
   });
 
   it('inserts, reloads the panel and the shell, and reloads the legacy screen', async () => {
-    const { api, shell, last, user } = renderContainer();
-    await user.click(within(await card()).getByRole('button', { name: 'Insert' }));
+    const { api, shell, last, mounts, user } = renderContainer();
+    await user.click(within(await card()).getByRole('button', { name: 'Insert Amendment 2: Agency' }));
     await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
     expect(api.confirmAmendmentLink).toHaveBeenCalledWith('link-a');
     expect(toast.success).toHaveBeenCalledWith('Inserted the change from Amendment 2.');
     expect(shell.refresh).toHaveBeenCalled();
-    expect(last().refreshKey).toBe('#1');
+    // The shell has no jobs (key ''): Workspace skips the first non-empty key, so the legacy screen is
+    // remounted (one reload) instead of given '#1'.
+    expect(last().refreshKey).toBe('');
+    await waitFor(() => expect(mounts.count).toBe(2));
   });
 
   it('keeps the shell key until the first decision, then suffixes it', async () => {
@@ -99,13 +111,13 @@ describe('OverviewContainer', () => {
     const { last, user } = renderContainer({ shell: { jobs } });
     await card();
     expect(last().refreshKey).toBe('job-1:completed');
-    await user.click(within(await card()).getByRole('button', { name: 'Dismiss' }));
+    await user.click(within(await card()).getByRole('button', { name: 'Dismiss Amendment 2: Agency' }));
     await waitFor(() => expect(last().refreshKey).toBe('job-1:completed#1'));
   });
 
   it('dismisses', async () => {
     const { api, user } = renderContainer();
-    await user.click(within(await card()).getByRole('button', { name: 'Dismiss' }));
+    await user.click(within(await card()).getByRole('button', { name: 'Dismiss Amendment 2: Agency' }));
     await waitFor(() => expect(api.rejectAmendmentLink).toHaveBeenCalledWith('link-a'));
     expect(toast.success).toHaveBeenCalledWith('Dismissed the change from Amendment 2. Your row stays.');
   });
@@ -113,10 +125,14 @@ describe('OverviewContainer', () => {
   it.each([
     ['row_already_closed', ROW_ALREADY_CLOSED_MESSAGE],
     ['new_row_missing', NEW_ROW_MISSING_MESSAGE],
-  ])('shows the web wording for 409 %s, and reloads', async (code, message) => {
-    const api = mockApi([proposal], { confirmAmendmentLink: vi.fn(async () => Promise.reject(new ApiError('API text.', 409, code))) });
+    ['link_already_decided', 'This change was already dismissed.'],
+    ['not_found', PROPOSAL_GONE_MESSAGE],
+  ])('shows the message for %s, and reloads', async (code, message) => {
+    const error =
+      code === 'not_found' ? new ApiError('Not found.', 404) : new ApiError(code === 'link_already_decided' ? message : 'API text.', 409, code);
+    const api = mockApi([proposal], { confirmAmendmentLink: vi.fn(async () => Promise.reject(error)) });
     const { user } = renderContainer({ api });
-    await user.click(within(await card()).getByRole('button', { name: 'Insert' }));
+    await user.click(within(await card()).getByRole('button', { name: 'Insert Amendment 2: Agency' }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(message));
     await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
   });
@@ -172,7 +188,34 @@ describe('OverviewContainer', () => {
     await waitFor(() => expect(jobLoads()).toBeGreaterThan(0));
     await new Promise((resolve) => setTimeout(resolve, 30)); // the mount load and the seed reload settle
     const before = jobLoads();
-    await user.click(within(await card()).getByRole('button', { name: 'Insert' }));
+    await user.click(within(await card()).getByRole('button', { name: 'Insert Amendment 2: Agency' }));
     await waitFor(() => expect(jobLoads()).toBe(before + 1));
+  });
+
+  it('reloads the legacy screen once the shell bid loads, after a decision made before', async () => {
+    const { last, mounts, update, user } = renderContainer({ shell: { bidLoaded: false } });
+    await user.click(within(await card()).getByRole('button', { name: 'Insert Amendment 2: Agency' }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(last().refreshKey).toBe('');
+    expect(mounts.count).toBe(1);
+    update({ bidLoaded: true, jobs: [jobDto({ id: 'job-1', status: 'completed' })] });
+    await waitFor(() => expect(mounts.count).toBe(2));
+    expect(last().refreshKey).toBe('job-1:completed#1');
+    update({ bidLoaded: true, jobs: [jobDto({ id: 'job-1', status: 'completed' })] });
+    expect(mounts.count).toBe(2);
+  });
+
+  it('resets the decision count and the source on a bid switch', async () => {
+    mockFetch();
+    const jobs = [jobDto({ id: 'job-1', status: 'completed' })];
+    const { last, update, user } = renderContainer({ shell: { jobs } });
+    await user.click(within(await card()).getByRole('button', { name: 'Dismiss Amendment 2: Agency' }));
+    await waitFor(() => expect(last().refreshKey).toBe('job-1:completed#1'));
+    await user.click(within(await card()).getByRole('button', { name: 'Open source for Agency, page 4' }));
+    expect(document.querySelector('[aria-label="Source viewer"]')).toBeTruthy();
+    update({ jobs }, 'bid-2');
+    expect(last().refreshKey).toBe('job-1:completed');
+    expect(last().bidId).toBe('bid-2');
+    expect(document.querySelector('[aria-label="Source viewer"]')).toBeNull();
   });
 });

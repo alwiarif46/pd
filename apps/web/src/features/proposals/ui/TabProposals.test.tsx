@@ -61,16 +61,16 @@ describe('TabProposals', () => {
 
   it('sends the link id on Insert and Dismiss', async () => {
     const { props, user } = renderPanel();
-    await user.click(screen.getByRole('button', { name: 'Insert' }));
-    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    await user.click(screen.getByRole('button', { name: 'Insert Amendment 2: Agency' }));
+    await user.click(screen.getByRole('button', { name: 'Dismiss Amendment 2: Agency' }));
     expect(props.onInsert).toHaveBeenCalledWith('link-a');
     expect(props.onDismiss).toHaveBeenCalledWith('link-a');
   });
 
   it('disables both buttons while busy', () => {
     renderPanel({ busyIds: ['link-a'] });
-    expect((screen.getByRole('button', { name: 'Insert' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Dismiss' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Insert Amendment 2: Agency' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Dismiss Amendment 2: Agency' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('has a source control for the proposal and for an AI old row, not for a user row', async () => {

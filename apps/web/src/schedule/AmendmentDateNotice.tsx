@@ -7,8 +7,8 @@ import { formatDay } from './format';
 export function AmendmentDateNotice(p: AmendmentDateNoticeProps) {
   const who = p.amendmentNo ? `Amendment ${p.amendmentNo}` : 'An amendment';
   return (
-    <div role="status" className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-paper p-3 text-sm text-ink">
-      <p>{`${who} moves the due date to ${formatDay(p.nextDue)}.`}</p>
+    <div role="region" aria-label="Amendment date change" className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-paper p-3 text-sm text-ink">
+      <p role="status">{`${who} moves the due date to ${formatDay(p.nextDue)}.`}</p>
       {p.sourceQuote && (
         <blockquote className="border-l-2 border-line pl-3 text-sm text-muted-foreground">“{p.sourceQuote}”</blockquote>
       )}

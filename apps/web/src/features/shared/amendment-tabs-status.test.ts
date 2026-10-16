@@ -8,7 +8,7 @@ describe('amendmentTabsNote', () => {
       tone: 'info',
     });
     expect(amendmentTabsNote({ kind: 'amendment', amendmentTabsStatus: 'failed' })).toEqual({
-      text: 'Bid facts and dates did not update. Use Retry above.',
+      text: 'Bid facts and dates did not update. Retry the failed step above.',
       tone: 'bad',
     });
   });

@@ -749,6 +749,7 @@ function Documents({ bid, plan, docs, onReload, onError, onNotice }: Panel) {
                   <td className="num">{doc.liveUntil?.slice(0, 10) ?? '—'}</td>
                   <td>
                     {doc.liveStatus || doc.extractStatus || doc.scanStatus || 'processing'}
+                    {' '}
                     <TabsNote doc={doc} />
                   </td>
                   <td>{doc.markingStatus || 'none'}</td>

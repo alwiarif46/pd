@@ -99,9 +99,11 @@ describe('Workspace embedded in the shell', () => {
     };
     const pending = await run('pending');
     await waitFor(() => expect(screen.getByText('Updating bid facts and dates')).toBeTruthy());
+    // The status text and the note are separate words.
+    expect(screen.getByText('Updating bid facts and dates').closest('td')?.textContent).toBe('live Updating bid facts and dates');
     pending.unmount();
     const failed = await run('failed');
-    await waitFor(() => expect(screen.getByText('Bid facts and dates did not update. Use Retry above.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Bid facts and dates did not update. Retry the failed step above.')).toBeTruthy());
     failed.unmount();
     await run('applied');
     await waitFor(() => expect(screen.getByText('amd2.pdf')).toBeTruthy());

@@ -54,10 +54,17 @@ export function TabProposals({ subject, proposals, busyIds, onInsert, onDismiss,
             )}
             <SourceLink page={p.sourcePage} pageEnd={p.sourcePageEnd} rowLabel={label} onOpen={() => onOpenSource(p.rowId)} />
             <div className="flex gap-2">
-              <Button type="button" size="sm" disabled={busy} onClick={() => onInsert(p.id)}>
+              <Button type="button" size="sm" aria-label={`Insert ${amd}: ${label}`} disabled={busy} onClick={() => onInsert(p.id)}>
                 Insert
               </Button>
-              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => onDismiss(p.id)}>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                aria-label={`Dismiss ${amd}: ${label}`}
+                disabled={busy}
+                onClick={() => onDismiss(p.id)}
+              >
                 Dismiss
               </Button>
             </div>
