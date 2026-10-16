@@ -1,35 +1,23 @@
+'use client';
+
 import { useState } from 'react';
 import { AppShell } from './AppShell';
+import { ConfirmDialog } from './ConfirmDialog';
+import { UpgradeDialog } from './UpgradeDialog';
+import { sampleBid, sampleBids, sampleUser } from './sample-data';
+import type { OutsidePage, TabSignal, UpgradeReason } from './types';
 
-export default function Preview() {
+const sizes = ['1280px', '900px', '375px'];
+const reasons: UpgradeReason[] = ['locked_tab', 'out_of_credits', 'over_cap', 'seats', 'plan'];
+
+function ShellExample({ plan, bid, creditsLeft, detail, signals }: { plan: 'free' | 'starter' | 'growth'; bid: typeof sampleBid | null; creditsLeft: number; detail: boolean; signals: { tab: 'compliance' | 'documents'; signal: TabSignal }[] }) {
   const [lastAction, setLastAction] = useState('None yet');
   const action = (name: string) => setLastAction(name);
+  return <div className="overflow-hidden rounded-lg border border-line bg-canvas"><div className="flex flex-wrap gap-2 border-b border-line bg-paper p-3 text-xs font-medium">{sizes.map((size) => <span key={size} className="rounded bg-weekend px-2 py-1">{size}</span>)}</div><AppShell bid={bid} bids={sampleBids} activeTab={bid ? 'overview' : null} activePage={bid ? null : 'bids'} plan={plan} creditsLeft={creditsLeft} creditsResetOn="2026-11-01" oralsEnabled={plan === 'growth'} tabSignals={signals} user={sampleUser} detail={detail ? <div><h2 className="font-semibold">Row detail</h2><p className="text-sm text-muted-foreground">Selected requirement</p><button type="button" className="mt-3 underline" onClick={() => action('detail.close()')}>Close</button></div> : null} onSelectTab={(tab) => action(`onSelectTab("${tab}")`)} onSwitchBid={(id) => action(`onSwitchBid("${id}")`)} onOpenPage={(page: OutsidePage) => action(`onOpenPage("${page}")`)} onUpgrade={() => action('onUpgrade()')} onSignOut={() => action('onSignOut()')}><section className="mx-auto flex min-h-full w-full max-w-[1100px] flex-col gap-4 p-6"><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Shell preview</p><h1 className="text-2xl font-semibold">{bid ? 'Overview' : 'Bids'}</h1><p className="rounded-md border border-line bg-paper p-3 text-sm text-muted-foreground" aria-live="polite">Last callback: <code className="font-mono text-ink">{lastAction}</code></p></section></AppShell></div>;
+}
 
-  return (
-    <div className="min-h-screen bg-canvas font-sans text-ink">
-      <AppShell
-        bid={{ id: '1', name: 'VA EHR Support Services', agency: 'Department of Veterans Affairs', dueDate: '2026-11-03', dueTime: '14:00', timeZone: 'America/New_York' }}
-        bids={[{ id: '1', name: 'VA EHR Support Services' }, { id: '2', name: 'Navy Logistics Modernization' }]}
-        activeTab="overview"
-        activePage={null}
-        plan="free"
-        creditsLeft={1}
-        creditsResetOn="2026-11-01"
-        oralsEnabled={false}
-        tabSignals={[{ tab: 'compliance', signal: 'processing' }, { tab: 'documents', signal: 'waiting' }, { tab: 'settings', signal: 'failed' }]}
-        user={{ name: 'Dana Reyes', email: 'dana.reyes@northbridge-gov.com' }}
-        detail={<div><h2 className="font-semibold">Row detail</h2><p className="text-sm text-muted-foreground">Selected requirement</p></div>}
-        onSelectTab={(tab) => action(`onSelectTab("${tab}")`)}
-        onSwitchBid={(id) => action(`onSwitchBid("${id}")`)}
-        onOpenPage={(page) => action(`onOpenPage("${page}")`)}
-        onUpgrade={() => action('onUpgrade()')}
-        onSignOut={() => action('onSignOut()')}
-      >
-        <section className="flex flex-col gap-4 p-6">
-          <header><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Shell preview</p><h1 className="text-2xl font-semibold">Overview</h1></header>
-          <p className="rounded-md border border-line bg-paper p-3 text-sm text-muted-foreground" aria-live="polite">Last callback: <code className="font-mono text-ink">{lastAction}</code></p>
-        </section>
-      </AppShell>
-    </div>
-  );
+export default function Preview() {
+  const [upgrade, setUpgrade] = useState<{ plan: 'free' | 'starter'; reason: UpgradeReason } | null>(null);
+  const [confirm, setConfirm] = useState<'plain' | 'typed' | 'busy' | null>(null);
+  return <div className="flex flex-col gap-8 bg-canvas p-6 font-sans text-ink"><section><h1 className="mb-3 text-2xl font-semibold">AppShell — Free</h1><ShellExample plan="free" bid={sampleBid} creditsLeft={3} detail={false} signals={[{ tab: 'compliance', signal: 'processing' }, { tab: 'documents', signal: 'waiting' }]} /></section><section><h2 className="mb-3 text-2xl font-semibold">AppShell — Growth with orals and detail</h2><ShellExample plan="growth" bid={{ ...sampleBid, name: 'City of Austin Fleet Telematics' }} creditsLeft={12} detail signals={[]} /></section><section><h2 className="mb-3 text-2xl font-semibold">AppShell — Outside a bid</h2><ShellExample plan="starter" bid={null} creditsLeft={4} detail={false} signals={[]} /></section><section><h2 className="mb-3 text-2xl font-semibold">AppShell — 0 credits</h2><ShellExample plan="free" bid={sampleBid} creditsLeft={0} detail={false} signals={[]} /></section><section className="flex flex-wrap gap-2"><h2 className="sr-only">Upgrade dialogs</h2>{reasons.map((reason) => <button type="button" key={`free-${reason}`} className="rounded border border-line bg-paper px-3 py-2 text-sm" onClick={() => setUpgrade({ plan: 'free', reason })}>Free: {reason}</button>)}{reasons.map((reason) => <button type="button" key={`starter-${reason}`} className="rounded border border-line bg-paper px-3 py-2 text-sm" onClick={() => setUpgrade({ plan: 'starter', reason })}>Starter: {reason}</button>)}</section><section className="flex flex-wrap gap-2"><button type="button" className="rounded border border-line bg-paper px-3 py-2 text-sm" onClick={() => setConfirm('plain')}>Confirm plain</button><button type="button" className="rounded border border-line bg-paper px-3 py-2 text-sm" onClick={() => setConfirm('typed')}>Confirm typed</button><button type="button" className="rounded border border-line bg-paper px-3 py-2 text-sm" onClick={() => setConfirm('busy')}>Confirm busy</button></section>{upgrade && <UpgradeDialog open reason={upgrade.reason} plan={upgrade.plan} creditsLeft={0} creditsResetOn="2026-11-01" onChoosePlan={(plan) => setUpgrade({ ...upgrade, plan })} onClose={() => setUpgrade(null)} />}{confirm && <ConfirmDialog open title="Delete this item?" body="This action cannot be undone." confirmLabel="Delete item" typeToConfirm={confirm === 'typed' ? 'DELETE' : null} busy={confirm === 'busy'} onConfirm={() => setConfirm(null)} onCancel={() => setConfirm(null)} />}</div>;
 }
