@@ -4,7 +4,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Workspace } from '@/screens/Workspace';
 import { jsonResponse } from '@/test/fetch';
-import { bidDto, orgPayload } from '@/test/fixtures';
+import { bidDto, docDto, orgPayload } from '@/test/fixtures';
+import type { TabsStatus } from '@/api';
 
 function stubApi() {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -77,5 +78,33 @@ describe('Workspace embedded in the shell', () => {
     vi.stubGlobal('fetch', fetchMock);
     render(workspace(''));
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Confirm' })).toHaveLength(1));
+  });
+
+  it('shows the amendment tabs status on the documents list', async () => {
+    const docsWith = (status: TabsStatus | null) => [docDto({ id: 'amd', kind: 'amendment', amendmentNo: 2, fileName: 'amd2.pdf', amendmentTabsStatus: status })];
+    const run = async (status: TabsStatus | null) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.endsWith('/documents')) return jsonResponse(200, docsWith(status));
+          if (/\/api\/bids\/[^/]+$/.test(url)) return jsonResponse(200, bidDto());
+          if (/\/tabs\//.test(url)) return jsonResponse(200, { rows: [] });
+          return jsonResponse(200, []);
+        }),
+      );
+      return render(
+        <Workspace embedded bidId="bid-1" tab="documents" bids={[]} org={orgPayload()} onTab={() => undefined} onSwitch={() => undefined} refreshKey="" />,
+      );
+    };
+    const pending = await run('pending');
+    await waitFor(() => expect(screen.getByText('Updating bid facts and dates')).toBeTruthy());
+    pending.unmount();
+    const failed = await run('failed');
+    await waitFor(() => expect(screen.getByText('Bid facts and dates did not update. Use Retry above.')).toBeTruthy());
+    failed.unmount();
+    await run('applied');
+    await waitFor(() => expect(screen.getByText('amd2.pdf')).toBeTruthy());
+    expect(screen.queryByText(/Updating bid facts|did not update/)).toBeNull();
   });
 });

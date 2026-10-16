@@ -3,6 +3,7 @@ import { ApiError, api, uploadFile } from '../legacy-api';
 import { Dialog } from '../components/Dialog';
 import { RowDetail } from '../components/RowDetail';
 import { SourceViewer } from '../components/SourceViewer';
+import { amendmentTabsNote } from '../features/shared/amendment-tabs-status';
 import { downloadCsv, downloadDocx, downloadXlsx } from '../export';
 import {
   type Bid,
@@ -693,6 +694,12 @@ function Lessons({ bid, data, onReload, onError }: Panel) {
   );
 }
 
+/** The amendment tabs status beside a document's status (legacy tag classes). */
+function TabsNote({ doc }: { doc: DocumentRow }) {
+  const note = amendmentTabsNote(doc);
+  return note ? <span className={note.tone === 'bad' ? 'tag withdrawn' : 'tag'}>{note.text}</span> : null;
+}
+
 function Documents({ bid, plan, docs, onReload, onError, onNotice }: Panel) {
   const [kind, setKind] = useState('attachment');
   const [reason, setReason] = useState('');
@@ -740,7 +747,10 @@ function Documents({ bid, plan, docs, onReload, onError, onNotice }: Panel) {
                   <td className="num">{mb(doc.sizeBytes)}</td>
                   <td className="num">{doc.createdAt.slice(0, 10)}</td>
                   <td className="num">{doc.liveUntil?.slice(0, 10) ?? '—'}</td>
-                  <td>{doc.liveStatus || doc.extractStatus || doc.scanStatus || 'processing'}</td>
+                  <td>
+                    {doc.liveStatus || doc.extractStatus || doc.scanStatus || 'processing'}
+                    <TabsNote doc={doc} />
+                  </td>
                   <td>{doc.markingStatus || 'none'}</td>
                   <td className="row">
                     {doc.liveStatus === 'archived' ? <button className="btn secondary" type="button" onClick={() => api(`/api/documents/${doc.id}/restore`, { method: 'POST' }).then(() => onNotice('Restore requested')).then(onReload).catch((err: Error) => onError(err.message))}>Restore</button> : null}
