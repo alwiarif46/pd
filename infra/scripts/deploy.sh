@@ -10,7 +10,12 @@
 # Checks before anything is built (all refuse; there is no override):
 #   - /mnt/pddata and /mnt/pdbackup are mounted from /dev/mapper/pddata and /dev/mapper/pdbackup (findmnt). Postgres,
 #     Redis and the uploaded files live there; without the mounts they would be written to the unencrypted root disk.
-#   - the old named volume infra_postgres_data does not exist (data still in the old place: migrate it first, plan 01 s4).
+#   - no data is left in the old place (plan 01 s4, "Moving data off the old named volumes"), unless the marker
+#     /mnt/pddata/.migrated-from-named-volumes says it was moved (then the old volumes may be kept as a fallback):
+#       * no Docker volume labelled com.docker.compose.volume=postgres_data or =redis_data exists, whatever the compose
+#         project name (infra_postgres_data, pd_postgres_data, ...);
+#       * no existing api or worker container lacks a bind mount on /data/files (the old containers kept the uploaded
+#         files in their own writable layer: recreating them would delete the files).
 #   - the hosting subprocessor is known: [infra] subprocessor, or the adapter's own (infra/lib/provider.sh), exported as
 #     PD_HOSTING_SUBPROCESSOR; the backup target comes from [backup] subprocessor (PD_BACKUP_SUBPROCESSOR). The api names
 #     both in GET /api/about/processing.
@@ -24,7 +29,8 @@
 #   --pull-tag TAG    use the pre-built registry images ghcr.io/alwiarif46/pd-<app>:TAG (compose pull) instead of building
 #   --ci              read the request from $SSH_ORIGINAL_COMMAND, set by sshd for the forced command of the pddeploy user
 #                     (infra/server/deploy-user.sh). It must match  ref=<ref>[ tag=<7-40 hex>]  exactly; anything else is
-#                     refused with exit 2 and nothing runs.
+#                     refused with exit 2 and nothing runs. Only master and release tags v<N>[.<N>[.<N>]][-suffix] may be
+#                     deployed this way (checked before any git command; a tag is checked out as refs/tags/<tag>).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,6 +67,9 @@ if (( CI )); then
   PULL_TAG="${BASH_REMATCH[3]:-}"
   # a ref that git could read as an option, or that climbs out with '..', is not a ref
   if [[ "$REF" == -* || "$REF" == *..* || "$REF" == /* ]]; then fail "deploy --ci: refusing ref '$REF'" 2; fi
+  # Only what was meant for production: master, or a release tag. A feature branch can never reach the server via CI.
+  CI_ALLOWED_RE='^(master|v[0-9]+(\.[0-9]+){0,2}(-[A-Za-z0-9.]+)?)$'
+  [[ "$REF" =~ $CI_ALLOWED_RE ]] || fail "deploy --ci: ref '$REF' is not allowed (only master or a release tag v<N>[.<N>[.<N>]][-suffix])" 2
 fi
 REF="${REF:-master}"
 [[ "$REF" =~ ^[A-Za-z0-9._/-]{1,100}$ && "$REF" != -* ]] || fail "bad ref: $REF" 2
@@ -94,9 +103,30 @@ for pair in "$DATA_MOUNT:/dev/mapper/pddata" "$BACKUP_MOUNT:/dev/mapper/pdbackup
   fi
 done
 
-# ------------------------------------------------------------------ 2. data still in the old named volume?
-if docker volume inspect infra_postgres_data >/dev/null 2>&1; then
-  precondition "the old Docker volume infra_postgres_data exists: data is still in the old place on the root disk. Migrate it to $DATA_MOUNT/postgres first (docs/plans/01-infrastructure.md s4); nothing is started so it is not silently left behind."
+# ------------------------------------------------------------------ 2. data still in the old place?
+MIGRATED_MARKER="$DATA_MOUNT/.migrated-from-named-volumes"
+MOVE_DOC="docs/plans/01-infrastructure.md s4, \"Moving data off the old named volumes\""
+OLD_VOLUMES=()
+for vol in postgres_data redis_data; do
+  while IFS= read -r name; do [[ -n "$name" ]] && OLD_VOLUMES+=("$name"); done < <(docker volume ls -q --filter "label=com.docker.compose.volume=$vol" 2>/dev/null || true)
+done
+UNMOUNTED=()
+for svc in api worker; do
+  while IFS= read -r cid; do
+    [[ -n "$cid" ]] || continue
+    mounts="$(docker inspect --format '{{range .Mounts}}{{.Type}}:{{.Destination}} {{end}}' "$cid" 2>/dev/null || true)"
+    [[ " $mounts " == *" bind:/data/files "* ]] || UNMOUNTED+=("$svc ($cid)")
+  done < <(docker ps -a -q --filter "label=com.docker.compose.service=$svc" 2>/dev/null || true)
+done
+if [[ -f "$MIGRATED_MARKER" ]]; then
+  (( ${#OLD_VOLUMES[@]} + ${#UNMOUNTED[@]} == 0 )) || say "Found $MIGRATED_MARKER: the data was moved; the old volumes/containers are kept as they are (${OLD_VOLUMES[*]} ${UNMOUNTED[*]})."
+else
+  if (( ${#OLD_VOLUMES[@]} )); then
+    precondition "old Docker volume(s) ${OLD_VOLUMES[*]} exist: the database/redis data is still on the root disk. Move it to $DATA_MOUNT first ($MOVE_DOC), then create $MIGRATED_MARKER. Nothing was started, so nothing is silently left behind."
+  fi
+  if (( ${#UNMOUNTED[@]} )); then
+    precondition "existing container(s) ${UNMOUNTED[*]} keep /data/files inside the container, not on $DATA_MOUNT/files: recreating them would delete the uploaded files. Copy them out first ($MOVE_DOC: docker cp), then create $MIGRATED_MARKER."
+  fi
 fi
 
 # ------------------------------------------------------------------ 3. code
@@ -104,8 +134,12 @@ say "Pulling latest code from GitHub (ref $REF)..."
 if [[ -d "$PROJECT_DIR/.git" ]] || dry; then
   cd "$PROJECT_DIR" 2>/dev/null || cd "$REPO_OF_SCRIPT"
   x git fetch --tags origin
-  x git checkout "$REF"
-  if git show-ref --verify --quiet "refs/remotes/origin/$REF" 2>/dev/null || dry; then x git pull --ff-only origin "$REF"; fi
+  if (( CI )) && [[ "$REF" == v* ]]; then
+    x git checkout "refs/tags/$REF"      # --ci: a release tag, never a branch that happens to share its name
+  else
+    x git checkout "$REF"
+    if git show-ref --verify --quiet "refs/remotes/origin/$REF" 2>/dev/null || dry; then x git pull --ff-only origin "$REF"; fi
+  fi
 else
   x git clone -b "$REF" "$GIT_REPO" "$PROJECT_DIR"
   cd "$PROJECT_DIR"

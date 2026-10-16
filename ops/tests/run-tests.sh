@@ -347,6 +347,28 @@ deploy_env dp-oldvol
 subprocessor_set
 out="$(FAKE_OLD_VOLUME=1 bash infra/scripts/deploy.sh 2>&1)"; rc=$?
 [[ $rc != 0 ]] && grep -q "infra_postgres_data" <<<"$out" && [[ "$(compose_calls)" == 0 ]] && ok "deploy refuses while the old named volume infra_postgres_data exists" || bad "old volume guard" "rc=$rc $out"
+grep -q "Moving data off the old named volumes" <<<"$out" && grep -q ".migrated-from-named-volumes" <<<"$out" && ok "the refusal points at the migration procedure (plan 01 s4) and the marker" || bad "refusal text" "$out"
+grep -q "^docker volume ls -q --filter label=com.docker.compose.volume=postgres_data" "$FAKE_CALLS" && grep -q "^docker volume ls -q --filter label=com.docker.compose.volume=redis_data" "$FAKE_CALLS" \
+  && ok "old volumes are found by compose label (postgres_data, redis_data), not by one project name" || bad "volume lookup" "$(grep '^docker volume' "$FAKE_CALLS")"
+for v in pd_postgres_data myproj_redis_data; do
+  deploy_env dp-oldvol2; subprocessor_set
+  out="$(FAKE_OLD_VOLUMES=$v bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+  [[ $rc != 0 ]] && grep -q "$v" <<<"$out" && [[ "$(compose_calls)" == 0 ]] && ok "deploy refuses the old volume $v (any compose project name)" || bad "old volume $v not found" "rc=$rc $out"
+done
+deploy_env dp-files
+subprocessor_set
+out="$(FAKE_CONTAINERS_api=c0ffee01 FAKE_MOUNTS_c0ffee01='volume:/var/run/x ' bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "api (c0ffee01)" <<<"$out" && grep -q "docker cp" <<<"$out" && [[ "$(compose_calls)" == 0 ]] \
+  && ok "deploy refuses while an api container keeps /data/files in its own layer (recreating it would lose the files)" || bad "unmounted files guard" "rc=$rc $out"
+deploy_env dp-files-ok
+subprocessor_set
+out="$(FAKE_CONTAINERS_api=c0ffee01 FAKE_MOUNTS_c0ffee01='bind:/data/files ' FAKE_CONTAINERS_worker=beef02 FAKE_MOUNTS_beef02='bind:/data/files ' bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+[[ $rc == 0 ]] && ok "api/worker containers with the /data/files bind mount (the new layout) pass" || bad "bind-mounted containers refused" "rc=$rc $(tail -3 <<<"$out")"
+deploy_env dp-marker
+subprocessor_set
+: >"$S/pddata/.migrated-from-named-volumes"
+out="$(FAKE_OLD_VOLUMES='infra_postgres_data infra_redis_data' FAKE_CONTAINERS_worker=beef02 bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q "the data was moved" <<<"$out" && [[ "$(compose_calls)" -gt 0 ]] && ok "with /mnt/pddata/.migrated-from-named-volumes the old volumes may be kept and the deploy goes on" || bad "marker" "rc=$rc $(tail -3 <<<"$out")"
 
 deploy_env dp-nosub
 out="$(bash infra/scripts/deploy.sh 2>&1)"; rc=$?
@@ -362,7 +384,8 @@ l_build="$(lno ' build( |$)')"; l_db="$(lno 'up -d postgres redis')"; l_mig="$(l
 grep -q "^docker compose --env-file $S/project/.env -f $S/project/infra/docker-compose.yml up -d postgres redis" "$FAKE_CALLS" && ok "deploy passes --env-file and -f explicitly" || bad "compose flags"
 grep -q "^env .*PD_HOSTING_SUBPROCESSOR=Contabo GmbH PD_BACKUP_SUBPROCESSOR=Backblaze, Inc. (encrypted off-site backups) PD_DATA_ROOT=$S/pddata" "$FAKE_CALLS.env" && ok "deploy exports the hosting and backup subprocessors and the data root to compose" || bad "subprocessor env" "$(tail -2 "$FAKE_CALLS.env")"
 [[ -d "$S/pddata/files" && -d "$S/pddata/postgres" && -d "$S/pddata/redis" ]] && grep -q "^chown 1000:1000 $S/pddata/files" "$FAKE_CALLS" && ok "deploy creates files/, postgres/, redis/ on the data volume (files owned by 1000:1000)" || bad "data dirs" "$(ls "$S/pddata")"
-! grep -vE '^\s*#' infra/scripts/deploy.sh | grep -qE '/data/(files|backups)' && ok "deploy.sh no longer uses /data/files or /data/backups" || bad "old /data paths"
+# (/data/files is still named as the CONTAINER path in the bind-mount check; the host never gets a /data directory)
+! grep -vE '^\s*#' infra/scripts/deploy.sh | grep -qE '(mkdir|chown|install|cp|rsync)[^#]*[ "]/data/(files|backups)|DATA_MOUNT:-/data' && ok "deploy.sh no longer creates or uses /data/files or /data/backups on the host" || bad "old /data paths"
 grep -q "^docker compose .* build" "$FAKE_CALLS" && ! grep -q "^docker compose .* pull" "$FAKE_CALLS" && ok "without --pull-tag the images are built" || bad "build vs pull"
 
 deploy_env dp-pull
@@ -387,10 +410,25 @@ done
 deploy_env dp-ci-unset
 out="$(env -u SSH_ORIGINAL_COMMAND bash infra/scripts/deploy.sh --ci 2>&1)"; rc=$?
 [[ $rc == 2 && ! -s "$FAKE_CALLS" ]] && ok "--ci without SSH_ORIGINAL_COMMAND is refused (exit 2)" || bad "--ci unset" "rc=$rc"
+# --ci deploys only master and release tags: checked before any git command
+for bad_ref in feature/x main master-old vfoo v1.2.3.4 release/v1 refs/heads/master HEAD 0123abc; do
+  deploy_env dp-ci-ref
+  subprocessor_set
+  out="$(SSH_ORIGINAL_COMMAND="ref=$bad_ref" bash infra/scripts/deploy.sh --ci 2>&1)"; rc=$?
+  if [[ $rc == 2 && ! -s "$FAKE_CALLS" ]] && grep -q "is not allowed" <<<"$out"; then ok "--ci refuses ref '$bad_ref' (not master or a release tag) before any git command"; else bad "--ci allowed ref '$bad_ref'" "rc=$rc $out"; fi
+done
+for good_ref in v1 v1.2.3 v2.0.0-rc.1; do
+  deploy_env dp-ci-tag
+  subprocessor_set
+  out="$(SSH_ORIGINAL_COMMAND="ref=$good_ref tag=abc1234" bash infra/scripts/deploy.sh --ci 2>&1)"; rc=$?
+  [[ $rc == 0 ]] && grep -q "^git checkout refs/tags/$good_ref$" "$FAKE_CALLS" && ! grep -q "^git pull" "$FAKE_CALLS" && ok "--ci accepts the release tag $good_ref and checks out refs/tags/$good_ref" || bad "--ci tag $good_ref" "rc=$rc $(cat "$FAKE_CALLS")"
+done
+out="$(bash infra/scripts/deploy.sh --ref feature/x 2>&1)"; rc=$?
+[[ $rc == 0 ]] && ok "an operator on the server (not --ci) may still deploy any ref" || bad "manual ref" "rc=$rc"
 
 deploy_env dp-dry
 out="$(bash infra/scripts/deploy.sh --dry-run 2>&1)"; rc=$?
-[[ $rc == 0 ]] && ! grep -qE '^(docker compose|git (fetch|checkout|pull|clone)|chown)' "$FAKE_CALLS" && ok "deploy.sh --dry-run exits 0 and changes nothing (only read-only probes: findmnt, docker volume inspect)" || bad "deploy dry-run" "rc=$rc $(cat "$FAKE_CALLS")"
+[[ $rc == 0 ]] && ! grep -qE '^(docker compose|git (fetch|checkout|pull|clone)|chown)' "$FAKE_CALLS" && ok "deploy.sh --dry-run exits 0 and changes nothing (only read-only probes: findmnt, docker volume ls, docker ps)" || bad "deploy dry-run" "rc=$rc $(cat "$FAKE_CALLS")"
 
 # docker-compose.yml (bugs 10-11)
 yml="$(cat infra/docker-compose.yml)"
