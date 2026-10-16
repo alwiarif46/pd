@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
@@ -11,6 +11,7 @@ import { ShellContext, type ShellContextValue } from '@/features/shell/bid-conte
 import type { ScheduleExporter } from '@/schedule/export';
 import { AMENDMENT_GONE_MESSAGE, type ScheduleApi } from './controller';
 import { ScheduleContainer } from './ScheduleContainer';
+import { useUserDateChange, type UserDateChangeApi } from './use-user-date-change';
 
 vi.mock('sonner', async (orig) => ({
   ...(await orig<typeof import('sonner')>()),
@@ -880,5 +881,119 @@ describe('ScheduleContainer: amendment date change, guards and sources', () => {
     expect(document.querySelector('[aria-label="Source viewer"]')).toBeTruthy();
     switchTo('bid-2', { bid: bidDto({ id: 'bid-2', dueDate: ts('2026-12-15') }) });
     expect(document.querySelector('[aria-label="Source viewer"]')).toBeNull();
+  });
+});
+
+describe('ScheduleContainer: the date-change lock shared with other screens (Settings)', () => {
+  const change: PendingDateChangeDto = {
+    amendmentId: 'amd-3',
+    amendmentNo: 3,
+    previousDue: '2026-11-25',
+    nextDue: '2026-12-02',
+    sourcePage: 4,
+    sourceQuote: 'Proposals are now due December 2.',
+  };
+  const TITLE = 'Amendment 3 moved the due date';
+  const pendingApi = (over: Partial<ScheduleApi> = {}) =>
+    mockApi([userRow, aiRow], {
+      getTab: vi.fn(async () => ({ activities: [userRow, aiRow], workdaysOnly: true, proposals: [], pendingDateChange: change })) as unknown as ScheduleApi['getTab'],
+      ...over,
+    });
+  const prompt = () => screen.findByRole('dialog', { name: TITLE });
+  const button = (dialog: HTMLElement, name: string) => within(dialog).getByRole('button', { name }) as HTMLButtonElement;
+
+  /** Settings stand-in: the same hook on its own api, rendered apart from the Schedule tab. */
+  function otherScreen(api: UserDateChangeApi) {
+    return renderHook(() => useUserDateChange<null>(api));
+  }
+
+  it('does not answer the amendment while another screen applies a user change on the bid, then does', async () => {
+    const bid = deferred<ReturnType<typeof bidDto>>();
+    const settingsApi = mockApi([userRow], { getBid: vi.fn(() => bid.promise) });
+    const settings = otherScreen(settingsApi);
+    act(() => {
+      settings.result.current.open('bid-1', { previousDue: '2026-11-25', nextDue: '2026-12-09' }, null);
+    });
+    let run: Promise<unknown> | null = null;
+    act(() => {
+      run = settings.result.current.resolve('bid-1', 'shift');
+    });
+    // Settings unmounts (a tab switch) while its answer is still being applied; Schedule mounts next.
+    settings.unmount();
+
+    const api = pendingApi();
+    const { user } = renderContainer({ api });
+    const dialog = await prompt();
+    const shift = button(dialog, 'Shift dates');
+    expect(shift.disabled).toBe(true);
+    fireEvent.click(shift);
+    fireEvent.click(button(dialog, 'Cancel'));
+    expect(api.adjustSchedule).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: TITLE })).toBeTruthy();
+
+    await act(async () => {
+      bid.resolve(bidDto({ dueDate: ts('2026-11-25') }));
+      await run;
+    });
+    await waitFor(() => expect(button(dialog, 'Shift dates').disabled).toBe(false));
+    await user.click(button(dialog, 'Shift dates'));
+    await waitFor(() => expect(api.adjustSchedule).toHaveBeenCalledWith('bid-1', { mode: 'shift', amendmentId: 'amd-3' }));
+    expect(api.adjustSchedule).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses another screen's user change while the amendment answer is being applied, and allows it after", async () => {
+    const adjust = deferred<AdjustScheduleDto>();
+    const api = pendingApi({ adjustSchedule: vi.fn(() => adjust.promise) });
+    const { user } = renderContainer({ api });
+    await user.click(button(await prompt(), 'Shift dates'));
+    await waitFor(() => expect(api.adjustSchedule).toHaveBeenCalledTimes(1));
+
+    const settingsApi = mockApi([userRow]);
+    const settings = otherScreen(settingsApi);
+    act(() => {
+      expect(settings.result.current.open('bid-1', { previousDue: '2026-11-25', nextDue: '2026-12-09' }, null)).toBe(false);
+    });
+    expect(settings.result.current.current('bid-1')).toBeNull();
+    // Another bid is not blocked.
+    act(() => {
+      expect(settings.result.current.open('bid-2', { previousDue: '2026-11-25', nextDue: '2026-12-09' }, null)).toBe(true);
+    });
+
+    adjust.resolve(adjusted);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    act(() => {
+      expect(settings.result.current.open('bid-1', { previousDue: '2026-12-02', nextDue: '2026-12-09' }, null)).toBe(true);
+    });
+    expect(settingsApi.getBid).not.toHaveBeenCalled();
+  });
+
+  it("disables the user prompt's answers while another screen's answer on the bid is in flight", async () => {
+    const api = mockApi();
+    const { user } = renderContainer({ api });
+    await ready();
+    await changeDueTo(user, '2026-12-02');
+    const dialog = await screen.findByRole('dialog');
+
+    const bid = deferred<ReturnType<typeof bidDto>>();
+    const settings = otherScreen(mockApi([userRow], { getBid: vi.fn(() => bid.promise) }));
+    act(() => {
+      settings.result.current.open('bid-1', { previousDue: '2026-11-25', nextDue: '2026-12-09' }, null);
+    });
+    let run: Promise<unknown> | null = null;
+    act(() => {
+      run = settings.result.current.resolve('bid-1', 'keep');
+    });
+    await waitFor(() => expect(button(dialog, 'Shift dates').disabled).toBe(true));
+    fireEvent.click(button(dialog, 'Shift dates'));
+    expect(api.getBid).not.toHaveBeenCalled();
+
+    await act(async () => {
+      bid.resolve(bidDto({ dueDate: ts('2026-11-25') }));
+      await run;
+    });
+    await waitFor(() => expect(button(dialog, 'Shift dates').disabled).toBe(false));
+    await user.click(button(dialog, 'Shift dates'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.adjustSchedule).toHaveBeenCalledWith('bid-1', { mode: 'shift', previousDue: '2026-11-25', nextDue: '2026-12-02' });
   });
 });
