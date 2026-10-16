@@ -295,6 +295,46 @@ out="$(bash ops/backup/rclone-setup.sh --dry-run 2>&1)"; rc=$?
 [[ $rc == 0 ]] && grep -q "b2:shaavir-pd-backup-us/shaavir-pd" <<<"$out" && grep -q "rclone obscure -" <<<"$out" && ok "rclone-setup --dry-run: remote from the tenant, crypt passwords obscured over stdin" || bad "rclone-setup dry" "$out"
 out="$(PD_UNIT_DIR="$S/units" bash ops/install.sh --dry-run 2>&1)"; rc=$?
 [[ $rc == 0 ]] && grep -q "OnCalendar=hourly" <<<"$out" && grep -q "Persistent=true" <<<"$out" && grep -q "backup.sh" <<<"$out" && ok "install.sh --dry-run renders an hourly persistent pd-backup timer" || bad "install dry" "$out"
+grep -q "OnFailure=pd-alert@%n.service" ops/systemd/pd-backup.service.template && grep -q "OnFailure=pd-alert@%n.service" ops/systemd/pd-backup-check.service.template \
+  && grep -q "ops/backup/alert.sh %i" <<<"$out" && grep -q "backup-age-check.sh" <<<"$out" && grep -q "enable --now pd-backup.timer pd-backup-check.timer" <<<"$out" \
+  && ok "install.sh: pd-backup and pd-backup-check name OnFailure=pd-alert@%n; the age-check timer is enabled too" || bad "install monitoring units" "$out"
+
+# ------------------------------------------------------------------ backup-age-check.sh / alert.sh
+t_of() { date -u -d "$1" +%s; }
+backup_env age-ok
+mkdir -p "$S/pdbackup/pd"; printf 'time=2026-10-16T01:30:00Z\nhost=pd\nmachine=x\n' >"$S/pdbackup/pd/last-offsite-ok"
+out="$(bash ops/backup/backup-age-check.sh --now "$(t_of 2026-10-16T02:00:00Z)" 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q "OK: backups and the off-site copy are within 2 h" <<<"$out" && ok "age check passes for a 1 h old archive and a 30 min old off-site marker ([backup] max_backup_age_hours = 2)" || bad "age ok" "rc=$rc $out"
+out="$(bash ops/backup/backup-age-check.sh --now "$(t_of 2026-10-16T03:05:00Z)" 2>&1)"; rc=$?
+[[ $rc == 1 ]] && grep -q "STALE: newest archive pd-2026-10-16T01:00:00 is 2h05m old" <<<"$out" && ok "age check fails when the newest archive is older than the limit" || bad "age stale archive" "rc=$rc $out"
+seed_archive pd-2026-10-16T05:00:00-pre-restore
+out="$(bash ops/backup/backup-age-check.sh --now "$(t_of 2026-10-16T05:30:00Z)" 2>&1)"; rc=$?
+[[ $rc == 1 ]] && grep -q "newest archive pd-2026-10-16T01:00:00" <<<"$out" && ok "a fresh -pre-restore copy does not count as a backup" || bad "age pre-restore counted" "rc=$rc $out"
+backup_env age-offsite
+seed_archive pd-2026-10-16T09:00:00
+mkdir -p "$S/pdbackup/pd"; printf 'time=2026-10-16T01:30:00Z\n' >"$S/pdbackup/pd/last-offsite-ok"
+out="$(bash ops/backup/backup-age-check.sh --now "$(t_of 2026-10-16T09:10:00Z)" 2>&1)"; rc=$?
+[[ $rc == 1 ]] && grep -q "STALE: last complete off-site copy" <<<"$out" && ! grep -q "STALE: newest archive" <<<"$out" && ok "age check fails when only the off-site copy is stale" || bad "age stale offsite" "rc=$rc $out"
+rm -f "$S/pdbackup/pd/last-offsite-ok"
+out="$(bash ops/backup/backup-age-check.sh --now "$(t_of 2026-10-16T09:10:00Z)" 2>&1)"; rc=$?
+[[ $rc == 1 ]] && grep -q "last-offsite-ok is missing" <<<"$out" && ok "age check fails when no off-site marker exists" || bad "age no marker" "rc=$rc $out"
+backup_env age-empty
+rm -rf "$S/state/borg-archives"; mkdir -p "$S/pdbackup/pd"; printf 'time=2026-10-16T01:30:00Z\n' >"$S/pdbackup/pd/last-offsite-ok"
+out="$(bash ops/backup/backup-age-check.sh --now "$(t_of 2026-10-16T02:00:00Z)" 2>&1)"; rc=$?
+[[ $rc == 1 ]] && grep -q "no regular archive" <<<"$out" && ok "age check fails on an empty repository" || bad "age empty" "rc=$rc $out"
+sed 's/^max_backup_age_hours = 2/max_backup_age_hours = 12/' "$REPO/config/tenant.toml" >"$S/t12.toml"
+seed_archive pd-2026-10-16T01:00:00
+out="$(bash ops/backup/backup-age-check.sh --tenant "$S/t12.toml" --now "$(t_of 2026-10-16T08:00:00Z)" 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q "within 12 h" <<<"$out" && ok "age check reads [backup] max_backup_age_hours from the tenant file" || bad "age tenant value" "rc=$rc $out"
+backup_env alert
+out="$(bash ops/backup/alert.sh pd-backup.service 2>&1)"; rc=$?
+[[ $rc == 0 && -f "$S/state/alerts/pd-backup.service.failed" ]] && grep -q "^failed at " "$S/state/alerts/pd-backup.service.failed" && grep -q "^logger -p user.err -t pd-alert" "$FAKE_CALLS" && ok "alert.sh records the failed unit in PD_STATE_DIR/alerts and logs at priority err" || bad "alert record" "rc=$rc $out"
+out="$(bash ops/backup/alert.sh --status 2>&1)"; rc=$?
+[[ $rc == 1 ]] && grep -q "pd-backup.service" <<<"$out" && ok "alert.sh --status lists open alerts (exit 1)" || bad "alert status" "rc=$rc $out"
+bash ops/backup/alert.sh --clear pd-backup.service >/dev/null 2>&1; out="$(bash ops/backup/alert.sh --status 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q "no open alerts" <<<"$out" && ok "alert.sh --clear removes it" || bad "alert clear" "rc=$rc $out"
+out="$(bash ops/backup/alert.sh '../etc/x' 2>&1)"; rc=$?
+[[ $rc == 2 ]] && ok "alert.sh refuses a unit name with a path in it" || bad "alert unit name" "rc=$rc"
 
 # ------------------------------------------------------------------ restore-drill/drill.sh
 JOURNAL_N="$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))["entries"]))' "$(np "$REPO/packages/core/src/db/migrations/meta/_journal.json")")"
@@ -321,6 +361,20 @@ out="$(FAKE_PGRESTORE_EXIT=1 FAKE_MIGRATIONS=$JOURNAL_N bash ops/restore-drill/d
 drill_env dr-offsite
 out="$(FAKE_MIGRATIONS=$JOURNAL_N FAKE_COPY_DEST_FILES=1 bash ops/restore-drill/drill.sh run --from-offsite --rclone-env "$S/restore.env" --borg-pass "$S/etc/borg.pass" 2>&1)"; rc=$?
 grep -q "^rclone --config .* copy b2crypt:borg " "$FAKE_CALLS" && ! grep -qF -- "$SECRET_KEY" "$FAKE_CALLS" && ! grep -qF -- "$SECRET_KEY" <<<"$out" && ok "drill --from-offsite pulls b2crypt:borg with the key only in the environment" || bad "drill offsite" "rc=$rc $(grep '^rclone' "$FAKE_CALLS")"
+
+# ------------------------------------------------------------------ ops/ci/restore-drill-ci.sh (shape only; CI runs it against real Postgres)
+drill_env ci-drill
+mkdir -p "$S/work"
+out="$(FAKE_MIGRATIONS=$JOURNAL_N bash ops/ci/restore-drill-ci.sh --src srcpg --dst dstpg --workdir "$S/work" --seed 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q "RESTORE DRILL (CI): PASS" <<<"$out" && grep -q "truncated and empty dumps refused" <<<"$out" && ok "restore-drill-ci.sh runs against the docker fake (dump, validation incl. a truncated dump, two restores, checks)" || bad "ci drill" "rc=$rc $out"
+grep -q "^docker exec srcpg pg_dump -U pd_owner -d pd -Fc" "$FAKE_CALLS" && grep -q "^docker exec -i dstpg pg_restore -U pd_owner -d pd --exit-on-error --single-transaction" "$FAKE_CALLS" \
+  && grep -q "DROP DATABASE IF EXISTS pd WITH (FORCE)" "$FAKE_CALLS" && grep -q "CREATE ROLE pd_app LOGIN NOSUPERUSER NOBYPASSRLS" "$FAKE_CALLS" \
+  && ok "restore-drill-ci.sh uses restore.sh's SQL path from ops/lib/backup-common.sh" || bad "ci drill sql path" "$(cat "$FAKE_CALLS")"
+[[ -z "$(ls -A "$S/work")" ]] && ok "restore-drill-ci.sh removes only its own dump files" || bad "ci drill left files" "$(ls -A "$S/work")"
+out="$(FAKE_MIGRATIONS=$JOURNAL_N FAKE_ROLES='pd_app:t:t:f pd_system:f:f:f' bash ops/ci/restore-drill-ci.sh --src srcpg --dst dstpg --workdir "$S/work" --seed 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "roles are" <<<"$out" && ok "restore-drill-ci.sh fails when a restored role has the wrong attributes" || bad "ci drill roles" "rc=$rc $out"
+out="$(FAKE_MIGRATIONS=1 bash ops/ci/restore-drill-ci.sh --src srcpg --dst dstpg --workdir "$S/work" 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "not fully migrated" <<<"$out" && ok "restore-drill-ci.sh refuses a source that is not fully migrated" || bad "ci drill migrations" "rc=$rc $out"
 
 # ------------------------------------------------------------------ deploy.sh (bugs 9-11; compose data placement)
 # deploy_env: a sandbox with a copy of the libs, providers, tenant file and compose file as PD_PROJECT_DIR

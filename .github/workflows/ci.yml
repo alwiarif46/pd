@@ -121,11 +121,59 @@ jobs:
       # needs root: real container files, loop devices (never a format or mount), nft in a network namespace
       - run: sudo bash infra/tests/test-root-container.sh
 
+  restore-drill:
+    # The restore drill against REAL Postgres (ops/ci/restore-drill-ci.sh): migrate a source database with the repo's
+    # migrations, take a real pg_dump -Fc, check restore.sh's validation (a truncated dump must be refused), then run
+    # restore.sh's SQL path from ops/lib/backup-common.sh into a second, fresh Postgres twice and compare. No network
+    # beyond these two service containers (no Borg, no B2: the archive layer is covered by ops/tests with fakes).
+    runs-on: ubuntu-latest
+    services:
+      pgsrc:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pd_owner
+          POSTGRES_PASSWORD: drill
+          POSTGRES_DB: pd
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U pd_owner -d pd"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      pgdst:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pd_owner
+          POSTGRES_PASSWORD: drill
+          POSTGRES_DB: pd
+        options: >-
+          --health-cmd "pg_isready -U pd_owner -d pd"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install
+      - name: migrate the source database (as pd_owner, like the compose migrate service)
+        env:
+          DATABASE_URL: postgres://pd_owner:drill@localhost:5433/pd  # secret-scan: allow (throwaway CI database)
+        run: pnpm db:migrate
+      - name: restore drill
+        run: bash ops/ci/restore-drill-ci.sh --src "${{ job.services.pgsrc.id }}" --dst "${{ job.services.pgdst.id }}" --workdir "$RUNNER_TEMP" --seed
+
   build-docker:
     # Build only, no push (pull requests, every push). The build context is the repo root; each Dockerfile installs the
     # workspace with the frozen lockfile, builds its app, and ships production deps only.
     runs-on: ubuntu-latest
-    needs: [typecheck, lint, build, test-web, test-api, test-infra]
+    needs: [typecheck, lint, build, test-web, test-api, test-infra, restore-drill]
     strategy:
       fail-fast: false
       matrix:

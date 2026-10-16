@@ -1,0 +1,12 @@
+# /etc/systemd/system/pd-backup-check.service - rendered by ops/install.sh. Fails when the newest backup or the last
+# complete off-site copy is older than [backup] max_backup_age_hours (ops/backup/backup-age-check.sh).
+[Unit]
+Description=PD backup age check (newest Borg archive and last-offsite-ok)
+After=mnt-pdbackup.mount
+RequiresMountsFor=/mnt/pdbackup
+OnFailure=pd-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart={{PROJECT_DIR}}/ops/backup/backup-age-check.sh
+TimeoutStartSec=10min

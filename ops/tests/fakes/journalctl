@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# fake journalctl: logs argv to $FAKE_CALLS and prints one fake line
+printf 'journalctl %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
+echo "Oct 16 01:00:00 pd systemd[1]: fake journal line"
+exit 0

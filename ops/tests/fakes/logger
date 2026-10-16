@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# fake logger: logs argv to $FAKE_CALLS; never reaches the real syslog
+printf 'logger %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
+exit 0
