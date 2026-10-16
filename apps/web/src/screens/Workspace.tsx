@@ -323,7 +323,7 @@ function TabPanel(props: {
     case 'orals': return <Orals {...props} bid={bid} />;
     case 'lessons': return <Lessons {...props} bid={bid} />;
     case 'documents': return <Documents {...props} bid={bid} />;
-    case 'settings': return <Settings {...props} bid={bid} />;
+    case 'settings': return null; // features/settings/route.tsx renders it; the shell never embeds it here.
     default: {
       const unreachable: never = tab;
       return unreachable;
@@ -781,90 +781,6 @@ function Documents({ bid, plan, docs, onReload, onError, onNotice }: Panel) {
         </Dialog>
       ) : null}
     </div>
-  );
-}
-
-function Settings({ bid, plan, onReload, onError }: Panel) {
-  const [name, setName] = useState(bid.name);
-  const [agency, setAgency] = useState(bid.agency ?? '');
-  const [bidType, setBidType] = useState(bid.bidType);
-  const [number, setNumber] = useState(bid.solicitationNumber);
-  const [start, setStart] = useState(dayKey(bid.startDate));
-  const [due, setDue] = useState(dayKey(bid.dueDate));
-  const [time, setTime] = useState(bid.dueTime ?? '');
-  const [zone, setZone] = useState(bid.timeZone ?? '');
-  const [orals, setOrals] = useState(bid.oralsEnabled);
-  const [keep, setKeep] = useState(dayKey(bid.retentionExtendedUntil));
-  const [prompt, setPrompt] = useState<string | null>(null);
-  const [confirmName, setConfirmName] = useState('');
-  const [deleting, setDeleting] = useState(false);
-
-  function save(mode?: 'shift' | 'scale' | 'keep') {
-    const previous = dayKey(bid.dueDate);
-    api<Bid>(`/api/bids/${bid.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({
-        name, agency, bidType, solicitationNumber: number,
-        startDate: start || null, dueDate: due || null, dueTime: time, timeZone: zone,
-        oralsEnabled: orals,
-        retentionExtendedUntil: plan === 'free' ? undefined : (keep || null),
-      }),
-    }).then(() => {
-      if (mode && previous && due && previous !== due) {
-        return api(`/api/bids/${bid.id}/schedule/adjust`, { method: 'POST', body: JSON.stringify({ mode, previousDue: previous, nextDue: due }) });
-      }
-      return undefined;
-    }).then(() => {
-      setPrompt(null);
-      onReload();
-    }).catch((err: Error) => onError(err.message));
-  }
-
-  return (
-    <form className="card stack" onSubmit={(event) => {
-      event.preventDefault();
-      if (dayKey(bid.dueDate) && due && dayKey(bid.dueDate) !== due) setPrompt(due);
-      else save();
-    }}>
-      <label className="field">Name <input value={name} onChange={(event) => setName(event.target.value)} /></label>
-      <label className="field">Agency <input value={agency} onChange={(event) => setAgency(event.target.value)} /></label>
-      <label className="field">Bid type
-        <select value={bidType} onChange={(event) => setBidType(event.target.value === 'sled' ? 'sled' : 'federal')}>
-          <option value="federal">Federal</option>
-          <option value="sled">SLED</option>
-        </select>
-      </label>
-      <label className="field">Solicitation number <input value={number} onChange={(event) => setNumber(event.target.value)} /></label>
-      <label className="field">Start date <input type="date" value={start} onChange={(event) => setStart(event.target.value)} /></label>
-      <label className="field">Due date <input type="date" value={due} onChange={(event) => setDue(event.target.value)} /></label>
-      <label className="field">Time <input value={time} onChange={(event) => setTime(event.target.value)} /></label>
-      <label className="field">Time zone <input value={zone} onChange={(event) => setZone(event.target.value)} /></label>
-      <label className="row"><input type="checkbox" checked={orals} onChange={(event) => setOrals(event.target.checked)} /> Orals</label>
-      {plan !== 'free' ? <label className="field">Keep files live until <input type="date" value={keep} onChange={(event) => setKeep(event.target.value)} /></label> : null}
-      <button className="btn" type="submit">Save</button>
-      <button className="btn danger" type="button" onClick={() => setDeleting(true)}>Delete the bid</button>
-      {prompt ? (
-        <Dialog title="The due date changed" onCancel={() => setPrompt(null)}>
-          <p>Move unlocked schedule activities with the new date, scale them, or keep them.</p>
-          <div className="row">
-            <button className="btn" type="button" onClick={() => save('shift')}>Shift</button>
-            <button className="btn" type="button" onClick={() => save('scale')}>Scale</button>
-            <button className="btn secondary" type="button" onClick={() => save('keep')}>Keep</button>
-          </div>
-        </Dialog>
-      ) : null}
-      {deleting ? (
-        <Dialog title={`Delete ${bid.name}`} onCancel={() => setDeleting(false)}>
-          <p>Type the bid name to delete it and its archive copies. A consumed credit is not returned. A reserved credit is released.</p>
-          <label className="field">Bid name
-            <input value={confirmName} onChange={(event) => setConfirmName(event.target.value)} />
-          </label>
-          <button className="btn danger" type="button" disabled={confirmName !== bid.name} onClick={() => {
-            api(`/api/bids/${bid.id}`, { method: 'DELETE' }).then(() => { window.location.hash = '#/bids'; }).catch((err: Error) => onError(err.message));
-          }}>Delete {bid.name}</button>
-        </Dialog>
-      ) : null}
-    </form>
   );
 }
 

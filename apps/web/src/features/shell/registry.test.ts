@@ -28,10 +28,11 @@ describe('collectRoutes', () => {
 });
 
 describe('screens', () => {
-  it('finds the bids, schedule and overview screens through import.meta.glob', () => {
+  it('finds the bids, schedule, overview and settings screens through import.meta.glob', () => {
     expect(screens.pages.has('bids')).toBe(true);
     expect(screens.pages.has('new_bid')).toBe(true);
     expect(screens.tabs.has('schedule')).toBe(true);
     expect(screens.tabs.has('overview')).toBe(true);
+    expect(screens.tabs.has('settings')).toBe(true);
   });
 });
