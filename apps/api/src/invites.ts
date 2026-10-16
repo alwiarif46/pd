@@ -125,8 +125,14 @@ export async function registerInvites(app: FastifyInstance): Promise<void> {
       }
       // Dated by the database clock after the locks. The column default (now()) is the
       // transaction start, which could date this member before one who joined while this waited;
-      // seat order follows created_at.
-      await db.insert(schema.memberships).values({ orgId, userId, role: invite.role, createdAt: sql`clock_timestamp()` });
+      // seat order follows created_at. In UTC wall-clock time, as the api stores every timestamp
+      // (0005; drizzle reads timestamp without time zone as UTC), whatever the session time zone.
+      await db.insert(schema.memberships).values({
+        orgId,
+        userId,
+        role: invite.role,
+        createdAt: sql`(clock_timestamp() at time zone 'UTC')`,
+      });
       await markAccepted(db, invite.id, now);
       return { orgId, name: org.name, role: invite.role, alreadyMember: false };
     });

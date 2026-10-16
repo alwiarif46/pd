@@ -16,6 +16,9 @@ import { fulfilled, raceInOrder, type Reply } from './races.js';
 
 const unavailable = inject('dbUnavailable');
 
+/** The database clock now, as the UTC wall-clock time the api stores (0005). */
+const UTC_NOW = sql`(clock_timestamp() at time zone 'UTC')`;
+
 type User = Awaited<ReturnType<typeof createUser>>;
 type Plan = 'free' | 'starter';
 
@@ -61,10 +64,13 @@ describe.skipIf(Boolean(unavailable))('invite accept', () => {
     return { orgId, owner, name: `Org ${label}` };
   }
 
-  /** A membership written directly as pd_app, after every existing one. */
+  /**
+   * A membership written directly as pd_app, dated now by the database clock in UTC wall-clock
+   * time, as the accept route dates one. Never in the future, so a later accept sorts after it.
+   */
   async function addMember(orgId: string, userId: string) {
     await withOrg(orgId, async (db) => {
-      await db.insert(schema.memberships).values({ orgId, userId, role: 'member', createdAt: new Date(Date.now() + 1000) });
+      await db.insert(schema.memberships).values({ orgId, userId, role: 'member', createdAt: UTC_NOW });
     });
   }
 
@@ -112,6 +118,11 @@ describe.skipIf(Boolean(unavailable))('invite accept', () => {
     expect((await inviteRow(orgId, invitee.email)).acceptedAt).not.toBeNull();
     const members = (await as(app, owner.token)('GET', '/api/org/members')).json<{ userId: string; seatLocked: boolean }[]>();
     expect(members.find((member) => member.userId === invitee.userId)).toMatchObject({ seatLocked: false });
+    // Stored as UTC wall-clock time like every timestamp the api writes (0005), whatever the
+    // database session's time zone, so seat order compares like with like.
+    const [row] = await withOrg(orgId, (db) => db.select({ createdAt: schema.memberships.createdAt }).from(schema.memberships)
+      .where(eq(schema.memberships.userId, invitee.userId)));
+    expect(Math.abs(row.createdAt.getTime() - Date.now())).toBeLessThan(60_000);
   });
 
   it('needs a signed-in user', async () => {
@@ -363,8 +374,6 @@ describe.skipIf(Boolean(unavailable))('invite accept', () => {
       expect(await held.untilWaiting(1)).toBe(1);
       // Committed while the accept waits for the organization lock.
       await addMember(orgId, other.userId);
-      await withOrg(orgId, (db) => db.update(schema.memberships).set({ createdAt: sql`clock_timestamp()` })
-        .where(eq(schema.memberships.userId, other.userId)));
     } finally {
       await held.release();
     }
@@ -411,14 +420,24 @@ describe.skipIf(Boolean(unavailable))('invite accept', () => {
       expect(waiting).toBe(2);
       const reply = fulfilled(results[order === 'accept-first' ? 0 : 1]) as Reply;
       expect(fulfilled(results[order === 'accept-first' ? 1 : 0])).toBe('applied');
-      if (order === 'accept-first') {
-        // Joined on Starter; the downgrade then leaves the newest member without a seat.
-        expect(reply.statusCode).toBe(200);
+      // The winner is read from what happened, not assumed from the queue order: Postgres does not
+      // promise to grant a row lock to its waiters first come, first served.
+      const plan = await withOrg(orgId, async (db) => (await db.select({ plan: schema.organizations.plan })
+        .from(schema.organizations).where(eq(schema.organizations.id, orgId)))[0].plan);
+      expect(plan).toBe('free');
+      if (reply.statusCode === 200) {
+        // The accept won: joined on Starter, then the downgrade left it, the newest member,
+        // without a seat; the owner and the earlier member keep theirs.
+        expect(await membershipsOf(invitee.userId)).toBe(1);
+        const members = (await as(app, owner.token)('GET', '/api/org/members')).json<{ userId: string; seatLocked: boolean }[]>();
+        expect(members.filter((member) => member.seatLocked).map((member) => member.userId)).toEqual([invitee.userId]);
         expect((await as(app, invitee.token)('GET', '/api/bids')).statusCode).toBe(403);
       } else {
+        // The downgrade won: Free has no seat left, the invite stays pending.
         expect(reply.statusCode).toBe(409);
         expect(codeOf(reply)).toBe('seats_full');
         expect(await membershipsOf(invitee.userId)).toBe(0);
+        expect((await inviteRow(orgId, invitee.email)).acceptedAt).toBeNull();
       }
     }
   });
