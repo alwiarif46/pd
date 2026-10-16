@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, max, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { isUuid, schema } from '@pd/core';
+import { factKeyOf, isUuid, schema } from '@pd/core';
+import { detachTabRows, tabProposals } from './amendment-tabs.js';
 import { registerCheckThese } from './check-these.js';
 import { requireAuth } from './context.js';
 import { apiError, type ErrorCode } from './errors.js';
@@ -429,9 +430,15 @@ async function present(db: Db, orgId: string, table: RowTable, row: object): Pro
 async function loadTab(db: Db, orgId: string, bidId: string, tab: Exclude<TabName, 'resumes' | 'reviews' | 'schedule'>) {
   switch (tab) {
     case 'overview':
+      // Facts an amendment only proposed are not facts until the user inserts them (PR5): they
+      // come under `proposals`, each inserted by confirming its link.
       return {
-        facts: await db.select().from(schema.bidFacts).where(eq(schema.bidFacts.bidId, bidId)),
+        facts: await db.select().from(schema.bidFacts).where(and(
+          eq(schema.bidFacts.bidId, bidId),
+          sql`${schema.bidFacts.supersedeStatus} is distinct from 'proposed'`,
+        )),
         kickoff: await db.select().from(schema.kickoffItems).where(eq(schema.kickoffItems.bidId, bidId)),
+        proposals: await tabProposals(db, orgId, bidId, 'bid_facts'),
       };
     case 'compliance':
       return {
@@ -926,18 +933,28 @@ async function deleteRow(db: Db, orgId: string, bidId: string, table: RowTable, 
   if (table === 'compliance_rows') {
     await lockComplianceRemoval(db, orgId, bidId, [rowId]);
   }
+  if (table === 'bid_facts' || table === 'schedule_activities') {
+    // The bid first, as every writer of amendment links holds it (credits.ts order), then
+    // detachTabRows takes the amendments, links, and rows.
+    await db.select({ id: schema.bids.id }).from(schema.bids).where(and(
+      eq(schema.bids.id, bidId),
+      eq(schema.bids.orgId, orgId),
+    )).for('update');
+  }
   const row = await readRow(db, orgId, bidId, table, rowId);
   if (!row) {
     return false;
   }
   switch (table) {
     case 'bid_facts':
+      await detachTabRows(db, orgId, 'bid_facts', [rowId]);
       await db.delete(schema.bidFacts).where(and(eq(schema.bidFacts.id, rowId), eq(schema.bidFacts.orgId, orgId)));
       return true;
     case 'kickoff_items':
       await db.delete(schema.kickoffItems).where(and(eq(schema.kickoffItems.id, rowId), eq(schema.kickoffItems.orgId, orgId)));
       return true;
     case 'schedule_activities':
+      await detachTabRows(db, orgId, 'schedule_activities', [rowId]);
       await db.delete(schema.scheduleActivities).where(and(eq(schema.scheduleActivities.id, rowId), eq(schema.scheduleActivities.orgId, orgId)));
       return true;
     case 'compliance_rows':
@@ -1020,6 +1037,8 @@ async function insertRow(
           bidId,
           field: text(body.field)!,
           value: text(body.value)!,
+          // A user's fact on a key is a touched row: an amendment proposes its replacement.
+          factKey: factKeyOf(text(body.field)!),
           origin: 'user',
         }).returning();
         return created('bid_facts', row);

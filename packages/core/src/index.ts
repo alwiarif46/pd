@@ -80,6 +80,7 @@ export * from './job-ids';
 export * from './seats';
 export * from './document-jobs';
 export * from './schedule';
+export * from './amendment-tabs';
 
 // Database
 export * from './db';

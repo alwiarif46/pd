@@ -20,6 +20,7 @@ import {
   withOrg,
 } from '@pd/core';
 import { chunks, type Db, loadPages, providerForJob, recordRun, replaceCheckThese } from './ai-jobs.js';
+import { queueAmendmentTabs } from './amendment-tabs-job.js';
 import { shareOrg } from './key-check.js';
 import { kickAmendments } from './kick.js';
 import type { JobPayload } from './redis.js';
@@ -214,7 +215,8 @@ export type AmendmentOutcome = 'applied' | 'needs_confirmation' | 'deferred' | '
  *    status becomes needs_confirmation when a link is proposed, else applied. The status gate makes
  *    this exactly-once across retries, reruns and duplicate jobs. Credits are never settled here:
  *    an amendment needs the bid's credit consumed.
- * D. After COMMIT, the bid's next amendment is kicked.
+ * D. After COMMIT, step 8 (the bid facts and dates, amendment-tabs-job.ts) is queued, with
+ *    tabs_status set to pending in C, and the bid's next amendment is kicked.
  * E. On a failure in B or C the amendment moves from processing to failed with a failed classify
  *    job row the user can retry, the next amendment is kicked, and the error is rethrown.
  */
@@ -332,7 +334,8 @@ export async function processAmendmentJob(payload: JobPayload): Promise<Amendmen
         status: 'completed',
       }, db);
       const status = plan.links.some((link) => link.status === 'proposed') ? 'needs_confirmation' : 'applied';
-      await db.update(schema.amendments).set({ status, updatedAt: new Date() }).where(and(
+      // Step 8 (the bid facts and dates) is queued after COMMIT; tabs_status is its exactly-once gate.
+      await db.update(schema.amendments).set({ status, tabsStatus: 'pending', updatedAt: new Date() }).where(and(
         eq(schema.amendments.id, amendment.id),
         eq(schema.amendments.orgId, payload.orgId),
       ));
@@ -348,6 +351,7 @@ export async function processAmendmentJob(payload: JobPayload): Promise<Amendmen
     return 'stopped';
   }
   if (outcome === 'applied' || outcome === 'needs_confirmation') {
+    await queueAmendmentTabs(payload);
     await kickAmendments(payload.orgId, payload.bidId);
   }
   return outcome;

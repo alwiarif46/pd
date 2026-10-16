@@ -64,6 +64,7 @@ const doc: DocumentDto = {
   amendmentNoSource: 'sequence',
   amendmentNoFound: null,
   amendmentStatus: 'held',
+  amendmentTabsStatus: null,
 };
 
 describe('bid status', () => {

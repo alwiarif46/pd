@@ -14,7 +14,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./schedule": "./src/schedule.ts"
+    "./schedule": "./src/schedule.ts",
+    "./amendment-tabs": "./src/amendment-tabs.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.33.0",

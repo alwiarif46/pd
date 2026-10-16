@@ -73,6 +73,7 @@ export function docDto(over: Partial<DocumentDto> = {}): DocumentDto {
     amendmentNoSource: null,
     amendmentNoFound: null,
     amendmentStatus: null,
+    amendmentTabsStatus: null,
     ...over,
   };
 }

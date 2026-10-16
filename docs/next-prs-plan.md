@@ -180,7 +180,9 @@ The reserve and settle code lives in these places:
 - Dates: quote-checked hits on the amendment's pages are classified to a `date_key` in code and inserted as locked activities.
   - When `proposal_due` changes, write `dates_changed = { previousDue, nextDue, sourcePage, sourceQuote, resolvedAt: null }`.
   - The schedule tab returns `pendingDateChange`.
-  - `/schedule/adjust` accepts an `amendmentId` and sets `resolvedAt`.
+  - `/schedule/adjust` accepts an `amendmentId`: it moves the schedule from the bid's due date in force to the amendment's nextDue, sets `bids.due_date` to nextDue (the prompt applies the date; the worker never does), and sets `resolvedAt` on that change and on every lower amendment's open change. The prompt sends the amendmentId instead of setting the due date first: once the due date already is nextDue the answer is refused (409 `date_change_resolved`).
+  - Bid settings setting the due date to an open change's nextDue resolves it and the lower ones; a later amendment that puts a due date in force (active or proposed) resolves the lower open changes as superseded. A deleted amendment's change is neither offered nor answered.
+  - PATCH of an amendment's number renumbers the fact and date rows it wrote and the rows they replaced, and keeps the supersede choices step 8 made (a number moved past another amendment's does not re-decide which row is in force).
 - Facts: rerun bid-summary on the amendment pages with the quote check. Today `processOverview` stores `quoteVerified: false` and duplicates rows on a rerun.
 - Generalize `amendments.ts` link confirm, reject, and list (they handle `compliance_rows` only, ~L35/55/124).
 

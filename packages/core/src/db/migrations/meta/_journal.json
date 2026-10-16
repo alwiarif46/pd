@@ -78,6 +78,13 @@
       "when": 1792094275532,
       "tag": "0010_schedule_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792103027993,
+      "tag": "0011_amendment_tabs",
+      "breakpoints": true
     }
   ]
 }

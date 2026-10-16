@@ -2,6 +2,7 @@ import { Worker } from 'bullmq';
 import { enforceTenantRole } from '@pd/core';
 import { processCompliance, processDates, processOverview } from './ai-jobs.js';
 import { processAmendmentJob } from './amendment-job.js';
+import { AMENDMENT_TABS_QUEUE, processAmendmentTabsJob } from './amendment-tabs-job.js';
 import { processClassify } from './classify-job.js';
 import { processFile } from './file-job.js';
 import { processMarking } from './marking-job.js';
@@ -37,6 +38,11 @@ const workers = [
   start('ai:overview', processOverview),
   start('ai:amendment', async (payload) => {
     await processAmendmentJob(payload);
+  }),
+  // Amendment step 8: a failure is recorded by the step itself (tabs_status failed, a classify row
+  // the user can retry).
+  start(AMENDMENT_TABS_QUEUE, async (payload) => {
+    await processAmendmentTabsJob(payload);
   }),
 ];
 

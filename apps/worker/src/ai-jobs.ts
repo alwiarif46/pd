@@ -5,11 +5,12 @@ import {
   extractComplianceMatrix,
   getProvider,
   loadSkill,
+  locateQuote,
   preScan,
   type PageText,
   type PreScanHit,
 } from '@pd/ai';
-import { inferActivityKind, schema, withOrg } from '@pd/core';
+import { classifyDateHit, dateLabel, factKeyOf, fromIsoDate, inferActivityKind, schema, withOrg } from '@pd/core';
 import { checkCredit, heldUnlessCredited } from './credit-gate.js';
 import { shareOrg } from './key-check.js';
 import { kickAmendments, kickHeldDocuments } from './kick.js';
@@ -285,11 +286,32 @@ export async function processCompliance(payload: JobPayload): Promise<void> {
   }
 }
 
-export async function processOverview(payload: JobPayload): Promise<void> {
-  const started = Date.now();
+/** A bid fact the bid-summary skill returned, with its quote checked against the pages. */
+export interface ExtractedFact {
+  field: string;
+  value: string;
+  sourcePage: number | null;
+  sourceQuote: string;
+  /** The quote was found on the pages (sourcePage is then the page it is on). */
+  quoteVerified: boolean;
+}
+
+/**
+ * Runs the bid-summary skill on `pages` and checks each fact's quote against them (locateQuote:
+ * the cited page, that page and the next, then any page; a hit elsewhere corrects the page).
+ * Facts with a missing field, value, or quote are dropped; an unverified one is returned with
+ * quoteVerified false and its cited page.
+ */
+export async function extractBidFacts(pages: PageText[]): Promise<{
+  facts: ExtractedFact[];
+  tokens: number;
+  provider: string;
+  model: string;
+  skillName: string;
+  skillVersion: string;
+}> {
   const { provider, config } = providerForJob();
   const skill = loadSkill('bid-summary');
-  const pages = await loadPages(payload.orgId, payload.documentId);
   const response = await provider.complete({
     system: buildSystemPrompt(skill, 'Extract bid facts.'),
     messages: [{ role: 'user', content: pages.map((page) => `[page ${page.pageNo}]\n${page.text}`).join('\n\n') }],
@@ -299,7 +321,7 @@ export async function processOverview(payload: JobPayload): Promise<void> {
   if (!response.json || typeof response.json !== 'object' || !('facts' in response.json) || !Array.isArray(response.json.facts)) {
     throw new Error('Bid summary JSON is missing facts');
   }
-  const facts = response.json.facts.flatMap((item) => {
+  const facts = response.json.facts.flatMap((item): ExtractedFact[] => {
     if (!item || typeof item !== 'object') {
       return [];
     }
@@ -307,33 +329,87 @@ export async function processOverview(payload: JobPayload): Promise<void> {
     if (typeof fact.field !== 'string' || typeof fact.value !== 'string' || typeof fact.sourceQuote !== 'string') {
       return [];
     }
+    if (!fact.field.trim() || !fact.value.trim() || !fact.sourceQuote.trim()) {
+      return [];
+    }
+    const cited = typeof fact.sourcePage === 'number' ? fact.sourcePage : null;
+    const found = locateQuote(fact.sourceQuote, pages, cited ?? undefined);
     return [{
-      orgId: payload.orgId,
-      bidId: payload.bidId,
       field: fact.field,
       value: fact.value,
-      documentId: payload.documentId,
-      sourcePage: typeof fact.sourcePage === 'number' ? fact.sourcePage : null,
+      sourcePage: found.found ? found.page : cited,
       sourceQuote: fact.sourceQuote,
-      quoteVerified: false,
-      origin: 'ai' as const,
+      quoteVerified: found.found,
     }];
   });
-  // A rerun (retry, or a kick of a held file) adds only facts the document does not have yet.
-  await writeDocumentFacts(payload, facts);
-  await recordRun({
-    orgId: payload.orgId,
-    bidId: payload.bidId,
-    task: 'overview',
+  return {
+    facts,
+    tokens: response.usage.totalTokens,
     provider: config.providerName,
     model: config.model,
     skillName: skill.name,
     skillVersion: skill.version,
-    tokens: response.usage.totalTokens,
+  };
+}
+
+export async function processOverview(payload: JobPayload): Promise<void> {
+  const started = Date.now();
+  const pages = await loadPages(payload.orgId, payload.documentId);
+  const result = await extractBidFacts(pages);
+  // A rerun (retry, or a kick of a held file) adds only facts the document does not have yet.
+  await writeDocumentFacts(payload, result.facts.map((fact) => ({
+    orgId: payload.orgId,
+    bidId: payload.bidId,
+    field: fact.field,
+    value: fact.value,
+    factKey: factKeyOf(fact.field),
+    documentId: payload.documentId,
+    sourcePage: fact.sourcePage,
+    sourceQuote: fact.sourceQuote,
+    quoteVerified: fact.quoteVerified,
+    origin: 'ai' as const,
+  })));
+  await recordRun({
+    orgId: payload.orgId,
+    bidId: payload.bidId,
+    task: 'overview',
+    provider: result.provider,
+    model: result.model,
+    skillName: result.skillName,
+    skillVersion: result.skillVersion,
+    tokens: result.tokens,
     costUsd: 0,
     durationMs: Date.now() - started,
     status: 'completed',
   });
+}
+
+/**
+ * An AI date row from a date sentence (preScan hit): keyed and dated by classifyDateHit, labelled
+ * by its key, and of the label's kind (a label with no kind of its own is a milestone, as
+ * migration 0010 backfilled AI dates). Locked, with the sentence as its quote and note.
+ */
+export function aiDateRow(payload: JobPayload, hit: { text: string; pageNo: number }, source: 'solicitation' | 'amendment') {
+  const { dateKey, day } = classifyDateHit(hit.text);
+  const label = dateLabel(dateKey, source);
+  const inferred = inferActivityKind(label);
+  return {
+    orgId: payload.orgId,
+    bidId: payload.bidId,
+    label,
+    kind: inferred.kind === 'custom' ? 'milestone' as const : inferred.kind,
+    reviewColor: inferred.reviewColor,
+    dateKey,
+    startDate: day === null ? null : fromIsoDate(day),
+    endDate: day === null ? null : fromIsoDate(day),
+    locked: true,
+    documentId: payload.documentId,
+    sourcePage: hit.pageNo,
+    sourceQuote: hit.text,
+    quoteVerified: true,
+    origin: 'ai' as const,
+    note: hit.text,
+  };
 }
 
 export async function processDates(payload: JobPayload): Promise<void> {
@@ -342,22 +418,6 @@ export async function processDates(payload: JobPayload): Promise<void> {
   if (hits.length === 0) {
     return;
   }
-  // As migration 0010 backfilled AI dates: the label's kind, else a milestone.
-  const label = 'Date from solicitation';
-  const inferred = inferActivityKind(label);
   // A rerun adds only dates the document does not have yet, and never changes existing rows.
-  await writeDocumentDates(payload, hits.map((hit) => ({
-    orgId: payload.orgId,
-    bidId: payload.bidId,
-    label,
-    kind: inferred.kind === 'custom' ? 'milestone' as const : inferred.kind,
-    reviewColor: inferred.reviewColor,
-    locked: true,
-    documentId: payload.documentId,
-    sourcePage: hit.pageNo,
-    sourceQuote: hit.text,
-    quoteVerified: true,
-    origin: 'ai' as const,
-    note: hit.text,
-  })));
+  await writeDocumentDates(payload, hits.map((hit) => aiDateRow(payload, hit, 'solicitation')));
 }
