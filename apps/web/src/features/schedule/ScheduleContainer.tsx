@@ -12,6 +12,10 @@ import { jobsKey } from '@/features/shell/controller';
 import { LegacyFrame } from '@/features/shell/LegacyFrame';
 import type { TabScreenProps } from '@/features/shell/registry';
 import { TabFrameContainer } from '@/features/tab-frame/TabFrameContainer';
+import { activityProposals, proposalSource } from '@/features/proposals/derive';
+import type { ProposalDecision } from '@/features/proposals/controller';
+import { TabProposals } from '@/features/proposals/ui/TabProposals';
+import { useProposalDecisions } from '@/features/proposals/useProposalDecisions';
 import {
   csvSafe,
   exportFileName,
@@ -101,6 +105,7 @@ const defaultNow = () => new Date();
 const TEMPLATES = templateOptions();
 const LOADING: LoadState = { kind: 'loading' };
 const NO_DTOS: ScheduleActivityDto[] = [];
+const NO_PROPOSALS: TabProposalDto<ScheduleActivityDto>[] = [];
 const asTimestamp = (day: string) => `${day}T00:00:00.000Z`;
 const rowKey = (bidId: string, id: string) => `${bidId}/${id}`;
 
@@ -168,6 +173,7 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
 
   const state: LoadState = load?.bidId === bidId ? load.state : LOADING;
   const dtos = state.kind === 'ready' ? state.activities : NO_DTOS;
+  const proposalDtos = state.kind === 'ready' ? state.proposals : NO_PROPOSALS;
   const workdaysOnly = state.kind === 'ready' ? state.workdaysOnly : true;
   const open = pending?.bidId === bidId ? pending : null;
   // The amendment's change is derived from the loaded tab and the closed record, never synced into
@@ -198,6 +204,8 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     };
   }, [dtos]);
   const holidays = useMemo(() => holidaysFor({ today, startDate, dueDate, activities }), [today, startDate, dueDate, activities]);
+  // Inserting an activity never changes the due date: an amendment's date change stays its own prompt.
+  const proposals = useMemo(() => activityProposals(proposalDtos, dtos), [proposalDtos, dtos]);
   const hasAiRows = activities.some((a) => a.origin === 'ai');
   const summary = useMemo(
     () =>
@@ -212,6 +220,8 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     reload();
     shell.refresh();
   };
+  // Every Insert or Dismiss, done or refused, reloads the tab and the shell.
+  const { busyIds: proposalBusyIds, decide } = useProposalDecisions({ api, onSettled: afterSave });
   const fail = (error: unknown) => {
     toast.error(messageOf(error));
     reload();
@@ -433,6 +443,20 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     setSource({ documentId: doc.id, page: amendmentDto.sourcePage, pageEnd: null, quote: amendmentDto.sourceQuote });
   };
 
+  const onDecideProposal = (id: string, decision: ProposalDecision) => {
+    const p = proposals.find((x) => x.id === id);
+    if (p) decide(p, decision);
+  };
+
+  const onOpenProposalSource = (rowId: string) => {
+    const ref = proposalSource(proposalDtos, dtos, rowId);
+    if (!ref) {
+      toast.info('No source page for this row.');
+      return;
+    }
+    setSource(ref);
+  };
+
   const onOpenSource = (id: string) => {
     const dto = dtos.find((d) => d.id === id);
     if (!dto?.documentId || dto.sourcePage === null) {
@@ -500,6 +524,14 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     body = (
       <div className="flex flex-col gap-4">
         {notice}
+        <TabProposals
+          subject="dates"
+          proposals={proposals}
+          busyIds={proposalBusyIds}
+          onInsert={(id) => onDecideProposal(id, 'insert')}
+          onDismiss={(id) => onDecideProposal(id, 'dismiss')}
+          onOpenSource={onOpenProposalSource}
+        />
         <ScheduleTab
           activities={activities}
           holidays={holidays}

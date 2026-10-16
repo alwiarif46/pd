@@ -15,6 +15,9 @@ export interface ScheduleApi {
   adjustSchedule: typeof api.adjustSchedule;
   getBid: typeof api.getBid;
   updateBid: typeof api.updateBid;
+  /** Insert and Dismiss on the tab's amendment proposals. */
+  confirmAmendmentLink: typeof api.confirmAmendmentLink;
+  rejectAmendmentLink: typeof api.rejectAmendmentLink;
 }
 
 export const scheduleApi: ScheduleApi = api;

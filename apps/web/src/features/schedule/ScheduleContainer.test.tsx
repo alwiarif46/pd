@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { ApiError, type AdjustScheduleDto, type PendingDateChangeDto, type ScheduleActivityDto } from '@/api';
 import { mockFetch } from '@/test/fetch';
-import { bidDto, docDto, jobDto, meDto, orgPayload, organizationDto, scheduleActivityDto } from '@/test/fixtures';
+import { bidDto, docDto, jobDto, meDto, orgPayload, organizationDto, scheduleActivityDto, tabProposalDto } from '@/test/fixtures';
+import { NEW_ROW_MISSING_MESSAGE, ROW_ALREADY_CLOSED_MESSAGE } from '@/features/proposals/controller';
 import { ShellContext, type ShellContextValue } from '@/features/shell/bid-context';
 import type { ScheduleExporter } from '@/schedule/export';
 import { AMENDMENT_GONE_MESSAGE, type ScheduleApi } from './controller';
@@ -71,6 +72,8 @@ function mockApi(activities: ScheduleActivityDto[] = [userRow, aiRow], over: Par
     adjustSchedule: vi.fn(async () => adjusted),
     getBid: vi.fn(async () => bidDto({ dueDate: ts('2026-11-25') })),
     updateBid: vi.fn(async () => bidDto()),
+    confirmAmendmentLink: vi.fn(async () => ({ ok: true as const, status: 'confirmed' as const, amendmentStatus: 'applied' as const })),
+    rejectAmendmentLink: vi.fn(async () => ({ ok: true as const, status: 'rejected' as const, amendmentStatus: 'applied' as const })),
     ...over,
   };
 }
@@ -664,5 +667,99 @@ describe('ScheduleContainer: amendment date change', () => {
     await waitFor(() => expect(screen.queryByRole('status', { name: 'Loading schedule' })).toBeNull());
     expect(screen.getByRole('heading', { name: 'Schedule', level: 1 })).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+});
+
+describe('ScheduleContainer: amendment proposals', () => {
+  const proposed = scheduleActivityDto({
+    id: 'act-new',
+    label: 'Proposal due',
+    kind: 'submission',
+    origin: 'ai',
+    startDate: ts('2026-12-02'),
+    endDate: null,
+    documentId: 'doc-amd',
+    sourcePage: 4,
+  });
+  const mine = scheduleActivityDto({ id: 'act-mine', label: 'Proposal due', kind: 'submission', startDate: ts('2026-11-25'), endDate: null });
+
+  function proposalApi(over: Partial<ScheduleApi> = {}, dto = tabProposalDto(proposed, { oldRowIds: ['act-mine'], sourceQuote: 'Due December 2.' })) {
+    return mockApi([mine], {
+      getTab: vi.fn(async () => ({ activities: [mine], workdaysOnly: true, proposals: [dto], pendingDateChange: null })) as unknown as ScheduleApi['getTab'],
+      ...over,
+    });
+  }
+
+  const card = () => screen.findByRole('article', { name: 'Amendment 2: Proposal due' });
+
+  it('lists the proposal from the payload', async () => {
+    renderContainer({ api: proposalApi() });
+    const article = await card();
+    expect(screen.getByRole('heading', { name: 'Changes from amendments' })).toBeTruthy();
+    expect(within(article).getByText(/^Replaces Proposal due, /)).toBeTruthy();
+    expect(within(article).getByText('“Due December 2.”')).toBeTruthy();
+  });
+
+  it('inserts, then reloads the tab and the shell', async () => {
+    const api = proposalApi();
+    const { shell, user } = renderContainer({ api });
+    await user.click(within(await card()).getByRole('button', { name: 'Insert' }));
+    await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
+    expect(api.confirmAmendmentLink).toHaveBeenCalledWith('link-a');
+    expect(toast.success).toHaveBeenCalledWith('Inserted the change from Amendment 2.');
+    expect(shell.refresh).toHaveBeenCalled();
+    expect(api.updateBid).not.toHaveBeenCalled();
+    expect(api.adjustSchedule).not.toHaveBeenCalled();
+  });
+
+  it('dismisses', async () => {
+    const api = proposalApi();
+    const { user } = renderContainer({ api });
+    await user.click(within(await card()).getByRole('button', { name: 'Dismiss' }));
+    await waitFor(() => expect(api.rejectAmendmentLink).toHaveBeenCalledWith('link-a'));
+    await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
+    expect(toast.success).toHaveBeenCalledWith('Dismissed the change from Amendment 2. Your row stays.');
+  });
+
+  it.each([
+    ['row_already_closed', ROW_ALREADY_CLOSED_MESSAGE],
+    ['new_row_missing', NEW_ROW_MISSING_MESSAGE],
+  ])('shows the web wording for 409 %s and reloads', async (code, message) => {
+    const api = proposalApi({ confirmAmendmentLink: vi.fn(async () => Promise.reject(new ApiError('API text.', 409, code))) });
+    const { user } = renderContainer({ api });
+    await user.click(within(await card()).getByRole('button', { name: 'Insert' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(message));
+    await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
+  });
+
+  it('sends one Insert for a double click', async () => {
+    const confirm = deferred<never>();
+    const api = proposalApi({ confirmAmendmentLink: vi.fn(() => confirm.promise) });
+    renderContainer({ api });
+    const insert = within(await card()).getByRole('button', { name: 'Insert' });
+    fireEvent.click(insert);
+    fireEvent.click(insert);
+    fireEvent.click(within(await card()).getByRole('button', { name: 'Dismiss' }));
+    expect(api.confirmAmendmentLink).toHaveBeenCalledTimes(1);
+    expect(api.rejectAmendmentLink).not.toHaveBeenCalled();
+    await waitFor(() => expect((insert as HTMLButtonElement).disabled).toBe(true));
+    confirm.reject(new ApiError('Gone.', 404));
+    await waitFor(() => expect((insert as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it('opens the proposed row in the amendment document', async () => {
+    const fetchMock = mockFetch();
+    const { user } = renderContainer({ api: proposalApi() });
+    await user.click(within(await card()).getByRole('button', { name: 'Open source for Proposal due, page 4' }));
+    expect(document.querySelector('.app-shell [aria-label="Source viewer"]')).toBeTruthy();
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/documents/doc-amd/view-token'))).toBe(true));
+  });
+
+  it('says when the row has no source document', async () => {
+    const api = proposalApi({}, tabProposalDto({ ...proposed, documentId: null }, { oldRowIds: ['act-mine'] }));
+    const { user } = renderContainer({ api });
+    await user.click(within(await card()).getByRole('button', { name: 'Open source for Proposal due, page 4' }));
+    expect(toast.info).toHaveBeenCalledWith('No source page for this row.');
+    expect(document.querySelector('[aria-label="Source viewer"]')).toBeNull();
   });
 });
