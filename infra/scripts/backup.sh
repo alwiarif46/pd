@@ -15,6 +15,10 @@
 # the archive (and any NAME.checkpoint) is deleted, and the script stops before prune and the off-site copy.
 # It also passes the compose file and env file explicitly (the old script failed unless run next to a compose file),
 # and the dump is never a plain, unencrypted .sql.gz on the same disk.
+# One run at a time: the whole run holds flock on $PD_BACKUP_LOCK (default /run/pd-backup.lock), waiting up to
+# $PD_BACKUP_LOCK_WAIT seconds (default 1800) and then refusing, and the archive name is chosen under the lock. So the
+# hourly timer, a manual run and restore.sh's safety backup never overlap, and the clean-up can only ever delete this
+# run's archive. A create that fails with "already exists" deletes nothing.
 # Refuses unless /mnt/pdbackup is mounted from /dev/mapper/pdbackup (under --dry-run it only warns) and
 # /etc/pd/borg.pass is root, mode 0400. The passphrase goes to borg through BORG_PASSCOMMAND only: never in
 # argv, never in the environment. Nothing is written to /tmp or /data/backups. Live files are not backed up
@@ -57,6 +61,15 @@ bk_check_mount
 if (( ! INIT )); then bk_check_pass; fi
 bk_borg_env
 
+LOCK="${PD_BACKUP_LOCK:-/run/pd-backup.lock}"
+LOCK_WAIT="${PD_BACKUP_LOCK_WAIT:-1800}"
+[[ "$LOCK_WAIT" =~ ^[0-9]+$ ]] || die "PD_BACKUP_LOCK_WAIT must be seconds"
+if ! is_dry; then
+  require_cmd flock
+  exec 9>>"$LOCK" || die "cannot open the lock file $LOCK"
+  flock -w "$LOCK_WAIT" 9 || die "another backup.sh holds $LOCK (waited ${LOCK_WAIT}s): not starting a second run"
+fi
+
 if ! is_dry; then
   mkdir -p "$PD_LOG_DIR"
   exec > >(tee -a "$PD_LOG_DIR/backup.log") 2>&1
@@ -87,7 +100,12 @@ else
   existing="$(borg list --short)" || die "borg list failed: is the repository there ($PD_BORG_REPO)?"
   if grep -qxF -- "$ARCHIVE" <<<"$existing"; then die "archive $ARCHIVE already exists; try again in a second"; fi
   # Nothing is written to disk in plaintext: borg reads pg_dump's stdout itself.
-  if ! borg create --compression zstd --content-from-command --stdin-name pd.dump "::$ARCHIVE" -- "${DUMP[@]}"; then
+  crc=0
+  create_out="$(borg create --compression zstd --content-from-command --stdin-name pd.dump "::$ARCHIVE" -- "${DUMP[@]}" 2>&1)" || crc=$?
+  [[ -z "$create_out" ]] || printf '%s\n' "$create_out" >&2
+  if (( crc != 0 )); then
+    # "already exists": the archive of that name is someone else's, never ours to delete
+    if grep -q "already exists" <<<"$create_out"; then die "archive $ARCHIVE already exists (another run?): nothing deleted; no prune, no off-site copy"; fi
     bk_drop_archive "$ARCHIVE" || true
     die "pg_dump or borg create failed: no archive $ARCHIVE kept; no prune, no off-site copy"
   fi

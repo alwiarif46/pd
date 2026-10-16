@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# fake flock: logs argv to $FAKE_CALLS. FAKE_FLOCK_BUSY=1 = another process holds the lock (exit 1, like a timed-out
+# `flock -w`). Otherwise it hands over to the REAL flock when one exists further down PATH (Linux CI, so the lock is
+# really taken and a test can hold it from a second process), and succeeds when there is none (Git Bash on Windows).
+printf 'flock %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
+[[ "${FAKE_FLOCK_BUSY:-0}" == 1 ]] && { echo "flock: failed to get lock (fake: busy)" >&2; exit 1; }
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IFS=: read -r -a dirs <<<"$PATH"
+for d in "${dirs[@]}"; do
+  [[ -n "$d" && "$(cd "$d" 2>/dev/null && pwd)" != "$here" && -x "$d/flock" ]] && exec "$d/flock" "$@"
+done
+exit 0

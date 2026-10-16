@@ -26,7 +26,8 @@ setup() {
   S="$TMP/$1"; rm -rf "$S"; mkdir -p "$S"/{etc,pdbackup/borg,pddata/files,log,state,project/infra/scripts}
   export PD_ETC="$S/etc" PD_BACKUP_MOUNT="$S/pdbackup" PD_DATA_MOUNT="$S/pddata" PD_LOG_DIR="$S/log" PD_STATE_DIR="$S/state" \
          PD_PROJECT_DIR="$S/project" PD_SKIP_OWNER_CHECK=1 \
-         FAKE_CALLS="$S/calls" FAKE_STATE="$S/state" PATH="$FAKES:$ORIG_PATH" PD_SECRETS="$S/secrets.env"
+         FAKE_CALLS="$S/calls" FAKE_STATE="$S/state" PATH="$FAKES:$ORIG_PATH" PD_SECRETS="$S/secrets.env" \
+         PD_BACKUP_LOCK="$S/state/pd-backup.lock"
   unset PD_SKIP_MODE_CHECK PD_TENANT FAKE_MOUNT_PDBACKUP FAKE_MOUNT_PDDATA FAKE_OLD_VOLUME FAKE_REMOTE_COUNT FAKE_LSF FAKE_BORG_EXIT FAKE_COMPOSE_EXIT \
         FAKE_MIGRATIONS FAKE_ORGS FAKE_ACTIVE BORG_PASSPHRASE PD_OS_RELEASE PD_CLOUD_BOOT_FINISHED FAKE_OLD_VOLUMES FAKE_CONTAINERS_api \
         FAKE_CONTAINERS_worker FAKE_PGDUMP_OUT FAKE_PGDUMP_EXIT FAKE_BORG_CC_LEAVE FAKE_BORG_LIST FAKE_REMOTE_MARKER FAKE_CAT_EXIT PD_MACHINE_ID_FILE
@@ -185,6 +186,36 @@ now_s="$(date -u +%s)"
 taken="$(archives; for i in $(seq 0 120); do date -u -d "@$((now_s + i))" +pd-%Y-%m-%dT%H:%M:%S; done)"
 out="$(FAKE_BORG_LIST="$taken" bash infra/scripts/backup.sh 2>&1)"; rc=$?
 [[ $rc != 0 ]] && grep -q "already exists" <<<"$out" && ! grep -q '^borg delete' "$FAKE_CALLS" && ok "an existing archive name is never reused (and never deleted by the clean-up)" || bad "name reuse" "rc=$rc $out"
+# two runs must never overlap: backup.sh holds flock on PD_BACKUP_LOCK (default /run/pd-backup.lock)
+backup_env bk-lock
+out="$(FAKE_FLOCK_BUSY=1 bash infra/scripts/backup.sh 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "another backup.sh holds $S/state/pd-backup.lock" <<<"$out" && ! grep -qE '^borg (create|delete|prune)' "$FAKE_CALLS" && [[ "$(archives)" == pd-2026-10-16T01:00:00 ]] \
+  && ok "backup.sh refuses while another run holds the lock (no create, no delete, no prune)" || bad "backup lock" "rc=$rc $out"
+grep -qE "^flock -w [0-9]+ 9" "$FAKE_CALLS" && ok "backup.sh takes the lock with flock -w on fd 9" || bad "flock call" "$(grep '^flock' "$FAKE_CALLS")"
+backup_env bk-lock-order
+out="$(bash infra/scripts/backup.sh 2>&1)"; rc=$?
+l_lock="$(grep -n '^flock' "$FAKE_CALLS" | head -1 | cut -d: -f1)"; l_list="$(grep -n '^borg list' "$FAKE_CALLS" | head -1 | cut -d: -f1)"
+[[ $rc == 0 && -n "$l_lock" && -n "$l_list" ]] && (( l_lock < l_list )) && ok "the lock is taken before the first borg call (the archive name is chosen under it)" || bad "lock order" "rc=$rc lock=$l_lock list=$l_list"
+if real_flock="$(PATH="$ORIG_PATH" command -v flock 2>/dev/null)" && [[ -n "$real_flock" ]]; then
+  backup_env bk-lock-real
+  : >"$PD_BACKUP_LOCK"
+  "$real_flock" "$PD_BACKUP_LOCK" sleep 6 &
+  holder=$!; sleep 1
+  out="$(PD_BACKUP_LOCK_WAIT=1 bash infra/scripts/backup.sh 2>&1)"; rc=$?
+  wait "$holder" 2>/dev/null
+  [[ $rc != 0 ]] && grep -q "another backup.sh holds" <<<"$out" && ! grep -q '^borg create' "$FAKE_CALLS" && ok "with the real flock: a second run waits PD_BACKUP_LOCK_WAIT, then refuses" || bad "real flock" "rc=$rc $out"
+else
+  skip "real flock contention (flock not installed here; CI runs it)"
+fi
+# "already exists" from borg create (a run that slipped past the pre-check) must never trigger the clean-up
+backup_env bk-race
+out="$(FAKE_BORG_RACE=1 bash infra/scripts/backup.sh 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "already exists" <<<"$out" && ! grep -q '^borg delete' "$FAKE_CALLS" && [[ "$(archives | wc -l | tr -d ' ')" == 2 ]] && ! grep -q '^borg prune' "$FAKE_CALLS" \
+  && ok "borg create failing with 'already exists' deletes nothing (the other run's archive stays)" || bad "race clean-up" "rc=$rc $(archives) $(grep '^borg' "$FAKE_CALLS")"
+# borg waits on the repository lock instead of failing (false alerts from the age check, a failed drop)
+grep -q 'BORG_LOCK_WAIT' "$FAKE_CALLS.env" 2>/dev/null || { backup_env bk-lockwait; bash infra/scripts/backup.sh >/dev/null 2>&1; }
+grep -q 'BORG_LOCK_WAIT' "$FAKE_CALLS.env" && bash -c 'source infra/lib/ops-common.sh; source ops/lib/backup-common.sh; bk_borg_env; [[ "$BORG_LOCK_WAIT" == 600 ]]' \
+  && ok "bk_borg_env exports BORG_LOCK_WAIT=600 (borg waits up to 10 min for the repository lock)" || bad "BORG_LOCK_WAIT" "$(tail -2 "$FAKE_CALLS.env")"
 # the pipe form must not come back
 ! grep -vE '^\s*#' infra/scripts/backup.sh | grep -qE 'pg_dump[^|]*\|[[:space:]]*borg create|borg create .* -$' && ok "backup.sh has no 'pg_dump | borg create -' pipe" || bad "pipe form in backup.sh"
 
@@ -359,6 +390,33 @@ out="$(bash ops/backup/alert.sh --status 2>&1)"; rc=$?
 [[ $rc == 1 ]] && grep -q "pd-backup.service" <<<"$out" && ok "alert.sh --status lists open alerts (exit 1)" || bad "alert status" "rc=$rc $out"
 bash ops/backup/alert.sh --clear pd-backup.service >/dev/null 2>&1; out="$(bash ops/backup/alert.sh --status 2>&1)"; rc=$?
 [[ $rc == 0 ]] && grep -q "no open alerts" <<<"$out" && ok "alert.sh --clear removes it" || bad "alert clear" "rc=$rc $out"
+# the hook: runs only when executable, owned by root (tests: PD_SKIP_OWNER_CHECK as non-root), not a symlink, not group/world-writable
+mk_hook() { printf '#!/usr/bin/env bash\necho "hook ran $1" >>"%s/hook.log"\n' "$S" >"$1"; chmod 0755 "$1"; }
+backup_env alert-hook
+mk_hook "$S/etc/alert-hook"
+out="$(bash ops/backup/alert.sh pd-backup.service 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q "hook ran pd-backup.service" "$S/hook.log" 2>/dev/null && ok "a valid alert hook runs with the unit name" || bad "valid hook did not run" "rc=$rc $out $(cat "$FAKE_CALLS")"
+backup_env alert-link
+mk_hook "$S/real-hook"
+ln -s "$S/real-hook" "$S/etc/alert-hook" 2>/dev/null
+if [[ -L "$S/etc/alert-hook" ]]; then
+  out="$(bash ops/backup/alert.sh pd-backup.service 2>&1)"; rc=$?
+  [[ ! -f "$S/hook.log" ]] && grep -q "ignoring .*alert-hook" "$FAKE_CALLS" && ok "a symlinked alert hook is refused" || bad "symlinked hook ran" "$(cat "$S/hook.log" 2>/dev/null) $(cat "$FAKE_CALLS")"
+else
+  skip "symlinked hook (this file system makes no symlinks)"
+fi
+backup_env alert-writable
+mk_hook "$S/etc/alert-hook"; chmod 0777 "$S/etc/alert-hook" 2>/dev/null
+if [[ "$(stat -c %a "$S/etc/alert-hook")" == 777 ]]; then
+  out="$(bash ops/backup/alert.sh pd-backup.service 2>&1)"; rc=$?
+  [[ ! -f "$S/hook.log" ]] && grep -q "ignoring .*alert-hook" "$FAKE_CALLS" && ok "a group/world-writable alert hook is refused" || bad "writable hook ran" "$(cat "$S/hook.log" 2>/dev/null)"
+else
+  skip "writable hook (this file system has no POSIX modes)"
+fi
+backup_env alert-owner
+mk_hook "$S/etc/alert-hook"
+out="$(PD_SKIP_OWNER_CHECK=0 bash ops/backup/alert.sh pd-backup.service 2>&1)"; rc=$?
+[[ ! -f "$S/hook.log" ]] && grep -q "ignoring .*alert-hook" "$FAKE_CALLS" && ok "a hook not owned by root is refused (no test switch)" || bad "non-root hook ran" "$(cat "$S/hook.log" 2>/dev/null)"
 out="$(bash ops/backup/alert.sh '../etc/x' 2>&1)"; rc=$?
 [[ $rc == 2 ]] && ok "alert.sh refuses a unit name with a path in it" || bad "alert unit name" "rc=$rc"
 
@@ -530,12 +588,14 @@ bad = []
 dep = jobs["deploy"]
 cond = " ".join(str(dep.get("if", "")).split())
 for need in ("always()", "github.event_name == 'workflow_dispatch'", "github.ref == 'refs/heads/master'",
-             "needs.push-images.result == 'success' || needs.push-images.result == 'skipped'", "needs.test-infra.result == 'success'",
+             "needs.push-images.result == 'success'", "needs.test-infra.result == 'success'",
              "needs.restore-drill.result == 'success'", "needs.test-api.result == 'success'"):
     if need not in cond:
         bad.append(f"deploy.if lacks: {need}")
 if "push-images" not in dep.get("needs", []):
     bad.append("deploy does not need push-images")
+if "skipped" in cond:
+    bad.append("deploy.if accepts a skipped push-images (the image may not exist)")
 for st in dep["steps"]:
     if st.get("uses", "").startswith("tailscale/") and "steps.gate.outputs.enabled == 'true'" not in str(st.get("if", "")):
         bad.append("the tailscale step is not gated on the deploy secrets (steps.gate.outputs.enabled)")

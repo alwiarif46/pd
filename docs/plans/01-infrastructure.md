@@ -120,11 +120,12 @@ Servers deployed before the data moved to the encrypted volume keep Postgres and
 ```bash
 cd /opt/pd
 sudo infra/scripts/backup.sh --no-offsite          # only if this server already has the Borg repository; otherwise take a pg_dump first
-# 1. the uploaded files, while the old containers still exist (they live in the container layer)
+# 1. stop the whole stack first, so nothing writes to the files or the volumes while they are copied
+#    (stop, never down or rm: the stopped containers still hold the uploaded files in their layer)
+sudo docker compose --env-file .env -f infra/docker-compose.yml stop
+# 2. the uploaded files, from the stopped api container (docker cp works on a stopped container)
 sudo docker cp "$(sudo docker ps -aq --filter label=com.docker.compose.service=api | head -1)":/data/files/. /mnt/pddata/files/
 sudo chown -R 1000:1000 /mnt/pddata/files
-# 2. stop the whole stack, so nothing writes to the volumes
-sudo docker compose --env-file .env -f infra/docker-compose.yml stop
 # 3. copy the volumes (names from: sudo docker volume ls --filter label=com.docker.compose.volume)
 sudo docker run --rm -v <project>_postgres_data:/from -v /mnt/pddata/postgres:/to alpine cp -a /from/. /to/
 sudo docker run --rm -v <project>_redis_data:/from -v /mnt/pddata/redis:/to alpine cp -a /from/. /to/

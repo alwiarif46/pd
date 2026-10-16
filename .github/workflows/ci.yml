@@ -240,14 +240,15 @@ jobs:
     # a deployment branch policy of master only: HUMAN-TODO H-07). Inert without its secrets: the gate step skips
     # everything and the job ends green with a notice. Never runs on push.
     # It waits for push-images (a dispatch always pushes this commit's images), so an image_tag of this commit exists
-    # before the server pulls it. always() lets it run when push-images was skipped; every result is then checked by
-    # hand, because always() would otherwise also run it after a failed test.
+    # before the server pulls it. push-images must have SUCCEEDED (a dispatch always runs it): a skipped or failed push
+    # means the image tag may not exist. always() plus the explicit result checks keep the job from running after any
+    # failure.
     if: >-
       always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
       && needs.typecheck.result == 'success' && needs.lint.result == 'success' && needs.build.result == 'success'
       && needs.test-web.result == 'success' && needs.test-api.result == 'success' && needs.test-infra.result == 'success'
       && needs.restore-drill.result == 'success'
-      && (needs.push-images.result == 'success' || needs.push-images.result == 'skipped')
+      && needs.push-images.result == 'success'
     needs: [typecheck, lint, build, test-web, test-api, test-infra, restore-drill, push-images]
     runs-on: ubuntu-latest
     environment: production

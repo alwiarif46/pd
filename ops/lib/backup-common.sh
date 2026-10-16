@@ -78,6 +78,9 @@ bk_borg_env() {
   export BORG_PASSCOMMAND="cat $PD_BORG_PASS"
   export BORG_RELOCATED_REPO_ACCESS_IS_OK=no
   export BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK=no
+  # wait up to 10 min for another borg's repository lock instead of failing (a backup next to the age check, the
+  # off-site sync or a drop would otherwise fail and raise a false alert)
+  export BORG_LOCK_WAIT=600
   unset BORG_PASSPHRASE BORG_NEW_PASSPHRASE
 }
 

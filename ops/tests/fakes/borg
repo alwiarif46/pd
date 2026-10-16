@@ -13,6 +13,7 @@
 #   list --short               the stored names in creation order (FAKE_BORG_LIST overrides)
 #   extract --stdout ::NAME pd.dump   the stored content; an unknown archive exits 2
 #   delete ::NAME              removes it
+#   FAKE_BORG_RACE=1           create finds NAME just committed by "another run" and fails with "already exists"
 # FAKE_BORG_EXIT forces the exit status of every call.
 printf 'borg %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
 env | grep -o '^BORG_[A-Z_]*' | sort | tr '\n' ' ' >>"${FAKE_CALLS:-/dev/null}.env"; echo >>"${FAKE_CALLS:-/dev/null}.env"
@@ -36,6 +37,8 @@ case "$sub" in
       esac
     done
     [[ -n "$name" ]] || { echo "fake borg: no archive name" >&2; exit 2; }
+    # FAKE_BORG_RACE=1: another run committed NAME between the caller's pre-check and this create
+    [[ "${FAKE_BORG_RACE:-0}" == 1 ]] && printf 'PGDMP other run\nPGDMP-END\n' | commit "$name"
     if grep -qxF -- "$name" "$store/.order" 2>/dev/null; then echo "Archive $name already exists" >&2; exit 2; fi
     mkdir -p "$store"; tmp="$store/.incoming"
     if (( cc )); then

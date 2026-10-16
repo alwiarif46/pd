@@ -5,8 +5,9 @@
 # A simple status-unit approach with no external service:
 #   - writes $PD_STATE_DIR/alerts/<unit>.failed (default /var/lib/pd/alerts): the time and the unit's last 50 journal lines
 #   - logs one line at priority err to the journal (tag pd-alert), so `journalctl -p err` and any log shipper see it
-#   - runs $PD_ETC/alert-hook <unit> <status file> when that file exists, is executable, owned by root and not group- or
-#     world-writable. That hook is where a notifier (mail, ntfy, Uptime Kuma push, ...) plugs in: HUMAN-TODO H-11.
+#   - runs $PD_ETC/alert-hook <unit> <status file> when that file exists, is a regular file (not a symlink), is
+#     executable, owned by root and not group- or world-writable. (Tests, running unprivileged, may set
+#     PD_SKIP_OWNER_CHECK=1; it is ignored when the process really is root.) That hook is where a notifier (mail, ntfy, Uptime Kuma push, ...) plugs in: HUMAN-TODO H-11.
 # The alert stays until an operator has looked: `ops/backup/alert.sh --status` lists them, `--clear UNIT` removes one.
 #
 # Usage: ops/backup/alert.sh UNIT | --status | --clear UNIT
@@ -40,11 +41,15 @@ status="$ALERT_DIR/$unit.failed"
 } >"$status"
 logger -p user.err -t pd-alert "PD unit $unit FAILED; details in $status (ops/backup/alert.sh --status)" 2>/dev/null || true
 
-if [[ -e "$HOOK" ]]; then
-  if [[ -x "$HOOK" && "$(stat -c %U "$HOOK")" == root ]] && ! stat -c %A "$HOOK" | grep -qE '^.{5}w|^.{8}w'; then
+hook_owner_ok() {
+  [[ "$(stat -c %U "$HOOK")" == root ]] && return 0
+  [[ "${PD_SKIP_OWNER_CHECK:-0}" == 1 && "$EUID" != 0 ]]
+}
+if [[ -e "$HOOK" || -L "$HOOK" ]]; then
+  if [[ ! -L "$HOOK" && -f "$HOOK" && -x "$HOOK" ]] && hook_owner_ok && ! stat -c %A "$HOOK" | grep -qE '^.{5}w|^.{8}w'; then
     "$HOOK" "$unit" "$status" || logger -p user.err -t pd-alert "alert hook $HOOK failed for $unit" 2>/dev/null || true
   else
-    logger -p user.err -t pd-alert "ignoring $HOOK: it must be executable, owned by root, not group/world-writable" 2>/dev/null || true
+    logger -p user.err -t pd-alert "ignoring $HOOK: it must be a regular file (no symlink), executable, owned by root, not group/world-writable" 2>/dev/null || true
   fi
 fi
 echo "alert recorded: $status"
