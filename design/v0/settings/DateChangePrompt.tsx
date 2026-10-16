@@ -14,18 +14,18 @@ export function DateChangePrompt({ open, previousDue, nextDue, onChoose, onCance
         <DialogHeader>
           <DialogTitle>The due date moved</DialogTitle>
           <DialogDescription>
-            The due date moved from {formatDate(previousDue)} to {formatDate(nextDue)}. Choose how to move the schedule.
+            The due date moved from {formatDate(previousDue)} to {formatDate(nextDue)}. How should the schedule change?
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-2">
           <Button variant="outline" className="h-auto justify-between py-3 text-left" onClick={() => onChoose('shift')}>
-            <span><span className="block font-medium">Shift</span><span className="text-muted-foreground">Move every schedule date by the same amount.</span></span>
+            <span><span className="block font-medium">Shift dates</span><span className="text-muted-foreground">Move every unlocked activity by the same number of days.</span></span>
           </Button>
           <Button variant="outline" className="h-auto justify-between py-3 text-left" onClick={() => onChoose('scale')}>
-            <span><span className="block font-medium">Scale</span><span className="text-muted-foreground">Resize the schedule between the start and due dates.</span></span>
+            <span><span className="block font-medium">Scale dates</span><span className="text-muted-foreground">Stretch or shrink the unlocked activities to fit the new window.</span></span>
           </Button>
           <Button variant="outline" className="h-auto justify-between py-3 text-left" onClick={() => onChoose('keep')}>
-            <span><span className="block font-medium">Keep</span><span className="text-muted-foreground">Leave existing schedule dates unchanged.</span></span>
+            <span><span className="block font-medium">Keep dates</span><span className="text-muted-foreground">Leave the activities where they are.</span></span>
           </Button>
         </div>
         <DialogFooter><Button variant="ghost" onClick={onCancel} autoFocus>Cancel</Button></DialogFooter>
