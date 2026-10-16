@@ -28,6 +28,9 @@ export interface Doc {
   status: DocStatus;
   marking: MarkingState;
   keyCheck: KeyCheck;
+  amendmentNoAssumed: boolean;
+  amendmentNoFound: number | null;
+  needsNumber: boolean;
 }
 export interface UploadNotice {
   id: string;
@@ -48,7 +51,8 @@ export interface DocumentsPanelProps {
   overridesLeft: number;
   notices: UploadNotice[];
   uploads: UploadProgress[];
-  onUpload: (files: File[], kind: FileKind) => void;
+  onUpload: (files: File[], kind: FileKind, amendmentNo?: number) => void;
+  onSetAmendmentNo: (id: string, amendmentNo: number) => void;
   onDismissNotice: (id: string) => void;
   onOpen: (id: string) => void;
   onDelete: (id: string) => void;

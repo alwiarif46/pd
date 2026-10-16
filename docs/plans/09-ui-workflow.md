@@ -343,13 +343,15 @@ type KeyCheck = 'not_applicable' | 'ok' | 'mismatch' | 'overridden';
 interface Doc {
   id: string; name: string; kind: FileKind; amendmentNo: number | null; pages: number | null; pagesEstimated: boolean;
   sizeBytes: number; uploadedAt: string; liveUntil: string | null; status: DocStatus; marking: MarkingState; keyCheck: KeyCheck;
+  amendmentNoAssumed: boolean; amendmentNoFound: number | null; needsNumber: boolean;
 }
 interface UploadNotice { id: string; fileName: string; tone: 'error' | 'info'; message: string }
 interface UploadProgress { fileName: string; percent: number }
 interface DocumentsPanelProps {
   docs: Doc[]; usedBytes: number; capMb: number; plan: Plan; isOwner: boolean; overridesLeft: number;
   notices: UploadNotice[]; uploads: UploadProgress[];
-  onUpload: (files: File[], kind: FileKind) => void; onDismissNotice: (id: string) => void;
+  onUpload: (files: File[], kind: FileKind, amendmentNo?: number) => void; onDismissNotice: (id: string) => void;
+  onSetAmendmentNo: (id: string, amendmentNo: number) => void;
   onOpen: (id: string) => void; onDelete: (id: string) => void; onRestore: (id: string) => void;
   onConfirmMarking: (id: string) => void; onOverrideKey: (id: string, reason: string) => void; onUpgrade: () => void;
 }
@@ -659,3 +661,4 @@ Each chat ends the same way: v0 pushes to the `v0-ui` branch, you merge it to `m
 | 16 Oct 2026 | The legacy Documents list shows an amendment's tabs status in its Status cell ("Updating bid facts and dates", or "did not update" with Retry), with legacy classes only, until v0's Documents is integrated |
 | 16 Oct 2026 | 5.20 added: the invite-accept and seat-locked screens are built in `features/membership/ui` (shadcn + Tailwind, not by v0). The "UI not built yet" note on seats (16 Oct) is done for the seat-locked member's own screen |
 | 16 Oct 2026 | 5.20 review fixes: `onDismiss` ("Not now") on `ready` and on kept-code failures; `other` offers "Try again"; the no-organization redirect to `#/invite` happens at most once per browser session |
+| 17 Oct 2026 | 5.11: amendment number additions added to the web `Doc` and `DocumentsPanelProps` types (`@/types`) and to the code block above; v0's panel-level shape (one number for the whole bid, no file id) is a contract error |
