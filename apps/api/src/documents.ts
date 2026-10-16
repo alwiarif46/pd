@@ -23,6 +23,7 @@ import {
   SETTING_RESTORE_WINDOW_DAYS,
   withOrg,
 } from '@pd/core';
+import { renumberTabRows } from './amendment-tabs.js';
 import { requireAuth } from './context.js';
 import { lockBid, releaseBidCredit, shareOrg } from './credits.js';
 import { apiError } from './errors.js';
@@ -137,6 +138,7 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
         solicitationKeyFound: schema.amendments.solicitationKeyFound,
         keyOverride: schema.amendments.keyOverride,
         status: schema.amendments.status,
+        tabsStatus: schema.amendments.tabsStatus,
       }).from(schema.amendments).where(and(eq(schema.amendments.bidId, bidId), eq(schema.amendments.orgId, orgId)));
       return documents.map(({ keyStatus, keyFound, ...document }) => ({
         ...document,
@@ -149,6 +151,10 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
         amendmentNoFound: document.kind === 'amendment' ? document.amendmentNoFound : null,
         amendmentStatus: document.kind === 'amendment'
           ? amendments.find((row) => row.documentId === document.id)?.status ?? null
+          : null,
+        // Amendment step 8, the bid facts and dates: pending, applied, failed, or null (not queued).
+        amendmentTabsStatus: document.kind === 'amendment'
+          ? amendments.find((row) => row.documentId === document.id)?.tabsStatus ?? null
           : null,
         liveUntil: document.liveStatus === 'deleted' ? null : documentLiveUntil({
           plan,
@@ -367,7 +373,8 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
    * 999 and not taken on the bid (packages/core amendment-numbers.ts). One transaction, lock order
    * organization (key share) -> document -> bid -> amendment -> compliance rows (by id):
    * documents.amendment_no (source 'user') and the amendments mirror; amendment_no of the rows this
-   * amendment added; changed_by_amendment of the rows its auto or confirmed links closed; a
+   * amendment added; changed_by_amendment of the rows its auto or confirmed links closed; the same
+   * for the bid facts and schedule activities its step 8 wrote, then (renumberTabRows); a
    * row_history entry for each row changed. An amendment waiting in needs_number goes to
    * processing, and a classify job is queued after COMMIT (the key check then runs the step).
    */
@@ -464,6 +471,8 @@ export async function registerDocuments(app: FastifyInstance): Promise<void> {
       if (history.length > 0) {
         await db.insert(schema.rowHistory).values(history);
       }
+      // The bid facts and dates step 8 wrote, the same way (after the compliance rows).
+      await renumberTabRows(db, orgId, auth.userId, bid.id, documentId, amendmentNo, now);
       const resumes = amendment?.status === 'needs_number';
       if (amendment) {
         await db.update(schema.amendments).set({

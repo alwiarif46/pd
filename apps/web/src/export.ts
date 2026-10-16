@@ -74,12 +74,18 @@ export function downloadCsv(name: string, rows: string[][]): void {
   download(name, new Blob([body], { type: 'text/csv' }));
 }
 
-function xml(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/** Text for an XML 1.0 part: markup escaped, and the control characters XML forbids (which make Excel and Word refuse the file) dropped. */
+export function xmlText(value: string): string {
+  return value
+    // eslint-disable-next-line no-control-regex -- these are exactly the characters XML 1.0 forbids
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/g, '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 export function downloadXlsx(name: string, rows: string[][]): void {
-  const sheet = rows.map((row) => `<row>${row.map((cell) => `<c t="inlineStr"><is><t>${xml(String(cell ?? ''))}</t></is></c>`).join('')}</row>`).join('');
+  const sheet = rows.map((row) => `<row>${row.map((cell) => `<c t="inlineStr"><is><t>${xmlText(String(cell ?? ''))}</t></is></c>`).join('')}</row>`).join('');
   const blob = zipStored([
     { name: '[Content_Types].xml', text: '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>' },
     { name: '_rels/.rels', text: '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
@@ -91,30 +97,11 @@ export function downloadXlsx(name: string, rows: string[][]): void {
 }
 
 export function downloadDocx(name: string, paragraphs: string[]): void {
-  const body = paragraphs.map((paragraph) => `<w:p><w:r><w:t>${xml(paragraph)}</w:t></w:r></w:p>`).join('');
+  const body = paragraphs.map((paragraph) => `<w:p><w:r><w:t>${xmlText(paragraph)}</w:t></w:r></w:p>`).join('');
   const blob = zipStored([
     { name: '[Content_Types].xml', text: '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>' },
     { name: '_rels/.rels', text: '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
     { name: 'word/document.xml', text: `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>` },
   ]);
   download(name, blob);
-}
-
-export function downloadIcs(name: string, events: { title: string; start: string; end: string }[]): void {
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
-  const body = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//PD//Schedule//EN',
-    ...events.flatMap((event) => [
-      'BEGIN:VEVENT',
-      `DTSTAMP:${stamp}`,
-      `DTSTART:${event.start.replace(/-/g, '')}`,
-      `DTEND:${event.end.replace(/-/g, '')}`,
-      `SUMMARY:${event.title}`,
-      'END:VEVENT',
-    ]),
-    'END:VCALENDAR',
-  ].join('\r\n');
-  download(name, new Blob([body], { type: 'text/calendar' }));
 }

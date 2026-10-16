@@ -242,6 +242,11 @@ describe.skipIf(Boolean(unavailable))('amendment run', () => {
         ['withdraw', b, null, 'auto', 'C.3.4 is deleted'],
       ].sort());
       expect((await amendmentOf(tenant, documentId)).status).toBe('applied');
+      // Step 8 (the bid facts and dates) is pending and queued after COMMIT, under a fresh id.
+      expect((await amendmentOf(tenant, documentId)).tabsStatus).toBe('pending');
+      const tabsJobs = enqueued.filter((item) => item.name === 'ai:amendment-tabs' && item.documentId === documentId);
+      expect(tabsJobs).toHaveLength(1);
+      expect(tabsJobs[0].bullId).toMatch(/^ai-amendment-tabs-[0-9a-f-]{36}$/);
       // check_these: the hit no new row covers.
       expect((await hitsOf(tenant, documentId)).map((hit) => hit.sentence)).toEqual(['Offerors shall acknowledge this amendment.']);
       const runs = await withOrg(tenant.orgId, (db) => db.select().from(schema.aiRuns).where(and(
@@ -269,6 +274,8 @@ describe.skipIf(Boolean(unavailable))('amendment run', () => {
         tokensUsed: 1,
       });
       expect(await run(tenant, documentId)).toBe('needs_confirmation');
+      expect((await amendmentOf(tenant, documentId)).tabsStatus).toBe('pending');
+      expect(enqueued.filter((item) => item.name === 'ai:amendment-tabs' && item.documentId === documentId)).toHaveLength(1);
       const rows = await rowsOf(tenant);
       expect(rows.find((row) => row.id === a)).toMatchObject({ supersedeStatus: 'active', changedByAmendment: null });
       expect(rows.filter((row) => row.documentId === documentId)).toHaveLength(2);

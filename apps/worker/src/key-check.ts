@@ -8,6 +8,7 @@ import {
   type PageText,
 } from '@pd/ai';
 import { amendmentNoTaken, nextAmendmentNo, normalizeSolicitationKey, schema, withOrg } from '@pd/core';
+import { queueAmendmentTabs } from './amendment-tabs-job.js';
 import { enqueue } from './enqueue.js';
 import { failStepIn, HELD_FOR_CREDIT } from './rows.js';
 import type { JobPayload } from './redis.js';
@@ -16,11 +17,19 @@ type Db = Parameters<Parameters<typeof withOrg>[1]>[0];
 
 /**
  * What the key check decided: run the amendment step, hold the amendment, wait for the user to set
- * the amendment number (the key passed but the number is not settled), or nothing to do.
+ * the amendment number (the key passed but the number is not settled), queue step 8 again (the
+ * retry of an applied amendment whose bid facts and dates failed), or nothing to do.
  */
-export type KeyCheckOutcome = 'proceed' | 'held' | 'needs_number' | 'stopped';
+export type KeyCheckOutcome = 'proceed' | 'held' | 'needs_number' | 'tabs' | 'stopped';
 
 const PENDING = 'PENDING';
+
+/**
+ * How long step 8 may stay pending before a rerun of the key check (a classify retry, a recheck)
+ * queues it again. Well above a step 8 run (one model call). amendments.updated_at is written by
+ * the app clock only, so it is compared with the app clock.
+ */
+export const TABS_STALE_MS = 15 * 60_000;
 
 /**
  * The amendment solicitation-number check (04 s3.1 step 1, 06 s4), run after text extraction and
@@ -28,7 +37,9 @@ const PENDING = 'PENDING';
  * - document missing or deleted: no write, stop;
  * - the bid's credit not reserved or consumed: a failed classify row (HELD_FOR_CREDIT), stop; the
  *   solicitation's matrix reruns it when it consumes a credit (kickHeldDocuments);
- * - amendment already applied or needs_confirmation (a rerun): unchanged, stop (never re-diff);
+ * - amendment already applied or needs_confirmation (a rerun): never re-diffed. When its step 8
+ *   (the bid facts and dates, amendment-tabs-job.ts) failed, tabs_status goes back to pending and
+ *   step 8 is queued again after COMMIT (the retry of its failed classify row); else unchanged, stop;
  * - owner override: status processing, key_status overridden, queue ai:amendment;
  * - bid key PENDING: held, key_status bid_key_pending (rechecked when PATCH sets the key);
  * - the bid key appears in the text: processing, key_status match, queue ai:amendment;
@@ -62,6 +73,10 @@ export async function runKeyCheck(payload: JobPayload): Promise<KeyCheckOutcome>
     await closeClassifyJob(db, payload);
     return decided;
   });
+  if (outcome === 'tabs') {
+    // Never throws: a failed queue call fails step 8 again, with a row the user can retry.
+    await queueAmendmentTabs(payload);
+  }
   if (outcome === 'proceed') {
     try {
       await enqueue('ai:amendment', payload);
@@ -116,6 +131,18 @@ async function decide(
     eq(schema.amendments.documentId, document.id),
     eq(schema.amendments.orgId, payload.orgId),
   )).for('update');
+  // A step 8 that failed, or that has been pending longer than TABS_STALE_MS (its job lost to a
+  // crash or a Redis flush), is queued again. A duplicate of a job still running is harmless: the
+  // tabs_status gate lets one write.
+  const stale = existing?.tabsStatus === 'pending' && existing.updatedAt.getTime() < Date.now() - TABS_STALE_MS;
+  if (existing && (existing.status === 'applied' || existing.status === 'needs_confirmation')
+    && (existing.tabsStatus === 'failed' || stale)) {
+    await db.update(schema.amendments).set({ tabsStatus: 'pending', updatedAt: new Date() }).where(and(
+      eq(schema.amendments.id, existing.id),
+      eq(schema.amendments.orgId, payload.orgId),
+    ));
+    return 'tabs';
+  }
   if (existing && !RECHECKED.includes(existing.status)) {
     return 'stopped';
   }

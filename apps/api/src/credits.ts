@@ -42,6 +42,14 @@ import type { Db } from './scope.js';
  *   then the bid, then the amendments of proposals to the removed rows (one ordered statement),
  *   then update those links, then rows: holding the bid serialises them with every other writer
  *   that closes or links rows.
+ *   Amendment step 8 (apps/worker/src/amendment-tabs-job.ts) first takes the bid's schedule lock
+ *   (packages/core lockBidSchedule: an advisory lock, before any row lock, as the schedule seed
+ *   and adjust routes take it), then organization key share, document, bid, amendment, and the
+ *   bid's active bid_facts then schedule_activities on the keys it writes (each by id). Adjust
+ *   with an amendmentId takes the schedule lock, then the bid and the amendment. Link confirm of
+ *   a fact or date link locks those rows (by id) after the link, like compliance rows; row
+ *   delete of a fact or activity locks the bid, then the amendments of proposals to the row,
+ *   their links, then the row.
  *   check_these: the worker's matrix write replaces a document's hits under the document lock,
  *   and promote locks the document (FOR SHARE) before the hit (check-these.ts).
  *   One exception: upload complete claims its own unexpired session before the org lock (so

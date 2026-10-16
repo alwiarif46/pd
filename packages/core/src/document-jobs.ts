@@ -11,3 +11,14 @@ import type { AppDatabase } from './db';
 export async function lockDocumentJobs(db: Pick<AppDatabase, 'execute'>, documentId: string): Promise<void> {
   await db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`document-jobs:${documentId}`}, 0))`);
 }
+
+/**
+ * Takes a bid's schedule lock until the transaction ends (an advisory lock keyed by the bid id).
+ * The schedule seed and adjust routes and the worker's amendment tabs write (step 8) take it
+ * first, before any row lock, so they never interleave: adjust plans its moves from one read of
+ * the activities and of the amendment's date change. Not a row lock: it adds no edge to the row
+ * lock order (apps/api/src/credits.ts), as long as every taker takes it before its row locks.
+ */
+export async function lockBidSchedule(db: Pick<AppDatabase, 'execute'>, bidId: string): Promise<void> {
+  await db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`schedule:${bidId}`}, 0))`);
+}

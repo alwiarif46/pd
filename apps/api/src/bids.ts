@@ -12,8 +12,10 @@ import {
   type Plan,
   resolveOrgPath,
   schema,
+  toIsoDate,
   withOrg,
 } from '@pd/core';
+import { resolveDateChangesForDue } from './amendment-tabs.js';
 import { requireAuth } from './context.js';
 import { hasLiveSolicitation, releaseBidCredit, shareOrg } from './credits.js';
 import { orgPlan, readKeyOverrideLimit } from './documents.js';
@@ -293,6 +295,14 @@ export async function registerBids(app: FastifyInstance): Promise<void> {
           targetId: id,
           detail: { previousKey: PENDING, solicitationKey },
         });
+      }
+      // A due date set here answers the amendment date change that names it (and outdates lower
+      // ones), so a hidden prompt never resurfaces to move the date back (amendment-tabs.ts).
+      if (body.dueDate) {
+        const due = new Date(body.dueDate);
+        if (!Number.isNaN(due.getTime())) {
+          await resolveDateChangesForDue(db, orgId, id, toIsoDate(due), new Date());
+        }
       }
       const updated = await findBid(db, orgId, id);
       return updated ? bidDto(db, orgId, updated) : null;

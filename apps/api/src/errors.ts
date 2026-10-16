@@ -36,6 +36,7 @@ export const ERROR_MESSAGES = {
   invite_email_mismatch: 'This invite was sent to a different email address. Sign in with that address to accept it.',
   already_in_org: 'You already belong to an organization. An account can belong to one organization.',
   seats_full: 'The organization has no free seat right now. Ask the owner to upgrade or to free a seat, then open this invite again.',
+  date_change_resolved: 'This date change was already answered. Change the due date in Bid settings to move it again.',
 } as const;
 
 export type ErrorCode = keyof typeof ERROR_MESSAGES;
