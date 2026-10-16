@@ -50,6 +50,19 @@ describe('loadShell', () => {
     expect(await loadShell(api)).toEqual({ kind: 'no_org', me: meDto() });
   });
 
+  it('reports a seat-locked member on 403 seat_locked, not as having no organization', async () => {
+    const api = mockApi({ getOrg: vi.fn(async () => Promise.reject(new ApiError('You have no seat.', 403, 'seat_locked'))) });
+    expect(await loadShell(api)).toEqual({ kind: 'seat_locked', me: meDto(), message: 'You have no seat.' });
+  });
+
+  it('keeps the seat-locked state when the user cannot be loaded either', async () => {
+    const api = mockApi({
+      getMe: vi.fn(async () => Promise.reject(new ApiError('x', 500))),
+      getOrg: vi.fn(async () => Promise.reject(new ApiError('You have no seat.', 403, 'seat_locked'))),
+    });
+    expect(await loadShell(api)).toEqual({ kind: 'seat_locked', me: null, message: 'You have no seat.' });
+  });
+
   it('throws anything else', async () => {
     const api = mockApi({ listBids: vi.fn(async () => Promise.reject(new ApiError('The API is not reachable', 0))) });
     await expect(loadShell(api)).rejects.toMatchObject({ status: 0 });

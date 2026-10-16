@@ -197,8 +197,8 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
       const org = await lockOrg(db, auth.orgId!);
       const members = await db.select({ id: schema.memberships.id }).from(schema.memberships).where(eq(schema.memberships.orgId, auth.orgId!));
       // An invite not yet accepted and not expired holds a seat too (06 s2: invites beyond the
-      // limit are blocked). There is no invite-accept route yet; when one is built it must check
-      // the seat again, since an invite can outlive a move to a smaller plan.
+      // limit are blocked). An invite can outlive a move to a smaller plan, so the accept route
+      // (invites.ts) checks the seat again under this same organization lock.
       const [pending] = await db.select({ count: sql<number>`count(*)::int` }).from(schema.invites).where(and(
         eq(schema.invites.orgId, auth.orgId!),
         isNull(schema.invites.acceptedAt),
@@ -220,7 +220,9 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
         return respond(402, { error: 'This plan has no seats left' });
       }
       const token = newToken();
-      issued = token;
+      // The code carries the organization id, so accepting looks the token up under that
+      // organization's row-level security (invites.ts). Only the token's hash is stored.
+      issued = `${auth.orgId!}.${token}`;
       await db.insert(schema.invites).values({
         orgId: auth.orgId!,
         email,

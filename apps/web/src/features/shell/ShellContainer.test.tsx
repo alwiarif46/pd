@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, getToken, setToken } from '@/api';
+import { ApiError, getToken, notifySeatLocked, setToken } from '@/api';
 import { bidDto, creditDto, docDto, jobDto, linkDto, meDto, orgPayload, organizationDto } from '@/test/fixtures';
 import { jsonResponse } from '@/test/fetch';
 import { TabFrameContainer } from '@/features/tab-frame/TabFrameContainer';
@@ -12,6 +12,7 @@ import { ShellContext, type ShellContextValue } from './bid-context';
 import type { ShellApi } from './controller';
 import { LegacyFrame } from './LegacyFrame';
 import { ShellContainer } from './ShellContainer';
+import { savePendingInvite } from '@/features/membership/pending-invite';
 
 function mockApi(over: Partial<ShellApi> = {}): ShellApi {
   return {
@@ -256,6 +257,73 @@ describe('ShellContainer', () => {
   });
 });
 
+describe('ShellContainer seat-locked member', () => {
+  const locked = () => new ApiError('Your plan has no seat for you.', 403, 'seat_locked');
+  const bids = { kind: 'page', page: 'bids' } as const;
+
+  it('draws the seat-locked screen full page, without the shell navigation', async () => {
+    const api = mockApi({ getOrg: vi.fn(async () => Promise.reject(locked())) });
+    render(<ShellContainer route={bids} api={api} />);
+    expect(await screen.findByRole('heading', { name: 'You have no seat right now' })).toBeTruthy();
+    expect(screen.getByText('Your plan has no seat for you.')).toBeTruthy();
+    expect(screen.getByText('Signed in as dana@northbridge.example.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Account menu for Dana Reyes' })).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'Bid tabs' })).toBeNull();
+  });
+
+  it('Check again reloads the organization and returns to the app when a seat is free', async () => {
+    const getOrg = vi.fn().mockRejectedValueOnce(locked()).mockResolvedValue(orgPayload());
+    render(<ShellContainer route={bids} api={mockApi({ getOrg })} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }));
+    expect(await screen.findByRole('button', { name: 'Account menu for Dana Reyes' })).toBeTruthy();
+    expect(getOrg).toHaveBeenCalledTimes(2);
+  });
+
+  it('Check again keeps the screen when there is still no seat', async () => {
+    const getOrg = vi.fn(async () => Promise.reject(locked()));
+    render(<ShellContainer route={bids} api={mockApi({ getOrg })} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(getOrg).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('button', { name: 'Check again' })).toBeTruthy();
+  });
+
+  it('Sign out calls the API and goes to log in', async () => {
+    const api = mockApi({ getOrg: vi.fn(async () => Promise.reject(locked())) });
+    render(<ShellContainer route={bids} api={api} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    expect(api.logOut).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(window.location.hash).toBe('#/login'));
+  });
+
+  it('a plain 403 still means no organization', async () => {
+    const api = mockApi({ getOrg: vi.fn(async () => Promise.reject(new ApiError('No organization', 403))) });
+    render(<ShellContainer route={bids} api={api} />);
+    expect(await screen.findByRole('button', { name: 'Account menu for Dana Reyes' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'You have no seat right now' })).toBeNull();
+  });
+
+  it('reloads once, without looping, when a seat is lost while the app is open', async () => {
+    let lost = false;
+    const getOrg = vi.fn(async () => {
+      if (!lost) return orgPayload();
+      // The api client tells listeners about every 403 seat_locked, as the real request core does.
+      notifySeatLocked();
+      return Promise.reject(locked());
+    });
+    render(<ShellContainer route={bids} api={mockApi({ getOrg })} />);
+    expect(await screen.findByRole('button', { name: 'Account menu for Dana Reyes' })).toBeTruthy();
+    expect(getOrg).toHaveBeenCalledTimes(1);
+    lost = true;
+    act(() => notifySeatLocked());
+    expect(await screen.findByRole('heading', { name: 'You have no seat right now' })).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(getOrg).toHaveBeenCalledTimes(2);
+    act(() => notifySeatLocked());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(getOrg).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('AppRoot', () => {
   it('signs out on a 401 and shows log in', async () => {
     setToken('expired');
@@ -372,5 +440,77 @@ describe('TabFrameContainer', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: 'Upgrade plan' }));
     expect(value.openUpgrade).toHaveBeenCalledWith('over_cap');
+  });
+});
+
+describe('invite hand-off', () => {
+  const CODE = `${'a'.repeat(8)}-aaaa-aaaa-aaaa-${'a'.repeat(12)}.${'b'.repeat(64)}`;
+  const bids = { kind: 'page', page: 'bids' } as const;
+  const noOrg = () => new ApiError('No organization', 403);
+
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+    sessionStorage.clear();
+    setToken(null);
+    vi.unstubAllGlobals();
+  });
+
+  it('a signed-in user with no organization and a waiting code goes to #/invite once per session', async () => {
+    savePendingInvite(CODE);
+    const api = mockApi({ getOrg: vi.fn(async () => Promise.reject(noOrg())) });
+    render(<ShellContainer route={bids} api={api} />);
+    await waitFor(() => expect(window.location.hash).toBe('#/invite'));
+    cleanup();
+    window.location.hash = '#/bids';
+    render(<ShellContainer route={bids} api={api} />);
+    expect(await screen.findByRole('button', { name: 'Account menu for Dana Reyes' })).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(window.location.hash).toBe('#/bids');
+  });
+
+  it('without a waiting code, no organization stays on the organization page', async () => {
+    const api = mockApi({ getOrg: vi.fn(async () => Promise.reject(noOrg())) });
+    render(<ShellContainer route={bids} api={api} />);
+    expect(await screen.findByRole('button', { name: 'Account menu for Dana Reyes' })).toBeTruthy();
+    expect(window.location.hash).toBe('');
+  });
+
+  it('AppRoot sends a user who logs in with a waiting code to #/invite', async () => {
+    savePendingInvite(CODE);
+    window.location.hash = '#/login';
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (String(url).endsWith('/api/auth/login')
+      ? jsonResponse(200, { token: 'tok' })
+      : jsonResponse(200, meDto()))));
+    render(<AppRoot />);
+    await userEvent.type(await screen.findByLabelText('Work email'), 'dana@northbridge.example');
+    await userEvent.type(screen.getByLabelText('Password'), 'a long enough password');
+    await userEvent.click(screen.getByRole('button', { name: 'Log in' }));
+    await waitFor(() => expect(window.location.hash).toBe('#/invite'));
+  });
+});
+
+describe('ShellContainer seat-locked on a bid', () => {
+  it('loads no bid and does not poll while the member has no seat', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const getBid = vi.fn(async () => bidDto());
+    const listJobs = vi.fn(async () => [jobDto({ status: 'running' })]);
+    const api = mockApi({
+      getOrg: vi.fn(async () => Promise.reject(new ApiError('Your plan has no seat for you.', 403, 'seat_locked'))),
+      getBid,
+      listJobs,
+    });
+    render(<ShellContainer route={outline} api={api} />);
+    expect(await screen.findByRole('heading', { name: 'You have no seat right now' })).toBeTruthy();
+    // The first bid load starts with the shell's, before the 403 is known; after it, nothing more.
+    const bidCalls = getBid.mock.calls.length;
+    const jobCalls = listJobs.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+      window.dispatchEvent(new Event('focus'));
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(getBid.mock.calls.length).toBe(bidCalls);
+    expect(listJobs.mock.calls.length).toBe(jobCalls);
   });
 });

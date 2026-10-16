@@ -3,12 +3,14 @@ import type { OutsidePage, Tab } from '@/types';
 /**
  * The app's hash routes. The hashes are the ones the app has always used:
  *   #/login #/signup #/verify #/reset          auth (AuthContainer parses its own token)
+ *   #/invite[?token=<code>]                    join an organization from an invite (signed in or out)
  *   #/bids #/bids/new #/org #/account #/privacy outside a bid
  *   #/bids/:id/:tab[?row=<rowId>]              inside a bid; `row` is the selected row
  * Pure: no window access, so it is tested in node.
  */
 export type AppRoute =
   | { kind: 'auth' }
+  | { kind: 'invite' }
   | { kind: 'page'; page: OutsidePage }
   | { kind: 'new_bid' }
   | { kind: 'tab'; bidId: string; tab: Tab; rowId: string | null };
@@ -73,6 +75,7 @@ export function parseRoute(hash: string, signedIn: boolean): AppRoute {
   const query = new URLSearchParams(queryAt === -1 ? '' : body.slice(queryAt + 1));
   const [head, second, third] = path.split('/').filter(Boolean);
 
+  if (head === 'invite') return { kind: 'invite' };
   if (head && AUTH_HEADS.has(head)) return { kind: 'auth' };
   if (head === 'privacy') return { kind: 'page', page: 'privacy' };
   if (head === 'org') return { kind: 'page', page: 'organization' };
@@ -97,6 +100,8 @@ export function hrefFor(route: AppRoute): string {
   switch (route.kind) {
     case 'auth':
       return '#/login';
+    case 'invite':
+      return '#/invite';
     case 'page':
       return PAGE_HASH[route.page];
     case 'new_bid':

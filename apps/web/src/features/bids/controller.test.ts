@@ -256,6 +256,13 @@ describe('loadBidsScreen', () => {
     expect(await loadBidsScreen(api, now)).toEqual({ kind: 'no_org' });
   });
 
+  it('a seat-locked member is not "no organization": the error goes through', async () => {
+    const api = mockApi();
+    api.getOrg.mockRejectedValue(new ApiError('No seat.', 403, 'seat_locked'));
+    await expect(loadBidsScreen(api, now)).rejects.toThrow('No seat.');
+    await expect(loadNewBidScreen(api, now)).rejects.toThrow('No seat.');
+  });
+
   it('lets other failures through', async () => {
     const api = mockApi();
     api.listBids.mockRejectedValue(new ApiError('The API is not reachable', 0));

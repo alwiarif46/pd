@@ -569,6 +569,24 @@ interface SourceViewerProps {
 - Upload refusals arrive as API errors; the container maps them to the 05 s3.10 messages (5.2, 5.11).
 - Retention and restore: no worker archives files at their live-until date or moves a restore from `restore_requested` through `restoring` to `restored`, so documents stay in the state the API set (07 s2, 5.11).
 
+### 5.20 Invite accept and seat locked (built in the repo, not by v0)
+These two screens are hand-built in `apps/web/src/features/membership/ui/` with shadcn/ui and Tailwind, not integrated from `design/v0/`. They take props and report actions through callbacks, and render outside `.app-shell`. A v0 re-integration never touches them.
+```ts
+type InviteFailure = 'invalid' | 'expired' | 'used' | 'email_mismatch' | 'already_in_org' | 'seats_full' | 'other';
+type InviteStep =
+  | { kind: 'enter_code' } | { kind: 'signed_out' } | { kind: 'ready'; email: string }
+  | { kind: 'joined'; orgName: string } | { kind: 'failed'; reason: InviteFailure; message: string };
+interface AcceptInviteProps {
+  step: InviteStep; submitting: boolean;
+  onSubmitCode(code: string): void; onAccept(): void; onSignUp(): void; onLogIn(): void;
+  onSignOut(): void; onRetry(): void; onContinue(): void; onDismiss(): void;
+}
+interface SeatLockedProps { email: string; message: string; checking: boolean; onCheckAgain(): void; onSignOut(): void }
+```
+- `AcceptInvite` ("Join your team"), route `#/invite[?token=<code>]`, open to signed-in and signed-out people. `enter_code`: "Invite code" field, checked for shape before `onSubmitCode` (an uppercase org id is lowercased; the error is an alert). `signed_out`: "Create account" and "Log in". `ready`: "You are signed in as [email].", "Join organization" (the person always clicks; landing never joins) and "Not now". `joined`: "You joined [org]." and "Open Shaavir PD". `failed`: the API's message in an alert, with "Try again" (`seats_full`, `other`: an account load that failed loads again) or "Sign out and use another account" (`email_mismatch`), each with "Not now"; a final refusal (`invalid`, `expired`, `used`, `already_in_org`) shows "Open Shaavir PD". "Not now" (`onDismiss`) drops the kept code and opens `#/bids`.
+- The invite code is `<orgId>.<token>`. The container keeps it in `localStorage` (`pd-pending-invite`, 7 days) across sign-up and log in, strips it from the address bar, clears it on success and on final refusals, and keeps it for `email_mismatch`, `seats_full` and other errors until "Not now". After log in the app returns to `#/invite` while a code is waiting; a signed-in person with no organization is sent there at most once per browser session (`sessionStorage` `pd-invite-redirected`).
+- `SeatLocked` ("You have no seat right now"): shown full page, without the shell navigation, for a member whose plan has no seat (403 `seat_locked`). Shows the API's message, "Signed in as [email].", a line on what to do, "Check again" ("Checking...") and "Sign out". No organization switch: an account belongs to one organization.
+
 ## 6. Order of v0 chats
 
 The copy-paste prompt for each chat is in `docs/v0-prompts.md`.
@@ -639,3 +657,5 @@ Each chat ends the same way: v0 pushes to the `v0-ui` branch, you merge it to `m
 | 16 Oct 2026 | Amendment cards and "Needs you" tab signals count compliance links only; fact and date proposals belong to Overview and Schedule |
 | 16 Oct 2026 | Until v0's Overview is integrated, `features/overview` renders the proposals panel (Tailwind, outside `.app-shell`) above the legacy Overview in a LegacyFrame, with no TabFrame (the legacy screen draws its own banners) |
 | 16 Oct 2026 | The legacy Documents list shows an amendment's tabs status in its Status cell ("Updating bid facts and dates", or "did not update" with Retry), with legacy classes only, until v0's Documents is integrated |
+| 16 Oct 2026 | 5.20 added: the invite-accept and seat-locked screens are built in `features/membership/ui` (shadcn + Tailwind, not by v0). The "UI not built yet" note on seats (16 Oct) is done for the seat-locked member's own screen |
+| 16 Oct 2026 | 5.20 review fixes: `onDismiss` ("Not now") on `ready` and on kept-code failures; `other` offers "Try again"; the no-organization redirect to `#/invite` happens at most once per browser session |

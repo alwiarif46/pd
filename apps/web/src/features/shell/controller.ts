@@ -1,5 +1,5 @@
 import * as api from '@/api';
-import { ApiError } from '@/api';
+import { ApiError, isSeatLocked, SEAT_LOCKED } from '@/api';
 import type { AmendmentLinkDto, BidDto, DocumentDto, JobDto, MeDto, OrgPayloadDto, PaidPlan } from '@/api';
 import type { ShellBid } from '@/types';
 import { messageOf } from '@/features/shared/messages';
@@ -36,10 +36,12 @@ export function pollDelay(failures: number): number {
 export type ShellData =
   | { kind: 'ready'; me: MeDto; org: OrgPayloadDto; bids: BidDto[] }
   /** Signed in, no organization yet: GET /api/org answers 403. */
-  | { kind: 'no_org'; me: MeDto | null };
+  | { kind: 'no_org'; me: MeDto | null }
+  /** Signed in, a member of an organization whose plan has no seat for them: 403 `seat_locked` (06 s5). */
+  | { kind: 'seat_locked'; me: MeDto | null; message: string };
 
 function isNoOrg(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 403;
+  return error instanceof ApiError && error.status === 403 && error.code !== SEAT_LOCKED;
 }
 
 /** The user, the organization (plan, credits, role, cap) and the bid list. */
@@ -49,6 +51,9 @@ export async function loadShell(deps: ShellApi, signal?: AbortSignal): Promise<S
     const [org, bids] = await Promise.all([deps.getOrg({ signal }), deps.listBids({ signal })]);
     return { kind: 'ready', me: await me, org, bids };
   } catch (error) {
+    if (error instanceof ApiError && isSeatLocked(error)) {
+      return { kind: 'seat_locked', me: await me.catch(() => null), message: error.message };
+    }
     if (isNoOrg(error)) return { kind: 'no_org', me: await me.catch(() => null) };
     me.catch(() => undefined);
     throw error;

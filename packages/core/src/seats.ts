@@ -58,3 +58,13 @@ export function assignSeats<T extends { userId: string; role: 'owner' | 'member'
     return { userId: row.userId, role: row.role, joinedAt: row.joinedAt, seatLocked: !seated };
   });
 }
+
+/**
+ * Whether one more member joining now would hold a seat (06 s5). `rows` are the current
+ * memberships in seat order (as seatHolders returns them). A new member joins last, so it never
+ * takes a seat from anyone: it holds one only when a seat is still free after everyone else.
+ */
+export function newMemberHoldsSeat(rows: Pick<SeatHolder, 'userId' | 'role' | 'joinedAt'>[], limit: number): boolean {
+  const next = assignSeats([...rows, { userId: '', role: 'member' as const, joinedAt: new Date(8.64e15) }], limit);
+  return !next[next.length - 1].seatLocked;
+}
