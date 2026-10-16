@@ -245,6 +245,10 @@ o="$(bash infra/switch-provider.sh plan --tenant "$TMP/ssh.toml" --to "$TMP/vol.
 grep -q "rsync -aHAX --numeric-ids pdadmin@<old tailnet IP>:/mnt/pddata/files/ /mnt/pddata/files/" <<<"$o" && ok "switch plan copies the live files with rsync (plan 01 s4: they are not in the backups)" || bad "rsync step" "$o"
 grep -q "NEW server's tailnet IP" <<<"$o" && ok "switch plan warns: --check-host must be the new node's tailnet IP" || bad "check-host warning" "$o"
 grep -q "restore.sh --archive latest --confirm" <<<"$o" && grep -q "backup.sh" <<<"$o" && grep -q "stop api worker" <<<"$o" && ok "switch plan: stop api/worker and back up on the old server, restore.sh on the new one" || bad "restore steps" "$o"
+l_bk="$(grep -n 'sudo /opt/pd/infra/scripts/backup.sh' <<<"$o" | head -1 | cut -d: -f1)"; l_dis="$(grep -n 'sudo systemctl disable --now pd-backup.timer' <<<"$o" | head -1 | cut -d: -f1)"; l_build="$(grep -n 'switch-provider.sh build' <<<"$o" | head -1 | cut -d: -f1)"
+[[ -n "$l_bk" && -n "$l_dis" && -n "$l_build" ]] && (( l_bk < l_dis && l_dis < l_build )) \
+  && ok "switch plan step 0: after the final backup, disable pd-backup.timer on the OLD server (before the new one is built)" || bad "timer disable step" "bk=$l_bk dis=$l_dis build=$l_build $o"
+grep -q "backup.sh --adopt-offsite" <<<"$o" && grep -q "sudo ops/install.sh" <<<"$o" && ok "switch plan: the new server takes the B2 prefix over once (--adopt-offsite) and installs its timers" || bad "adopt step" "$o"
 o="$(bash infra/switch-provider.sh build --tenant "$TMP/ssh.toml" --to "$TMP/vol.toml" 2>&1)"; rc=$?
 [[ $rc != 0 ]] && grep -q "\-\-confirm" <<<"$o" && ok "switch build refuses without --confirm" || bad "switch confirm" "$o"
 o="$(bash infra/switch-provider.sh cutover --tenant "$TMP/ssh.toml" --to "$TMP/vol.toml" 2>&1)"; rc=$?

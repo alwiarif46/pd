@@ -8,8 +8,9 @@ Subcommands
   apply   idempotent upsert of the records for tenant.domain in zone tenant.dns_zone:
             A      <domain>  <server IPv4>   proxied per [dns] proxied   TTL per [dns] ttl (1 = automatic)
             AAAA   <domain>  <server IPv6>   same
-          Existing correct records are left alone; wrong content, TTL or proxy flag is updated in place.
-          Nothing is ever deleted. There are no CAA records and no ACME: the origin uses a Cloudflare origin
+          Existing correct records are left alone; a missing record is created. Changing an EXISTING record
+          (wrong content, TTL or proxy flag: e.g. moving the name to another server) needs --confirm; without it
+          apply prints what would change and exits 1 before any write. Nothing is ever deleted. There are no CAA records and no ACME: the origin uses a Cloudflare origin
           certificate, so nothing here talks to a certificate authority.
   check   compares the A and AAAA records the Cloudflare API holds with the server's addresses. It does NOT use
           DNS resolution: a proxied name always resolves to Cloudflare, which proves nothing about the origin.
@@ -206,20 +207,35 @@ def apply_records(args, secrets: dict[str, str], zone: str, host: str, want: lis
     cf = CF(token)
     zid = cf.zone_id(zone)
 
+    # Look every record up first, then write: a refused change leaves the zone exactly as it was.
+    plan: list[tuple[str, dict, dict | None]] = []
     for rec in want:
         name, rtype = rec["name"], rec["type"]
         existing = cf.records(zid, rtype, name)
         if len(existing) > 1:
             raise Fail(f"{len(existing)} {rtype} records already exist for {name}; resolve by hand")
         if not existing:
-            cf.call("POST", f"/zones/{zid}/dns_records", rec)
-            print(f"created : {describe(rec)}")
+            plan.append(("create", rec, None))
             continue
         cur = existing[0]
         same = cur["content"] == rec["content"] and cur["ttl"] == rec["ttl"] and bool(cur.get("proxied")) is bool(rec["proxied"])
-        if same:
+        plan.append(("ok" if same else "update", rec, cur))
+
+    updates = [(rec, cur) for action, rec, cur in plan if action == "update"]
+    if updates and not getattr(args, "confirm", False):
+        for rec, cur in updates:
+            print(f"would update: {describe(rec)}   (now {cur['content']}, ttl {cur['ttl']}, proxied={cur.get('proxied')})")
+        raise Fail(f"{len(updates)} existing record(s) would change (this moves {host} for every user): "
+                   "nothing was written. Re-run with --confirm")
+
+    for action, rec, cur in plan:
+        if action == "create":
+            cf.call("POST", f"/zones/{zid}/dns_records", rec)
+            print(f"created : {describe(rec)}")
+        elif action == "ok":
             print(f"ok      : {describe(rec)}")
         else:
+            assert cur is not None
             cf.call("PATCH", f"/zones/{zid}/dns_records/{cur['id']}",
                     {"content": rec["content"], "ttl": rec["ttl"], "proxied": rec["proxied"]})
             print(f"updated : {describe(rec)}   (was {cur['content']}, ttl {cur['ttl']}, proxied={cur.get('proxied')})")
@@ -277,6 +293,7 @@ def main() -> int:
     ap.add_argument("--secrets")
     sub = ap.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("apply", help="upsert the A/AAAA records")
+    a.add_argument("--confirm", action="store_true", help="allow changing an existing record (creating one needs no --confirm)")
     c = sub.add_parser("check", help="compare the API records with the server addresses")
     for p in (a, c):
         p.add_argument("--ipv4", "--ip4", dest="ipv4")

@@ -20,9 +20,10 @@
 # argv, never in the environment. Nothing is written to /tmp or /data/backups. Live files are not backed up
 # (plan 01 s4): the database is.
 #
-# Usage: sudo infra/scripts/backup.sh [--init] [--no-offsite] [--tag NAME] [--dry-run] [--tenant PATH]
+# Usage: sudo infra/scripts/backup.sh [--init] [--no-offsite] [--adopt-offsite] [--tag NAME] [--dry-run] [--tenant PATH]
 #   --init        create the Borg repository (repokey-blake2) and export its key to /etc/pd/borg-key.txt (0400)
 #   --no-offsite  skip the B2 copy (restore.sh uses this for its safety backup)
+#   --adopt-offsite  passed to offsite-sync.sh: take the B2 prefix over from another machine (once, after a move)
 #   --tag NAME    append -NAME to the archive name (restore.sh: pre-restore)
 set -euo pipefail
 
@@ -34,12 +35,13 @@ source "$SCRIPT_DIR/../../ops/lib/backup-common.sh"
 usage() { ops_usage "${BASH_SOURCE[0]}"; }
 
 ops_init backup "$@"
-INIT=0 OFFSITE=1 TAG=""
+INIT=0 OFFSITE=1 ADOPT=0 TAG=""
 set -- ${OPS_ARGS[@]+"${OPS_ARGS[@]}"}
 while (( $# )); do
   case "$1" in
     --init) INIT=1 ;;
     --no-offsite) OFFSITE=0 ;;
+    --adopt-offsite) ADOPT=1 ;;
     --tag) TAG="${2:?--tag needs a name}"; shift ;;
     *) die "unknown argument: $1 (see --help)" ;;
   esac
@@ -99,7 +101,8 @@ run borg prune "${RETENTION_ARGS[@]}" --glob-archives 'pd-*'
 run borg compact
 
 if (( OFFSITE )); then
-  run bash "$SCRIPT_DIR/../../ops/backup/offsite-sync.sh" ${PD_TENANT:+--tenant "$PD_TENANT"}
+  OFFSITE_ARGS=(); (( ADOPT )) && OFFSITE_ARGS+=(--adopt-offsite)
+  run bash "$SCRIPT_DIR/../../ops/backup/offsite-sync.sh" ${PD_TENANT:+--tenant "$PD_TENANT"} ${OFFSITE_ARGS[@]+"${OFFSITE_ARGS[@]}"}
 else
   log "off-site copy skipped (--no-offsite)"
 fi

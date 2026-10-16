@@ -289,6 +289,32 @@ backup_env of-dry
 out="$(bash ops/backup/offsite-sync.sh --dry-run 2>&1)"; rc=$?
 [[ $rc == 0 ]] && ! grep -qE '^rclone' "$FAKE_CALLS" && ok "offsite-sync --dry-run exits 0 and calls nothing" || bad "offsite dry-run" "rc=$rc $(cat "$FAKE_CALLS")"
 
+# two servers must never sync one B2 prefix (old server after a provider switch): the marker names its machine
+backup_env of-marker
+out="$(bash ops/backup/offsite-sync.sh --wait-min 0 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q '^machine=thismachine0000000000000000000001$' "$S/pdbackup/pd/last-offsite-ok" && grep -q '^time=' "$S/pdbackup/pd/last-offsite-ok" && grep -q '^host=' "$S/pdbackup/pd/last-offsite-ok" \
+  && ok "the marker records time=, host= and machine= (/etc/machine-id)" || bad "marker content" "rc=$rc $(cat "$S/pdbackup/pd/last-offsite-ok" 2>/dev/null)"
+backup_env of-same
+out="$(FAKE_REMOTE_MARKER=$'time=2026-10-16T00:00:00Z\nhost=pd\nmachine=thismachine0000000000000000000001\n' bash ops/backup/offsite-sync.sh --wait-min 0 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q ' sync ' "$FAKE_CALLS" && ok "a B2 marker written by this machine: sync goes on" || bad "same machine refused" "rc=$rc $out"
+backup_env of-foreign
+out="$(FAKE_REMOTE_MARKER=$'time=2026-10-16T00:00:00Z\nhost=pd\nmachine=oldserver00000000000000000000009\n' bash ops/backup/offsite-sync.sh --wait-min 0 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "ANOTHER machine (oldserver" <<<"$out" && grep -q -- "--adopt-offsite" <<<"$out" && ! grep -q ' sync ' "$FAKE_CALLS" && ! grep -q ' copyto ' "$FAKE_CALLS" \
+  && ok "offsite-sync refuses when B2's marker came from another machine (no sync, no marker)" || bad "foreign marker" "rc=$rc $out"
+out="$(FAKE_REMOTE_MARKER=$'2026-10-16T00:00:00Z\n' bash ops/backup/offsite-sync.sh --wait-min 0 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "ANOTHER machine (unknown" <<<"$out" && ok "a marker that names no machine is treated as another machine's" || bad "legacy marker" "rc=$rc $out"
+backup_env of-adopt
+out="$(FAKE_REMOTE_MARKER=$'machine=oldserver00000000000000000000009\n' bash infra/scripts/backup.sh --adopt-offsite 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q ' sync ' "$FAKE_CALLS" && grep -q "takes the prefix over" <<<"$out" && grep -q '^machine=thismachine' "$S/pdbackup/pd/last-offsite-ok" \
+  && ok "backup.sh --adopt-offsite takes the prefix over once (then the marker names this machine)" || bad "adopt" "rc=$rc $(tail -4 <<<"$out")"
+backup_env of-caterr
+out="$(FAKE_CAT_EXIT=1 bash ops/backup/offsite-sync.sh --wait-min 0 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "cannot read b2crypt:pd/last-offsite-ok" <<<"$out" && ! grep -q ' sync ' "$FAKE_CALLS" && ok "an unreadable B2 marker (not just missing) refuses the sync" || bad "cat error" "rc=$rc $out"
+backup_env of-nomid
+rm -f "$S/machine-id"
+out="$(bash ops/backup/offsite-sync.sh --wait-min 0 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "must name this machine" <<<"$out" && ! grep -q ' sync ' "$FAKE_CALLS" && ok "offsite-sync refuses without /etc/machine-id" || bad "no machine-id" "rc=$rc $out"
+
 # ------------------------------------------------------------------ rclone-setup.sh / install.sh (dry-run)
 setup rcs
 out="$(bash ops/backup/rclone-setup.sh --dry-run 2>&1)"; rc=$?
@@ -493,6 +519,44 @@ grep -q '${PD_DATA_ROOT:-/mnt/pddata}/postgres:/var/lib/postgresql/data' <<<"$ym
 grep -q 'PD_HOSTING_SUBPROCESSOR=${PD_HOSTING_SUBPROCESSOR:-}' <<<"$yml" && grep -q 'PD_BACKUP_SUBPROCESSOR=${PD_BACKUP_SUBPROCESSOR:-}' <<<"$yml" && ok "compose: the api receives both subprocessor values" || bad "compose subprocessors"
 [[ "$(grep -c 'image: ${PD_IMAGE_PREFIX:-pd-}' <<<"$yml")" == 5 ]] && ok "compose: five images follow PD_IMAGE_PREFIX / PD_IMAGE_TAG (defaults unchanged)" || bad "compose image variables"
 
+
+# ------------------------------------------------------------------ .github/workflows/ci.yml (deploy and image gating)
+if "$PY" -c 'import yaml' >/dev/null 2>&1; then
+  "$PY" - "$(np "$REPO/.github/workflows/ci.yml")" >"$TMP/ci.txt" 2>&1 <<'PYEOF2'
+import sys, yaml
+wf = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+jobs = wf["jobs"]
+bad = []
+dep = jobs["deploy"]
+cond = " ".join(str(dep.get("if", "")).split())
+for need in ("always()", "github.event_name == 'workflow_dispatch'", "github.ref == 'refs/heads/master'",
+             "needs.push-images.result == 'success' || needs.push-images.result == 'skipped'", "needs.test-infra.result == 'success'",
+             "needs.restore-drill.result == 'success'", "needs.test-api.result == 'success'"):
+    if need not in cond:
+        bad.append(f"deploy.if lacks: {need}")
+if "push-images" not in dep.get("needs", []):
+    bad.append("deploy does not need push-images")
+for st in dep["steps"]:
+    if st.get("uses", "").startswith("tailscale/") and "steps.gate.outputs.enabled == 'true'" not in str(st.get("if", "")):
+        bad.append("the tailscale step is not gated on the deploy secrets (steps.gate.outputs.enabled)")
+    if "pddeploy@" in str(st.get("run", "")) and "master|v[0-9]" not in str(st.get("run", "")):
+        bad.append("the deploy step does not restrict the ref input to master or a release tag")
+tags = [s for s in jobs["push-images"]["steps"] if "build-push-action" in s.get("uses", "")][0]["with"]["tags"]
+for line in str(tags).splitlines():
+    if line.strip().endswith(":master") and "refs/heads/master" not in line:
+        bad.append(f"push-images tags :master unconditionally: {line.strip()}")
+if not any("refs/heads/master" in l and ":master" in l for l in str(tags).splitlines()):
+    bad.append("push-images has no master-only :master tag")
+rd = jobs.get("restore-drill")
+if not rd or "restore-drill-ci.sh" not in " ".join(str(s.get("run", "")) for s in rd["steps"]):
+    bad.append("no restore-drill job running ops/ci/restore-drill-ci.sh")
+print("\n".join(bad))
+sys.exit(1 if bad else 0)
+PYEOF2
+  [[ $? == 0 ]] && ok "ci.yml: deploy only from master after push-images (always() + every result checked), tailscale gated on the deploy secrets, :master tagged only from master, restore-drill job" || bad "ci.yml gating" "$(cat "$TMP/ci.txt")"
+else
+  skip "ci.yml checks (no PyYAML; CI installs python3-yaml)"
+fi
 
 # ------------------------------------------------------------------ static
 mapfile -t SH < <(find ops infra/scripts -name '*.sh' -not -path '*/node_modules/*')

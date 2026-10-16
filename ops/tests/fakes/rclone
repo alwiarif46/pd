@@ -14,8 +14,10 @@ case "$sub" in
   lsf) [[ -n "${FAKE_LSF:-}" ]] && printf '%s\n' "$FAKE_LSF" ;;
   lsjson) printf '%s\n' "${FAKE_LSJSON:-[]}" ;;
   copy) [[ -n "${FAKE_COPY_DEST_FILES:-}" ]] && { dest="${*: -1}"; mkdir -p "$dest/borg"; echo fake >"$dest/borg/config"; } ;;
+  # cat b2crypt:pd/last-offsite-ok: $FAKE_REMOTE_MARKER when set; otherwise "directory not found" (exit $FAKE_CAT_EXIT, 3)
+  cat) if [[ -n "${FAKE_REMOTE_MARKER+x}" ]]; then printf '%s' "$FAKE_REMOTE_MARKER"; rc=0; else echo "directory not found" >&2; rc="${FAKE_CAT_EXIT:-3}"; fi ;;
   *) : ;;
 esac
 # record which secrets the process could see (names only) to prove env delivery
 env | grep -o '^RCLONE_CONFIG_[A-Z0-9_]*' | sort | tr '\n' ' ' >>"${FAKE_CALLS:-/dev/null}.env"; echo >>"${FAKE_CALLS:-/dev/null}.env"
-exit 0
+exit "${rc:-0}"

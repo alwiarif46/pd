@@ -198,7 +198,8 @@ jobs:
   push-images:
     # OFF by default. Runs only on a manual dispatch, or on a push to master when the repository variable
     # PD_PUSH_IMAGES is 'true' (Settings > Secrets and variables > Actions > Variables). Pull requests never push.
-    # Images: ghcr.io/<owner>/pd-<app>:<commit sha> and :master (infra/scripts/deploy.sh --pull-tag <sha>).
+    # Images: ghcr.io/<owner>/pd-<app>:<commit sha> (infra/scripts/deploy.sh --pull-tag <sha>), plus :master only when the
+    # run is on refs/heads/master (a manual run on another branch must not move :master).
     # *verify* the owner is lowercase in GHCR and check the package visibility (HUMAN-TODO H-07).
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && vars.PD_PUSH_IMAGES == 'true')
     runs-on: ubuntu-latest
@@ -231,14 +232,23 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/pd-${{ matrix.app }}:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/pd-${{ matrix.app }}:master
+            ${{ github.ref == 'refs/heads/master' && format('ghcr.io/{0}/pd-{1}:master', github.repository_owner, matrix.app) || '' }}
           cache-from: type=gha,scope=${{ matrix.app }}
 
   deploy:
-    # Manual only (workflow_dispatch), behind the 'production' environment (a required reviewer: HUMAN-TODO H-07).
-    # Inert without its secrets: the gate step skips everything and the job ends green with a notice. Never runs on push.
-    if: github.event_name == 'workflow_dispatch'
-    needs: [typecheck, lint, build, test-web, test-api, test-infra]
+    # Manual only (workflow_dispatch) and only from master, behind the 'production' environment (a required reviewer and
+    # a deployment branch policy of master only: HUMAN-TODO H-07). Inert without its secrets: the gate step skips
+    # everything and the job ends green with a notice. Never runs on push.
+    # It waits for push-images (a dispatch always pushes this commit's images), so an image_tag of this commit exists
+    # before the server pulls it. always() lets it run when push-images was skipped; every result is then checked by
+    # hand, because always() would otherwise also run it after a failed test.
+    if: >-
+      always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
+      && needs.typecheck.result == 'success' && needs.lint.result == 'success' && needs.build.result == 'success'
+      && needs.test-web.result == 'success' && needs.test-api.result == 'success' && needs.test-infra.result == 'success'
+      && needs.restore-drill.result == 'success'
+      && (needs.push-images.result == 'success' || needs.push-images.result == 'skipped')
+    needs: [typecheck, lint, build, test-web, test-api, test-infra, restore-drill, push-images]
     runs-on: ubuntu-latest
     environment: production
     concurrency: deploy-production
@@ -264,7 +274,7 @@ jobs:
             echo "ts=false" >> "$GITHUB_OUTPUT"
           fi
       # *verify* tailscale/github-action@v3 with a Headscale control server (--login-server in args)
-      - if: steps.gate.outputs.ts == 'true'
+      - if: steps.gate.outputs.enabled == 'true' && steps.gate.outputs.ts == 'true'
         uses: tailscale/github-action@v3
         with:
           authkey: ${{ secrets.PD_TS_AUTHKEY }}
@@ -281,6 +291,8 @@ jobs:
           set -euo pipefail
           # the inputs are data: check their shape before they go into the request
           printf '%s' "$REF" | grep -Eq '^[A-Za-z0-9._/-]{1,100}$' || { echo "bad ref input"; exit 1; }
+          # the server accepts only master or a release tag (deploy.sh --ci); refuse anything else here already
+          printf '%s' "$REF" | grep -Eq '^(master|v[0-9]+(\.[0-9]+){0,2}(-[A-Za-z0-9.]+)?)$' || { echo "ref must be master or a release tag v<N>[.<N>[.<N>]]"; exit 1; }
           if [ -n "$IMAGE_TAG" ]; then printf '%s' "$IMAGE_TAG" | grep -Eq '^[0-9a-f]{7,40}$' || { echo "bad image_tag input"; exit 1; }; fi
           umask 077
           printf '%s\n' "$PD_DEPLOY_SSH_KEY" > "$RUNNER_TEMP/deploy_key"

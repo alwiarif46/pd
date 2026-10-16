@@ -317,8 +317,12 @@ out="$("${CFPY[@]}" apply --ipv4 $IP4 --ipv6 $IP6 2>&1)"; rc=$?
 n1="$(grep -cE '^(POST|PATCH)' "$S/cf.calls")"
 out="$("${CFPY[@]}" apply --ipv4 $IP4 --ipv6 $IP6 2>&1)"; rc=$?
 [[ $rc == 0 && "$(grep -cE '^(POST|PATCH)' "$S/cf.calls")" == "$n1" ]] && grep -q "^ok " <<<"$out" && ok "a second apply changes nothing (idempotent)" || bad "cf idempotent" "$out"
-out="$("${CFPY[@]}" apply --ipv4 93.184.216.35 --ipv6 $IP6 2>&1)"
-[[ "$(cf '[r["content"] for r in d["records"] if r["type"]=="A"][0]')" == 93.184.216.35 ]] && grep -q "^updated" <<<"$out" && ok "a changed address updates the record in place (never deletes)" || bad "cf update" "$out"
+n2="$(grep -cE '^(POST|PATCH)' "$S/cf.calls")"
+out="$("${CFPY[@]}" apply --ipv4 93.184.216.35 --ipv6 $IP6 2>&1)"; rc=$?
+[[ $rc == 1 && "$(grep -cE '^(POST|PATCH)' "$S/cf.calls")" == "$n2" ]] && grep -q "would update: A" <<<"$out" && grep -q "Re-run with --confirm" <<<"$out" \
+  && [[ "$(cf '[r["content"] for r in d["records"] if r["type"]=="A"][0]')" == $IP4 ]] && ok "changing an existing record without --confirm is refused before any write" || bad "cf update without confirm" "rc=$rc $out"
+out="$("${CFPY[@]}" apply --ipv4 93.184.216.35 --ipv6 $IP6 --confirm 2>&1)"
+[[ "$(cf '[r["content"] for r in d["records"] if r["type"]=="A"][0]')" == 93.184.216.35 ]] && grep -q "^updated" <<<"$out" && ok "with --confirm a changed address updates the record in place (never deletes)" || bad "cf update" "$out"
 "${CFPY[@]}" apply --ipv4 93.184.216.35 --ipv6 $IP6 >/dev/null 2>&1
 out="$("${CFPY[@]}" check --ipv4 93.184.216.35 --ipv6 $IP6 2>&1)"; rc=$?
 [[ $rc == 0 ]] && grep -q "CHECK: PASS" <<<"$out" && ok "check compares the API records with the server addresses (no DNS resolution)" || bad "cf check pass" "$out"
@@ -337,7 +341,7 @@ out="$("${CFPY[@]}" check --ipv4 93.184.216.35 --ipv6 $IP6 2>&1)"; rc=$?
 out="$(PD_CLOUDFLARE_API=https://api.example.net/client/v4 "${CFPY[@]}" apply --ipv4 $IP4 --ipv6 $IP6 --dry-run 2>&1)"; rc=$?
 [[ $rc != 0 ]] && grep -q "PD_CLOUDFLARE_API must be" <<<"$out" && ok "a non-Cloudflare PD_CLOUDFLARE_API is refused (the token cannot go elsewhere)" || bad "cf url guard" "$out"
 out="$(PD_CLOUDFLARE_API=http://evil.localhost.example.com/ "${CFPY[@]}" apply --ipv4 $IP4 --ipv6 $IP6 2>&1)"; rc=$?
-[[ $rc != 0 ]] && ok "a look-alike host is refused too" || bad "cf lookalike"
+[[ $rc != 0 ]] && grep -q "PD_CLOUDFLARE_API must be" <<<"$out" && ok "a look-alike host is refused too (by the URL guard, not by a failed connection)" || bad "cf lookalike" "rc=$rc $out"
 # --from-provider goes through the dispatcher (ssh adapter: addresses from [infra.ssh])
 sed -e 's/^ipv4 .*/ipv4           = "93.184.216.40"/' -e 's/^ipv6 .*/ipv6           = "2606:2800:220:1:248:1893:25c8:1950"/' config/tenant.toml >"$S/ssh.toml"
 start_cf

@@ -81,7 +81,11 @@ case "$PHASE" in
  0. Before: announce a maintenance window. On the OLD server (admin network):
       sudo docker compose --env-file /opt/pd/.env -f /opt/pd/infra/docker-compose.yml stop api worker
       sudo /opt/pd/infra/scripts/backup.sh          (encrypted Borg dump, then the B2 off-site sync)
-    Check B2 shows a fresh pd/last-offsite-ok. Copy /opt/pd/.env from the vault (it is not in git).
+      sudo systemctl disable --now pd-backup.timer pd-backup-check.timer
+      systemctl is-enabled pd-backup.timer          (must say "disabled": the OLD server must never sync to B2 again;
+                                                     two servers syncing one prefix replace each other's copy)
+    Check B2 shows a fresh pd/last-offsite-ok (machine= is the OLD server's /etc/machine-id). Copy /opt/pd/.env from
+    the vault (it is not in git).
     Put the new provider's key into the secrets file for $TO (never into git).
  1. infra/switch-provider.sh build --to $TO --confirm
       = infra/provision.sh --tenant $TO --confirm-purchase$( [[ "$P_NEW" == ssh ]] && printf '%s' " ; infra/server/bootstrap-existing.sh --tenant $TO --confirm")
@@ -96,6 +100,9 @@ case "$PHASE" in
       as of last-offsite-ok).
  4. Restore: sudo infra/scripts/deploy.sh (the migrations create the roles pd_app and pd_system), then
       sudo infra/scripts/restore.sh --archive latest --confirm, then set the pd_app password (plan 01).
+    Then take the B2 prefix over ONCE (B2's marker names the old machine, so a plain sync is refused):
+      sudo infra/scripts/backup.sh --adopt-offsite
+      sudo ops/install.sh                          (pd-backup.timer and pd-backup-check.timer on the NEW server)
  5. Copy the live files (plan 01: live files are not in the backups) from the OLD server over the admin network:
       sudo rsync -aHAX --numeric-ids pdadmin@<old tailnet IP>:/mnt/pddata/files/ /mnt/pddata/files/
  6. Check before DNS, over the admin network:
@@ -125,7 +132,9 @@ EOM
     header
     (( CONFIRM || PD_DRY_RUN )) || pd_die "cutover moves $DOMAIN to the new server for every user: re-run with --confirm (or --dry-run)"
     pd_find_python
-    run "$PD_PY" "$(pd_native_path "$SCRIPT_DIR/dns/cloudflare-dns.py")" apply --from-provider "${NEWARGS[@]}"
+    # cutover always changes the existing records (old server -> new): cloudflare-dns.py needs --confirm for that
+    dnsargs=("${NEWARGS[@]}"); (( CONFIRM )) && dnsargs+=(--confirm)
+    run "$PD_PY" "$(pd_native_path "$SCRIPT_DIR/dns/cloudflare-dns.py")" apply --from-provider "${dnsargs[@]}"
     echo "Then: python infra/dns/cloudflare-dns.py check --tenant $TO "
     echo "STATE.md: | $(date +%F) | 01 | provider switch $P_OLD -> $P_NEW | DNS cut over | $DOMAIN -> new server; old server kept stopped until $(date -d '+7 days' +%F 2>/dev/null || echo '+7 days') |"
     ;;
