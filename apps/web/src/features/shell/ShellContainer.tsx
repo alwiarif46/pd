@@ -404,7 +404,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
         </PageFrame>
       );
     }
-    // A paid tab on Free: the shell draws the locked state; no tab screen loads.
+    // A paid tab on Free: the container draws the locked state as the shell's children (09 s5.1); no tab screen loads.
     if (org.plan === 'free' && isPaidTab(route.tab)) {
       return (
         <TabFrameContainer tab={route.tab} title={TAB_TITLES[route.tab]}>
@@ -444,12 +444,16 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
     );
   }
 
+  const shellBid = bidId ? (bidDto ? toShellBid(bidDto) : placeholderShellBid(bidId, bidError !== null)) : null;
   const switcherBids = current.bids.map((bid) => ({ id: bid.id, name: bid.name }));
+  // v0's bid switcher is a select that shows the name of the matching entry: a bid that is loading, or
+  // could not be loaded, is not in the list, so its placeholder joins it to keep the trigger labelled.
+  if (shellBid && !switcherBids.some((bid) => bid.id === shellBid.id)) switcherBids.push({ id: shellBid.id, name: shellBid.name });
 
   return (
     <ShellContext.Provider value={ctx}>
       <AppShell
-        bid={bidId ? (bidDto ? toShellBid(bidDto) : placeholderShellBid(bidId, bidError !== null)) : null}
+        bid={shellBid}
         bids={switcherBids}
         activeTab={tab}
         activePage={activePageOf(route)}
@@ -465,7 +469,8 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
         }}
         onSwitchBid={(id) => go(tabHref(id, tab ?? 'overview'))}
         onOpenPage={(page: OutsidePage) => go(pageHref(page))}
-        onUpgrade={() => openUpgrade('locked_tab')}
+        // The top bar's button now shows only at 0 credits (a locked tab has its own button in LockedTab).
+        onUpgrade={() => openUpgrade(org.creditsLeft <= 0 ? 'out_of_credits' : 'plan')}
         onSignOut={signOut}
       >
         {content()}
@@ -475,7 +480,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
         reason={upgrade.reason}
         plan={org.plan}
         creditsLeft={org.creditsLeft}
-        creditsResetOn={org.creditsResetOn}
+        creditsResetOn={localDayOf(org.creditsResetOn)}
         onChoosePlan={choosePlan}
         onClose={() => setUpgrade((prev) => ({ ...prev, open: false }))}
       />
