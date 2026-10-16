@@ -18,7 +18,6 @@ cleanup() {
   cleanup_tmp
 }
 trap cleanup EXIT
-FAKES="$REPO/ops/tests/fakes"
 guard_fakes
 guard_no_luksformat
 np() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }  # native path for python.exe
