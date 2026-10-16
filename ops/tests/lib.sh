@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2034  # a sourced library: ORIG_PATH and the counters are read by the runners that source it
 # ops/tests/lib.sh - shared harness for infra/tests/*.sh and ops/tests/run-tests.sh (sourced, never executed).
 #
 # Rules every runner follows (Drive D-150 and the PD safety rules):

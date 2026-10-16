@@ -123,7 +123,7 @@ grep -q "pg_restore --file=/dev/null" <<<"$out" && ok "backup plan validates the
 ! grep -qE '^(docker|borg) ' "$FAKE_CALLS" && ok "backup --dry-run runs no docker or borg command" || bad "dry-run made calls" "$(cat "$FAKE_CALLS")"
 
 backup_env bk-nomount
-out="$(FAKE_MOUNT_PDBACKUP= bash infra/scripts/backup.sh 2>&1)"; rc=$?
+out="$(FAKE_MOUNT_PDBACKUP='' bash infra/scripts/backup.sh 2>&1)"; rc=$?
 [[ $rc != 0 ]] && grep -q "not mounted from /dev/mapper/pdbackup" <<<"$out" && ! grep -q '^borg create' "$FAKE_CALLS" && ok "backup refuses when /mnt/pdbackup is not the LUKS mapper (nothing written to the root disk)" || bad "mount guard" "rc=$rc $out"
 out="$(FAKE_MOUNT_PDBACKUP=/dev/sda1 bash infra/scripts/backup.sh 2>&1)"; rc=$?
 [[ $rc != 0 ]] && grep -q "found: '/dev/sda1'" <<<"$out" && ok "backup refuses a backup mount on another device" || bad "wrong device" "$out"
@@ -314,7 +314,7 @@ mkdir -p "$S/pdbackup/borg/lock.exclusive"
 out="$(bash ops/backup/offsite-sync.sh --wait-min 0 2>&1)"; rc=$?
 [[ $rc != 0 ]] && grep -q "still locked" <<<"$out" && ! grep -q ' sync ' "$FAKE_CALLS" && ok "offsite-sync refuses while Borg holds a lock" || bad "lock guard" "$out"
 backup_env of-nomount
-out="$(FAKE_MOUNT_PDBACKUP= bash ops/backup/offsite-sync.sh --wait-min 0 2>&1)"; rc=$?
+out="$(FAKE_MOUNT_PDBACKUP='' bash ops/backup/offsite-sync.sh --wait-min 0 2>&1)"; rc=$?
 [[ $rc != 0 ]] && grep -q "not mounted from /dev/mapper/pdbackup" <<<"$out" && ! grep -q ' sync ' "$FAKE_CALLS" && ok "offsite-sync refuses an unmounted backup volume" || bad "mount guard offsite" "$out"
 backup_env of-dry
 out="$(bash ops/backup/offsite-sync.sh --dry-run 2>&1)"; rc=$?
@@ -480,7 +480,7 @@ compose_calls() { grep -c '^docker compose' "$FAKE_CALLS" || true; }
 
 deploy_env dp-nomount
 subprocessor_set
-out="$(FAKE_MOUNT_PDDATA= bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+out="$(FAKE_MOUNT_PDDATA='' bash infra/scripts/deploy.sh 2>&1)"; rc=$?
 [[ $rc != 0 ]] && grep -q "is not mounted from /dev/mapper/pddata" <<<"$out" && [[ "$(compose_calls)" == 0 ]] && ok "deploy refuses when /mnt/pddata is not the encrypted mapper (nothing built or started)" || bad "data mount guard" "rc=$rc $out"
 out="$(FAKE_MOUNT_PDBACKUP=/dev/sdb1 bash infra/scripts/deploy.sh 2>&1)"; rc=$?
 [[ $rc != 0 ]] && grep -q "is not mounted from /dev/mapper/pdbackup" <<<"$out" && [[ "$(compose_calls)" == 0 ]] && ok "deploy refuses when /mnt/pdbackup is another device" || bad "backup mount guard" "rc=$rc $out"
