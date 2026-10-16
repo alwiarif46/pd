@@ -41,6 +41,8 @@ export type UploadOptions = CallOptions & {
   onProgress?: (progress: UploadProgress) => void;
   /** Defaults to `CHUNK_BYTES`, clamped to `[1, CHUNK_BYTES]`. Exists for tests. */
   chunkBytes?: number;
+  /** Amendments only: the amendment's number, 1 to 999. Sent only for `kind` `amendment`. */
+  amendmentNo?: number;
 };
 
 export type UploadResult =
@@ -57,9 +59,13 @@ export async function uploadFile(
   kind: FileKind,
   options: UploadOptions = {},
 ): Promise<UploadResult> {
-  const { signal, onProgress } = options;
+  const { signal, onProgress, amendmentNo } = options;
   if (file.size === 0) {
     throw new ApiError('This file is empty', 400);
+  }
+  // The server takes 1 to 999; refuse anything else here, before any request (or the file read).
+  if (kind === 'amendment' && amendmentNo !== undefined && !(Number.isInteger(amendmentNo) && amendmentNo >= 1 && amendmentNo <= 999)) {
+    throw new ApiError('Amendment number must be 1 to 999', 400);
   }
   const chunkBytes = Math.min(CHUNK_BYTES, Math.max(1, Math.floor(options.chunkBytes ?? CHUNK_BYTES)));
   const bytes = await file.arrayBuffer();
@@ -68,7 +74,14 @@ export async function uploadFile(
 
   const session = await openUploadSession(
     bidId,
-    { fileName: file.name, kind, declaredSize: bytes.byteLength, sha256, chunkCount },
+    {
+      fileName: file.name,
+      kind,
+      declaredSize: bytes.byteLength,
+      sha256,
+      chunkCount,
+      ...(kind === 'amendment' && amendmentNo !== undefined ? { amendmentNo } : {}),
+    },
     { signal },
   );
   if ('duplicate' in session) {
