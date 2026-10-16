@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApiError, type AdjustScheduleDto } from '@/api';
 import { bidDto, scheduleActivityDto } from '@/test/fixtures';
 import {
+  AMENDMENT_GONE_MESSAGE,
+  amendmentDoneMessage,
+  answerAmendmentDateChange,
   CHECK_MESSAGE,
+  KEEP_ONLY_MESSAGE,
   doneMessage,
   NO_PROGRESS,
   resolveDateChange,
@@ -169,5 +173,57 @@ describe('doneMessage', () => {
     expect(doneMessage({ requestedMode: 'shift', mode: 'shift', moved: 1 })).toBe('Moved 1 activity.');
     expect(doneMessage({ requestedMode: 'keep', mode: 'keep', moved: 0 })).toBe('Kept the schedule dates.');
     expect(doneMessage({ requestedMode: 'keep', mode: 'keep', moved: 1 })).toBe('Moved 1 activity.');
+  });
+});
+
+describe('answerAmendmentDateChange', () => {
+  const pending = { amendmentId: 'amd-3', previousDue: '2026-11-25' };
+  const adjustWith = (impl: () => Promise<AdjustScheduleDto>) => ({ adjustSchedule: vi.fn(impl) });
+
+  it('sends the mode and the amendmentId alone', async () => {
+    const d = adjustWith(async () => result);
+    expect(await answerAmendmentDateChange(d, 'bid-1', pending, 'scale')).toEqual({ kind: 'done', result });
+    expect(d.adjustSchedule).toHaveBeenCalledWith('bid-1', { mode: 'scale', amendmentId: 'amd-3' });
+  });
+
+  it('closes on 409 date_change_resolved with the API sentence', async () => {
+    const d = adjustWith(async () => Promise.reject(new ApiError('This date change was already answered.', 409, 'date_change_resolved')));
+    expect(await answerAmendmentDateChange(d, 'bid-1', pending, 'shift')).toEqual({
+      kind: 'closed',
+      message: 'This date change was already answered.',
+    });
+  });
+
+  it('closes on 404', async () => {
+    const d = adjustWith(async () => Promise.reject(new ApiError('Not found.', 404, 'not_found')));
+    expect(await answerAmendmentDateChange(d, 'bid-1', pending, 'keep')).toEqual({ kind: 'closed', message: AMENDMENT_GONE_MESSAGE });
+  });
+
+  it('keeps the prompt on another 409, a 500, and a lost response', async () => {
+    for (const error of [new ApiError('Busy.', 409, 'other'), new ApiError('Server error.', 500), new ApiError('The API is not reachable', 0)]) {
+      const d = adjustWith(async () => Promise.reject(error));
+      expect(await answerAmendmentDateChange(d, 'bid-1', pending, 'shift')).toEqual({ kind: 'failed', message: error.message });
+    }
+  });
+
+  it('allows only keep when the bid had no due date, without a call', async () => {
+    const d = adjustWith(async () => result);
+    const none = { amendmentId: 'amd-3', previousDue: null };
+    expect(await answerAmendmentDateChange(d, 'bid-1', none, 'shift')).toEqual({ kind: 'failed', message: KEEP_ONLY_MESSAGE });
+    expect(await answerAmendmentDateChange(d, 'bid-1', none, 'scale')).toEqual({ kind: 'failed', message: KEEP_ONLY_MESSAGE });
+    expect(d.adjustSchedule).not.toHaveBeenCalled();
+    expect((await answerAmendmentDateChange(d, 'bid-1', none, 'keep')).kind).toBe('done');
+    expect(d.adjustSchedule).toHaveBeenCalledWith('bid-1', { mode: 'keep', amendmentId: 'amd-3' });
+  });
+});
+
+describe('amendmentDoneMessage', () => {
+  it('names the new due date, then what moved', () => {
+    expect(amendmentDoneMessage({ requestedMode: 'shift', mode: 'shift', moved: 1 }, '2026-12-02')).toBe(
+      'Due date set to Wed, Dec 2, 2026. Moved 1 activity.',
+    );
+    expect(amendmentDoneMessage({ requestedMode: 'keep', mode: 'keep', moved: 0 }, '2026-12-02')).toBe(
+      'Due date set to Wed, Dec 2, 2026. Kept the schedule dates.',
+    );
   });
 });

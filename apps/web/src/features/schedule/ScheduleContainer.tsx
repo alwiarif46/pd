@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { isAbortError, type ScheduleActivityDto } from '@/api';
+import { isAbortError, type PendingDateChangeDto, type ScheduleActivityDto, type TabProposalDto } from '@/api';
 import { RowDetail } from '@/components/RowDetail';
 import { SourceViewer } from '@/components/SourceViewer';
 import { Button } from '@/components/ui/button';
@@ -22,10 +22,21 @@ import {
   type ScheduleExporter,
 } from '@/schedule/export';
 import { plural } from '@/schedule/format';
+import { AmendmentDateNotice } from '@/schedule/AmendmentDateNotice';
 import { ScheduleTab } from '@/schedule/ScheduleTab';
-import { doneMessage, NO_PROGRESS, resolveDateChange, scheduleApi, type DateChangeProgress, type ScheduleApi } from './controller';
+import {
+  amendmentDoneMessage,
+  answerAmendmentDateChange,
+  doneMessage,
+  NO_PROGRESS,
+  resolveDateChange,
+  scheduleApi,
+  type DateChangeProgress,
+  type ScheduleApi,
+} from './controller';
 import {
   ACTIVITY_OPTIONS,
+  amendmentChangeKey,
   dateChangeSummary,
   dayOf,
   dueLabelOf,
@@ -35,6 +46,7 @@ import {
   sortActivities,
   templateOptions,
   toCreateBody,
+  toAmendmentDateChange,
   toRowPatch,
   toScheduleActivity,
 } from './derive';
@@ -49,7 +61,17 @@ interface Props extends TabScreenProps {
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
-  | { kind: 'ready'; activities: ScheduleActivityDto[]; workdaysOnly: boolean };
+  | {
+      kind: 'ready';
+      activities: ScheduleActivityDto[];
+      workdaysOnly: boolean;
+      proposals: TabProposalDto<ScheduleActivityDto>[];
+      /** The amendment date change the server still waits on; its prompt opens on its own. */
+      pendingDateChange: PendingDateChangeDto | null;
+    };
+
+/** What happened here to an amendment date change, by amendmentChangeKey. */
+type ClosedChange = 'cancelled' | 'answered';
 
 interface Source {
   documentId: string;
@@ -89,6 +111,11 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
   const [load, setLoad] = useState<{ bidId: string; state: LoadState } | null>(null);
   const [version, setVersion] = useState(0);
   const [pending, setPending] = useState<PendingChange | null>(null);
+  /**
+   * Amendment date changes answered or put off on this mount, by bid, amendment and nextDue: an answered
+   * one stays closed while a reload still returns it, and a different change opens on its own.
+   */
+  const [closedChanges, setClosedChanges] = useState<Readonly<Record<string, ClosedChange>>>({});
   /** Bids with a date-change answer being applied; the ref guards double clicks, the state draws it. */
   const [busyBids, setBusyBids] = useState<readonly string[]>([]);
   const busyRef = useRef(new Set<string>());
@@ -118,7 +145,16 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     api.getTab(bidId, 'schedule', { signal: abort.signal }).then(
       (payload) => {
         shownRef.current = bidId;
-        setLoad({ bidId, state: { kind: 'ready', activities: payload.activities, workdaysOnly: payload.workdaysOnly } });
+        setLoad({
+          bidId,
+          state: {
+            kind: 'ready',
+            activities: payload.activities,
+            workdaysOnly: payload.workdaysOnly,
+            proposals: payload.proposals,
+            pendingDateChange: payload.pendingDateChange,
+          },
+        });
       },
       (error: unknown) => {
         if (isAbortError(error)) return;
@@ -134,7 +170,14 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
   const dtos = state.kind === 'ready' ? state.activities : NO_DTOS;
   const workdaysOnly = state.kind === 'ready' ? state.workdaysOnly : true;
   const open = pending?.bidId === bidId ? pending : null;
-  const dateChange = open?.change ?? null;
+  // The amendment's change is derived from the loaded tab and the closed record, never synced into
+  // state: a prompt the user opened ("Change due date") takes precedence over it.
+  const amendmentDto = state.kind === 'ready' ? state.pendingDateChange : null;
+  const amendmentKey = amendmentDto ? amendmentChangeKey(bidId, amendmentDto) : null;
+  const amendmentClosed = amendmentKey ? closedChanges[amendmentKey] : undefined;
+  const amendmentOpen = !open && amendmentDto && !amendmentClosed ? amendmentDto : null;
+  const amendmentChange = useMemo(() => (amendmentOpen ? toAmendmentDateChange(amendmentOpen) : null), [amendmentOpen]);
+  const dateChange = open?.change ?? amendmentChange;
   const dateBusy = busyBids.includes(bidId);
   const bid = shell.bid;
   const startDate = dayOf(bid?.startDate ?? null);
@@ -277,7 +320,7 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
   // the bid and the schedule on every try, and the pending change carries what earlier tries wrote, so a
   // retry after a lost response neither skips the due date nor repeats an adjust that already landed
   // (controller.ts says what stays open: an adjust still running on the server).
-  const onResolveDateChange = async (mode: DateChangeMode) => {
+  const resolveUserChange = async (mode: DateChangeMode) => {
     if (!open || busyRef.current.has(open.bidId)) return;
     const record = open;
     const same = (p: PendingChange | null): p is PendingChange => p !== null && p.change === record.change;
@@ -311,9 +354,83 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     }
   };
 
+  // OPUS STEP: an amendment's date change is answered by one request (adjust with the amendmentId), which
+  // sets the due date on the server; it never reads or PATCHes the bid. It shares busyRef with the user's
+  // path, keyed by bid, so neither answer can start while the other is being applied. The closed record
+  // is keyed by bid, amendment and nextDue, captured before the await, so a bid switch meanwhile cannot
+  // close another bid's change, and a reload that still returns the answered change does not reopen it.
+  // A failed try keeps the prompt: a retry is safe, as the server refuses a repeated answer with 409.
+  const answerAmendment = async (change: PendingDateChangeDto, mode: DateChangeMode) => {
+    const target = bidId;
+    if (busyRef.current.has(target)) return;
+    const key = amendmentChangeKey(target, change);
+    busyRef.current.add(target);
+    setBusyBids((ids) => [...ids, target]);
+    try {
+      const outcome = await answerAmendmentDateChange(api, target, change, mode);
+      switch (outcome.kind) {
+        case 'done':
+          toast.success(amendmentDoneMessage(outcome.result, change.nextDue));
+          setClosedChanges((c) => ({ ...c, [key]: 'answered' }));
+          break;
+        case 'closed':
+          toast.info(outcome.message);
+          setClosedChanges((c) => ({ ...c, [key]: 'answered' }));
+          break;
+        case 'failed':
+          toast.error(outcome.message);
+          break;
+      }
+    } finally {
+      busyRef.current.delete(target);
+      setBusyBids((ids) => ids.filter((id) => id !== target));
+      reload();
+      shell.refresh();
+    }
+  };
+
+  const onResolveDateChange = (mode: DateChangeMode) => {
+    if (open) void resolveUserChange(mode);
+    else if (amendmentOpen) void answerAmendment(amendmentOpen, mode);
+  };
+
+  /** Puts off the amendment's change: the prompt closes and the notice offers it again. */
+  const putOffAmendment = () => {
+    if (!amendmentKey || busyRef.current.has(bidId)) return;
+    const key = amendmentKey;
+    setClosedChanges((c) => (c[key] ? c : { ...c, [key]: 'cancelled' }));
+  };
+
+  const reviewAmendment = () => {
+    if (!amendmentKey) return;
+    const key = amendmentKey;
+    setClosedChanges((c) => {
+      if (c[key] !== 'cancelled') return c;
+      const rest = { ...c };
+      delete rest[key];
+      return rest;
+    });
+  };
+
   const onCancelDateChange = () => {
     if (busyRef.current.has(bidId)) return; // the answer is being applied; it closes the prompt itself
-    setPending((p) => (p?.bidId === bidId ? null : p));
+    if (open) setPending((p) => (p?.bidId === bidId ? null : p));
+    else putOffAmendment();
+  };
+
+  // Radix's modal dialog blocks the SourceViewer (a LegacyFrame outside it), so opening the source puts
+  // the change off first: the prompt closes, and the notice brings it back.
+  const onOpenDateChangeSource = () => {
+    if (!amendmentDto || busyRef.current.has(bidId)) return;
+    putOffAmendment();
+    const doc = shell.docs.find(
+      (d) => d.kind === 'amendment' && d.amendmentNo === amendmentDto.amendmentNo && d.liveStatus !== 'deleted',
+    );
+    if (!doc || amendmentDto.sourcePage === null) {
+      toast.info('No source page for this change.');
+      return;
+    }
+    setSource({ documentId: doc.id, page: amendmentDto.sourcePage, pageEnd: null, quote: amendmentDto.sourceQuote });
   };
 
   const onOpenSource = (id: string) => {
@@ -343,6 +460,18 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     }
   };
 
+  const notice =
+    amendmentDto && amendmentClosed === 'cancelled' && !open ? (
+      <AmendmentDateNotice
+        amendmentNo={amendmentDto.amendmentNo}
+        nextDue={amendmentDto.nextDue}
+        sourcePage={amendmentDto.sourcePage}
+        sourceQuote={amendmentDto.sourceQuote}
+        onReview={reviewAmendment}
+        onOpenSource={onOpenDateChangeSource}
+      />
+    ) : null;
+
   let body;
   if (state.kind === 'loading') {
     body = (
@@ -369,37 +498,40 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     );
   } else {
     body = (
-      <ScheduleTab
-        activities={activities}
-        holidays={holidays}
-        templates={TEMPLATES}
-        activityOptions={ACTIVITY_OPTIONS}
-        today={today}
-        startDate={startDate}
-        dueDate={dueDate}
-        dueLabel={dueLabel}
-        workdaysOnly={workdaysOnly}
-        selectedRowId={selectedRowId}
-        dateChange={dateChange}
-        dateChangeSummary={summary}
-        dateChangeBusy={dateBusy}
-        dateChangeDueSaved={open?.dueSaved ?? false}
-        replaceCounts={replaceCounts}
-        onAddActivity={(d: ActivityDraft) => mutate(() => api.createTabRow(bidId, 'schedule', toCreateBody(d)))}
-        onEditActivity={(id, p) => mutate(() => api.updateRow(bidId, 'schedule_activities', id, toRowPatch(p)))}
-        onDeleteActivity={(id) => mutate(() => api.deleteRow(bidId, 'schedule_activities', id))}
-        onMoveActivity={onMoveActivity}
-        onToggleLock={onToggleLock}
-        onApplyTemplate={onApplyTemplate}
-        onSetWorkdaysOnly={onSetWorkdaysOnly}
-        onResolveDateChange={(mode) => void onResolveDateChange(mode)}
-        onCancelDateChange={onCancelDateChange}
-        onChangeDueDate={onChangeDueDate}
-        onOpenRow={(id) => shell.openRow(id)}
-        onOpenSource={onOpenSource}
-        onOpenDateChangeSource={() => undefined} // wired with the amendment answer (next step)
-        onExport={onExport}
-      />
+      <div className="flex flex-col gap-4">
+        {notice}
+        <ScheduleTab
+          activities={activities}
+          holidays={holidays}
+          templates={TEMPLATES}
+          activityOptions={ACTIVITY_OPTIONS}
+          today={today}
+          startDate={startDate}
+          dueDate={dueDate}
+          dueLabel={dueLabel}
+          workdaysOnly={workdaysOnly}
+          selectedRowId={selectedRowId}
+          dateChange={dateChange}
+          dateChangeSummary={summary}
+          dateChangeBusy={dateBusy}
+          dateChangeDueSaved={open?.dueSaved ?? false}
+          replaceCounts={replaceCounts}
+          onAddActivity={(d: ActivityDraft) => mutate(() => api.createTabRow(bidId, 'schedule', toCreateBody(d)))}
+          onEditActivity={(id, p) => mutate(() => api.updateRow(bidId, 'schedule_activities', id, toRowPatch(p)))}
+          onDeleteActivity={(id) => mutate(() => api.deleteRow(bidId, 'schedule_activities', id))}
+          onMoveActivity={onMoveActivity}
+          onToggleLock={onToggleLock}
+          onApplyTemplate={onApplyTemplate}
+          onSetWorkdaysOnly={onSetWorkdaysOnly}
+          onResolveDateChange={onResolveDateChange}
+          onCancelDateChange={onCancelDateChange}
+          onChangeDueDate={onChangeDueDate}
+          onOpenRow={(id) => shell.openRow(id)}
+          onOpenSource={onOpenSource}
+          onOpenDateChangeSource={onOpenDateChangeSource}
+          onExport={onExport}
+        />
+      </div>
     );
   }
 

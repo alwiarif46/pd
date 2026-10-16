@@ -139,3 +139,14 @@ export interface ScheduleDateChangePromptProps extends Omit<DateChangePromptProp
   /** The new due date is already saved (an earlier try moved no activity). */
   dueSaved: boolean;
 }
+
+/** The line the Schedule tab keeps after the amendment date-change prompt is cancelled. */
+export interface AmendmentDateNoticeProps {
+  amendmentNo: number | null;
+  nextDue: string;
+  sourcePage: number | null;
+  sourceQuote: string | null;
+  /** Opens the prompt again. */
+  onReview: () => void;
+  onOpenSource: () => void;
+}

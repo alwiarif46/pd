@@ -1,8 +1,8 @@
 import * as api from '@/api';
-import { ApiError, type AdjustScheduleDto, type ScheduleActivityDto } from '@/api';
+import { ApiError, type AdjustScheduleDto, type PendingDateChangeDto, type ScheduleActivityDto } from '@/api';
 import type { DateChangeMode, DueMove } from '@/types';
 import { messageOf } from '@/features/shared/messages';
-import { plural } from '@/schedule/format';
+import { formatDay, plural } from '@/schedule/format';
 import { dayOf } from './derive';
 
 /** The calls the schedule container makes; tests pass fakes. */
@@ -157,4 +157,45 @@ export function doneMessage(result: Pick<AdjustScheduleDto, 'requestedMode' | 'm
     return `The bid has no start date before both due dates, so the schedule was shifted. ${moved}`;
   }
   return moved;
+}
+
+export const AMENDMENT_GONE_MESSAGE = "This amendment's date change is no longer open. The schedule shows the current dates.";
+export const KEEP_ONLY_MESSAGE = 'The bid had no due date, so only Keep dates applies.';
+
+export type AmendmentAnswerOutcome =
+  | { kind: 'done'; result: AdjustScheduleDto }
+  /** 409 `date_change_resolved` or 404: the change is no longer open. Close the prompt and reload. */
+  | { kind: 'closed'; message: string }
+  /** Keep the prompt: a retry is safe, because the server refuses a repeated answer with 409. */
+  | { kind: 'failed'; message: string };
+
+/**
+ * Answers the schedule tab's pendingDateChange with its amendmentId alone. The server takes the dates
+ * from the change, moves the schedule from the due date in force, sets the bid's due date to nextDue and
+ * resolves the change in one request, so this never reads or PATCHes the bid: a due date saved first
+ * would make the server refuse the answer (409 `date_change_resolved`). A retry after a lost response
+ * needs no progress record: if the first try landed, the retry is refused with that 409.
+ */
+export async function answerAmendmentDateChange(
+  deps: Pick<ScheduleApi, 'adjustSchedule'>,
+  bidId: string,
+  change: Pick<PendingDateChangeDto, 'amendmentId' | 'previousDue'>,
+  mode: DateChangeMode,
+): Promise<AmendmentAnswerOutcome> {
+  if (mode !== 'keep' && change.previousDue === null) return { kind: 'failed', message: KEEP_ONLY_MESSAGE };
+  try {
+    const result = await deps.adjustSchedule(bidId, { mode, amendmentId: change.amendmentId });
+    return { kind: 'done', result };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409 && error.code === 'date_change_resolved') {
+      return { kind: 'closed', message: messageOf(error) };
+    }
+    if (error instanceof ApiError && error.status === 404) return { kind: 'closed', message: AMENDMENT_GONE_MESSAGE };
+    return { kind: 'failed', message: messageOf(error) };
+  }
+}
+
+/** The success toast for an answered amendment date change. */
+export function amendmentDoneMessage(result: Pick<AdjustScheduleDto, 'requestedMode' | 'mode' | 'moved'>, nextDue: string): string {
+  return `Due date set to ${formatDay(nextDue)}. ${doneMessage(result)}`;
 }

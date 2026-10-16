@@ -3,11 +3,12 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
-import { ApiError, type AdjustScheduleDto, type ScheduleActivityDto } from '@/api';
+import { ApiError, type AdjustScheduleDto, type PendingDateChangeDto, type ScheduleActivityDto } from '@/api';
+import { mockFetch } from '@/test/fetch';
 import { bidDto, docDto, jobDto, meDto, orgPayload, organizationDto, scheduleActivityDto } from '@/test/fixtures';
 import { ShellContext, type ShellContextValue } from '@/features/shell/bid-context';
 import type { ScheduleExporter } from '@/schedule/export';
-import type { ScheduleApi } from './controller';
+import { AMENDMENT_GONE_MESSAGE, type ScheduleApi } from './controller';
 import { ScheduleContainer } from './ScheduleContainer';
 
 vi.mock('sonner', async (orig) => ({
@@ -62,7 +63,7 @@ function shellValue(over: Partial<ShellContextValue> = {}): ShellContextValue {
 
 function mockApi(activities: ScheduleActivityDto[] = [userRow, aiRow], over: Partial<ScheduleApi> = {}): ScheduleApi {
   return {
-    getTab: vi.fn(async () => ({ activities, workdaysOnly: true })) as unknown as ScheduleApi['getTab'],
+    getTab: vi.fn(async () => ({ activities, workdaysOnly: true, proposals: [], pendingDateChange: null })) as unknown as ScheduleApi['getTab'],
     createTabRow: vi.fn(async () => userRow) as unknown as ScheduleApi['createTabRow'],
     updateRow: vi.fn(async () => userRow) as unknown as ScheduleApi['updateRow'],
     deleteRow: vi.fn(async () => ({ ok: true as const })),
@@ -386,6 +387,8 @@ describe('ScheduleContainer: due date change', () => {
     vi.mocked(api.getTab).mockResolvedValue({
       activities: [scheduleActivityDto({ startDate: ts('2026-11-20'), endDate: ts('2026-11-24') })],
       workdaysOnly: true,
+      proposals: [],
+      pendingDateChange: null,
     } as never);
     const dialog = screen.getByRole('dialog');
     await waitFor(() => expect((within(dialog).getByRole('button', { name: 'Shift dates' }) as HTMLButtonElement).disabled).toBe(false));
@@ -468,5 +471,198 @@ describe('ScheduleContainer: due date change', () => {
     await waitFor(() => expect(api.updateBid).toHaveBeenCalledWith('bid-1', { dueDate: '2026-12-02' }));
     expect(api.adjustSchedule).not.toHaveBeenCalled();
     expect(toast.success).toHaveBeenCalledWith('Due date set.');
+  });
+});
+
+describe('ScheduleContainer: amendment date change', () => {
+  const change: PendingDateChangeDto = {
+    amendmentId: 'amd-3',
+    amendmentNo: 3,
+    previousDue: '2026-11-25',
+    nextDue: '2026-12-02',
+    sourcePage: 4,
+    sourceQuote: 'Proposals are now due December 2.',
+  };
+  const TITLE = 'Amendment 3 moved the due date';
+
+  function pendingApi(pending: PendingDateChangeDto | null = change, over: Partial<ScheduleApi> = {}): ScheduleApi {
+    return mockApi([userRow, aiRow], {
+      getTab: vi.fn(async () => ({
+        activities: [userRow, aiRow],
+        workdaysOnly: true,
+        proposals: [],
+        pendingDateChange: pending,
+      })) as unknown as ScheduleApi['getTab'],
+      ...over,
+    });
+  }
+
+  const prompt = () => screen.findByRole('dialog', { name: TITLE });
+  const button = (dialog: HTMLElement, name: string) => within(dialog).getByRole('button', { name }) as HTMLButtonElement;
+
+  it.each([
+    ['shift', 'Shift dates', adjusted, 'Due date set to Wed, Dec 2, 2026. Moved 1 activity.'],
+    ['scale', 'Scale dates', { ...adjusted, requestedMode: 'scale', mode: 'scale' }, 'Due date set to Wed, Dec 2, 2026. Moved 1 activity.'],
+    ['keep', 'Keep dates', { ...adjusted, requestedMode: 'keep', mode: 'keep', moved: 0 }, 'Due date set to Wed, Dec 2, 2026. Kept the schedule dates.'],
+  ] as const)('opens on its own and answers %s with the amendmentId alone', async (mode, label, result, message) => {
+    const api = pendingApi(change, { adjustSchedule: vi.fn(async () => result as AdjustScheduleDto) });
+    const { shell, user } = renderContainer({ api });
+    const dialog = await prompt();
+    expect(within(dialog).getByText('“Proposals are now due December 2.”')).toBeTruthy();
+    expect(within(dialog).getByText("Your answer sets the bid's due date to Wed, Dec 2, 2026.")).toBeTruthy();
+    await user.click(button(dialog, label));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.adjustSchedule).toHaveBeenCalledTimes(1);
+    expect(api.adjustSchedule).toHaveBeenCalledWith('bid-1', { mode, amendmentId: 'amd-3' });
+    expect(api.getBid).not.toHaveBeenCalled();
+    expect(api.updateBid).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith(message);
+    await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
+    expect(shell.refresh).toHaveBeenCalled();
+    // The reload still returns the change (the payload lags the answer): it stays closed.
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Review date change' })).toBeNull();
+  });
+
+  it('sends one answer for a double click', async () => {
+    const adjust = deferred<AdjustScheduleDto>();
+    const api = pendingApi(change, { adjustSchedule: vi.fn(() => adjust.promise) });
+    const { user } = renderContainer({ api });
+    const dialog = await prompt();
+    const shift = button(dialog, 'Shift dates');
+    fireEvent.click(shift);
+    fireEvent.click(shift);
+    await waitFor(() => expect(shift.disabled).toBe(true));
+    await user.click(shift);
+    expect(api.adjustSchedule).toHaveBeenCalledTimes(1);
+    adjust.resolve(adjusted);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.adjustSchedule).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a notice on Cancel that reopens the prompt', async () => {
+    const api = pendingApi();
+    const { user } = renderContainer({ api });
+    await user.click(button(await prompt(), 'Cancel'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByText('Amendment 3 moves the due date to Wed, Dec 2, 2026.')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Review date change' }));
+    expect(await prompt()).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Review date change' })).toBeNull();
+    expect(api.adjustSchedule).not.toHaveBeenCalled();
+  });
+
+  it('offers only Keep dates when the bid had no due date', async () => {
+    const api = pendingApi({ ...change, previousDue: null });
+    const { user } = renderContainer({ api, shell: { bid: bidDto({ dueDate: null }) } });
+    const dialog = await screen.findByRole('dialog', { name: 'Amendment 3 set the due date' });
+    expect(within(dialog).queryByRole('button', { name: 'Shift dates' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Scale dates' })).toBeNull();
+    const keep = button(dialog, 'Keep dates');
+    await waitFor(() => expect(document.activeElement).toBe(keep));
+    await user.click(keep);
+    await waitFor(() => expect(api.adjustSchedule).toHaveBeenCalledWith('bid-1', { mode: 'keep', amendmentId: 'amd-3' }));
+  });
+
+  it('closes on 409 date_change_resolved, reloads, and does not reopen', async () => {
+    const message = 'This date change was already answered. Reload to see the current dates.';
+    const api = pendingApi(change, {
+      adjustSchedule: vi.fn(async () => Promise.reject(new ApiError(message, 409, 'date_change_resolved'))),
+    });
+    const { shell, user } = renderContainer({ api });
+    await user.click(button(await prompt(), 'Shift dates'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(toast.info).toHaveBeenCalledWith(message);
+    await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
+    expect(shell.refresh).toHaveBeenCalled();
+    expect(api.adjustSchedule).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Review date change' })).toBeNull();
+  });
+
+  it('closes on 404 and reloads', async () => {
+    const api = pendingApi(change, { adjustSchedule: vi.fn(async () => Promise.reject(new ApiError('Not found.', 404))) });
+    const { user } = renderContainer({ api });
+    await user.click(button(await prompt(), 'Keep dates'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(toast.info).toHaveBeenCalledWith(AMENDMENT_GONE_MESSAGE);
+    await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
+  });
+
+  it('keeps the prompt on a failure, and the retry sends the same body', async () => {
+    const api = pendingApi();
+    vi.mocked(api.adjustSchedule).mockRejectedValueOnce(new ApiError('Server error.', 500));
+    const { user } = renderContainer({ api });
+    const dialog = await prompt();
+    await user.click(button(dialog, 'Shift dates'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Server error.'));
+    await waitFor(() => expect(button(dialog, 'Shift dates').disabled).toBe(false));
+    expect(screen.getByRole('dialog', { name: TITLE })).toBeTruthy();
+    await user.click(button(dialog, 'Shift dates'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.adjustSchedule).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(api.adjustSchedule).mock.calls[1]).toEqual(['bid-1', { mode: 'shift', amendmentId: 'amd-3' }]);
+    expect(api.updateBid).not.toHaveBeenCalled();
+  });
+
+  it("still answers the user's own change through the old path", async () => {
+    const api = pendingApi();
+    const { user } = renderContainer({ api });
+    await user.click(button(await prompt(), 'Cancel'));
+    await changeDueTo(user, '2026-12-09');
+    const dialog = await screen.findByRole('dialog', { name: 'The due date changed' });
+    expect(within(dialog).queryByText(/Proposals are now due/)).toBeNull();
+    await user.click(button(dialog, 'Shift dates'));
+    await waitFor(() => expect(api.adjustSchedule).toHaveBeenCalled());
+    const first = (fn: unknown, n = 0) => vi.mocked(fn as () => void).mock.invocationCallOrder[n]!;
+    expect(first(api.getBid)).toBeLessThan(first(api.updateBid));
+    // getTab's second call is resolveDateChange's read of the schedule, between the PATCH and the adjust.
+    expect(first(api.updateBid)).toBeLessThan(first(api.getTab, 1));
+    expect(first(api.getTab, 1)).toBeLessThan(first(api.adjustSchedule));
+    expect(api.updateBid).toHaveBeenCalledWith('bid-1', { dueDate: '2026-12-09' });
+    expect(vi.mocked(api.adjustSchedule).mock.calls[0]).toEqual([
+      'bid-1',
+      { mode: 'shift', previousDue: '2026-11-25', nextDue: '2026-12-09' },
+    ]);
+  });
+
+  it('closes the prompt to open the amendment source, and the notice stays', async () => {
+    const fetchMock = mockFetch();
+    const amendment = docDto({ id: 'doc-amd', kind: 'amendment', amendmentNo: 3 });
+    const { user } = renderContainer({ api: pendingApi(), shell: { docs: [docDto(), amendment] } });
+    await user.click(within(await prompt()).getByRole('button', { name: 'Open source for Amendment 3, page 4' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: TITLE })).toBeNull());
+    expect(screen.getByText('Amendment 3 moves the due date to Wed, Dec 2, 2026.')).toBeTruthy();
+    expect(document.querySelector('.app-shell [aria-label="Source viewer"]')).toBeTruthy();
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/documents/doc-amd/view-token'))).toBe(true));
+  });
+
+  it('says when the amendment source cannot be found', async () => {
+    const { user } = renderContainer({ api: pendingApi() });
+    await user.click(within(await prompt()).getByRole('button', { name: 'Open source for Amendment 3, page 4' }));
+    expect(toast.info).toHaveBeenCalledWith('No source page for this change.');
+    expect(screen.queryByRole('dialog', { name: TITLE })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Review date change' })).toBeTruthy();
+  });
+
+  it('closes only the answered bid when the shell switches bids during the answer', async () => {
+    const adjust = deferred<AdjustScheduleDto>();
+    const api = pendingApi(change, { adjustSchedule: vi.fn(() => adjust.promise) });
+    const { user, switchTo } = renderContainer({ api });
+    await user.click(button(await prompt(), 'Shift dates'));
+    await waitFor(() => expect(api.adjustSchedule).toHaveBeenCalledTimes(1));
+    // bid-2 has the same amendment change waiting: its prompt is a different change, and not busy.
+    switchTo('bid-2', { bid: bidDto({ id: 'bid-2', dueDate: ts('2026-11-25') }) });
+    await waitFor(() => expect(api.getTab).toHaveBeenCalledWith('bid-2', 'schedule', expect.anything()));
+    const other = await prompt();
+    expect(button(other, 'Shift dates').disabled).toBe(false);
+    adjust.resolve(adjusted);
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(screen.getByRole('dialog', { name: TITLE })).toBeTruthy();
+    switchTo('bid-1', { bid: bidDto({ dueDate: ts('2026-11-25') }) });
+    await waitFor(() => expect(vi.mocked(api.getTab).mock.calls.filter(([id]) => id === 'bid-1')).toHaveLength(2));
+    await waitFor(() => expect(screen.queryByRole('status', { name: 'Loading schedule' })).toBeNull());
+    expect(screen.getByRole('heading', { name: 'Schedule', level: 1 })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 });
