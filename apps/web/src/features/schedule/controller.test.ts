@@ -12,6 +12,8 @@ import {
   resolveDateChange,
   scheduleMoved,
   STALE_MESSAGE,
+  TIMEOUT_MESSAGE,
+  withDeadline,
   type ScheduleApi,
 } from './controller';
 
@@ -225,5 +227,75 @@ describe('amendmentDoneMessage', () => {
     expect(amendmentDoneMessage({ requestedMode: 'keep', mode: 'keep', moved: 0 }, '2026-12-02')).toBe(
       'Due date set to Wed, Dec 2, 2026. Kept the schedule dates.',
     );
+  });
+});
+
+describe('date-change timeouts', () => {
+  const never = () => new Promise<never>(() => {});
+  const TIMEOUT = { timeoutMs: 20 };
+
+  it('withDeadline settles with the call, or with a status-0 ApiError once the time is up', async () => {
+    await expect(withDeadline(Promise.resolve('ok'), 1000)).resolves.toBe('ok');
+    await expect(withDeadline(Promise.reject(new ApiError('No.', 400)), 1000)).rejects.toMatchObject({ status: 400 });
+    const error = await withDeadline(never(), 10).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ message: TIMEOUT_MESSAGE, status: 0 });
+  });
+
+  it('a bid read that never answers fails with no progress', async () => {
+    const d = deps('2026-11-25', { getBid: vi.fn(never) });
+    expect(await resolveDateChange(d, 'bid-1', change, 'shift', NO_PROGRESS, TIMEOUT)).toEqual({
+      kind: 'failed',
+      message: TIMEOUT_MESSAGE,
+      progress: NO_PROGRESS,
+    });
+    expect(d.updateBid).not.toHaveBeenCalled();
+  });
+
+  it('a due-date PATCH that never answers counts as maybe saved: the retry does not PATCH again', async () => {
+    const d = deps('2026-11-25', { updateBid: vi.fn(never) });
+    const first = await resolveDateChange(d, 'bid-1', change, 'shift', NO_PROGRESS, TIMEOUT);
+    expect(first).toEqual({ kind: 'failed', message: TIMEOUT_MESSAGE, progress: { dueWritten: true, snapshot: null } });
+    if (first.kind !== 'failed') throw new Error('unreachable');
+    // The PATCH landed after all.
+    vi.mocked(d.getBid).mockResolvedValue(bidDto({ dueDate: ts('2026-12-02') }));
+    expect((await resolveDateChange(d, 'bid-1', change, 'shift', first.progress, TIMEOUT)).kind).toBe('done');
+    expect(d.updateBid).toHaveBeenCalledTimes(1);
+    expect(d.adjustSchedule).toHaveBeenCalledTimes(1);
+  });
+
+  it('an adjust that never answers keeps the snapshot: a retry checks instead of adjusting twice when it landed', async () => {
+    const d = deps('2026-11-25', { adjustSchedule: vi.fn(never) });
+    const first = await resolveDateChange(d, 'bid-1', change, 'shift', NO_PROGRESS, TIMEOUT);
+    expect(first).toMatchObject({ kind: 'adjust_failed', progress: { dueWritten: true, snapshot: [{ id: original[0]!.id }] } });
+    expect(first.kind === 'adjust_failed' && first.message).toBe(`The new due date is saved, but the schedule did not move. ${TIMEOUT_MESSAGE}`);
+    if (first.kind !== 'adjust_failed') throw new Error('unreachable');
+    vi.mocked(d.getBid).mockResolvedValue(bidDto({ dueDate: ts('2026-12-02') }));
+    vi.mocked(d.getTab).mockResolvedValue({ activities: shifted, workdaysOnly: true } as never);
+    expect(await resolveDateChange(d, 'bid-1', change, 'shift', first.progress, TIMEOUT)).toEqual({ kind: 'check', message: CHECK_MESSAGE });
+    expect(d.adjustSchedule).toHaveBeenCalledTimes(1);
+  });
+
+  it("an amendment answer that never answers fails and keeps the prompt (a retry is refused with 409 if it landed)", async () => {
+    const adjustSchedule = vi.fn(never);
+    expect(
+      await answerAmendmentDateChange({ adjustSchedule }, 'bid-1', { amendmentId: 'amd-3', previousDue: '2026-11-25' }, 'shift', TIMEOUT),
+    ).toEqual({ kind: 'failed', message: TIMEOUT_MESSAGE });
+  });
+
+  it('defaults to a 60 second bound', async () => {
+    vi.useFakeTimers();
+    try {
+      const d = deps('2026-11-25', { getBid: vi.fn(never) });
+      const run = resolveDateChange(d, 'bid-1', change, 'shift');
+      let settled = false;
+      void run.then(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await run).kind).toBe('failed');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -28,8 +28,16 @@ import {
 import { plural } from '@/schedule/format';
 import { AmendmentDateNotice } from '@/schedule/AmendmentDateNotice';
 import { ScheduleTab } from '@/schedule/ScheduleTab';
-import { amendmentDoneMessage, answerAmendmentDateChange, doneMessage, scheduleApi, type ScheduleApi } from './controller';
-import { isDateChangeLocked, useDateChangeBusy, withDateChangeLock } from './date-change-lock';
+import {
+  amendmentDoneMessage,
+  answerAmendmentDateChange,
+  DATE_CHANGE_BUSY_MESSAGE,
+  doneMessage,
+  scheduleApi,
+  withDeadline,
+  type ScheduleApi,
+} from './controller';
+import { dateChangeHolder, useDateChangeHolder, withDateChangeLock } from './date-change-lock';
 import { useUserDateChange } from './use-user-date-change';
 import {
   ACTIVITY_OPTIONS,
@@ -164,7 +172,14 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
   const amendmentDto = state.kind === 'ready' ? state.pendingDateChange : null;
   const amendmentKey = amendmentDto ? amendmentChangeKey(bidId, amendmentDto) : null;
   const amendmentClosed = amendmentKey ? closedChanges[amendmentKey] : undefined;
-  const amendmentOpen = !open && amendmentDto && !amendmentClosed ? amendmentDto : null;
+  // The bid's date-change lock (date-change-lock.ts): held by this mount (its own answer in flight: the
+  // prompt is busy, Cancel refused), or by another screen (Settings, perhaps unmounted since). An amendment
+  // prompt never opens, or stays open, behind another screen's lock: it could only be a dead dialog, so
+  // the notice stands in for it until the lock is released, and the prompt then opens on its own.
+  const lockHolder = useDateChangeHolder(bidId);
+  const mineBusy = lockHolder !== null && lockHolder === userChange.owner;
+  const lockedElsewhere = lockHolder !== null && !mineBusy;
+  const amendmentOpen = !open && amendmentDto && !amendmentClosed && !lockedElsewhere ? amendmentDto : null;
   // PendingDateChangeDto has no documentId: the source is the live amendment document with its number
   // (none without one). With no document the prompt and the notice show No source, and the quote inline.
   const amendmentNo = amendmentDto?.amendmentNo ?? null;
@@ -178,8 +193,9 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     [amendmentOpen, amendmentSourcePage],
   );
   const dateChange = open?.meta ?? amendmentChange;
-  // Any screen's answer for this bid (date-change-lock.ts): the user's, the amendment's, or Settings'.
-  const dateBusy = useDateChangeBusy(bidId);
+  // Only this mount's own answer draws the prompt busy; a click while another screen's answer holds the
+  // bid is refused with a message, and Cancel stays available.
+  const dateBusy = mineBusy;
   const bid = shell.bid;
   const startDate = dayOf(bid?.startDate ?? null);
   const dueDate = dayOf(bid?.dueDate ?? null);
@@ -306,9 +322,22 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     );
   };
 
+  /** A date-change click refused because another answer for the bid holds its lock. */
+  const refusedBusy = (target: string) => {
+    if (dateChangeHolder(target) !== userChange.owner) toast.info(DATE_CHANGE_BUSY_MESSAGE);
+  };
+
   const onChangeDueDate = (next: string) => {
     if (dueDate === null) {
-      api.updateBid(bidId, { dueDate: next }).then(() => {
+      // A first due date is one PATCH, but still a write of the bid's due date: it takes the lock (and the
+      // same time bound), so it cannot land in the middle of another screen's answer.
+      const target = bidId;
+      const run = withDateChangeLock(target, () => withDeadline(api.updateBid(target, { dueDate: next })), userChange.owner);
+      if (!run) {
+        refusedBusy(target);
+        return;
+      }
+      run.then(() => {
         toast.success('Due date set.');
         afterSave();
       }, fail);
@@ -317,7 +346,9 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     if (next === dueDate) return;
     const due: DueMove = { previousDue: dueDate, nextDue: next };
     // Refused while an answer for the bid is being applied, from here or another screen.
-    userChange.open(bidId, due, { origin: 'user', ...due, amendmentNo: null, sourcePage: null, sourceQuote: null });
+    if (!userChange.open(bidId, due, { origin: 'user', ...due, amendmentNo: null, sourcePage: null, sourceQuote: null })) {
+      toast.info(DATE_CHANGE_BUSY_MESSAGE);
+    }
   };
 
   // OPUS STEP: two writes to shared bid state (due date, then the schedule), applied by the shared hook
@@ -326,12 +357,16 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
   // amendment's answer, or Settings'). Toasts, the reload and the shell refresh stay here.
   const resolveUserChange = (mode: DateChangeMode) => {
     const run = userChange.resolve(bidId, mode);
-    if (!run) return;
+    if (!run) {
+      refusedBusy(bidId);
+      return;
+    }
     run
       .then((outcome) => {
         if (outcome.kind === 'done') toast.success(doneMessage(outcome.result));
         else toast.error(outcome.message);
       })
+      .catch((error: unknown) => toast.error(messageOf(error)))
       .finally(() => {
         reload();
         shell.refresh();
@@ -351,6 +386,7 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     // The closed record is set inside the locked call, so the lock is released after it (as before).
     const run = withDateChangeLock(target, async () => {
       const outcome = await answerAmendmentDateChange(api, target, change, mode);
+      // (answerAmendmentDateChange bounds its request: controller.ts DATE_CHANGE_TIMEOUT_MS.)
       switch (outcome.kind) {
         case 'done':
           toast.success(amendmentDoneMessage(outcome.result, change.nextDue));
@@ -364,12 +400,17 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
           toast.error(outcome.message);
           break;
       }
-    });
-    if (!run) return;
-    void run.finally(() => {
-      reload();
-      shell.refresh();
-    });
+    }, userChange.owner);
+    if (!run) {
+      refusedBusy(target);
+      return;
+    }
+    void run
+      .catch((error: unknown) => toast.error(messageOf(error)))
+      .finally(() => {
+        reload();
+        shell.refresh();
+      });
   };
 
   const onResolveDateChange = (mode: DateChangeMode) => {
@@ -379,13 +420,17 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
 
   /** Puts off the amendment's change: the prompt closes and the notice offers it again. */
   const putOffAmendment = () => {
-    if (!amendmentKey || isDateChangeLocked(bidId)) return;
+    if (!amendmentKey || dateChangeHolder(bidId) === userChange.owner) return; // its own answer closes it
     const key = amendmentKey;
     setClosedChanges((c) => (c[key] ? c : { ...c, [key]: 'cancelled' }));
   };
 
   const reviewAmendment = () => {
     if (!amendmentKey) return;
+    if (dateChangeHolder(bidId) !== null && dateChangeHolder(bidId) !== userChange.owner) {
+      toast.info(DATE_CHANGE_BUSY_MESSAGE); // the prompt opens on its own once that answer ends
+      return;
+    }
     const key = amendmentKey;
     setClosedChanges((c) => {
       if (c[key] !== 'cancelled') return c;
@@ -396,7 +441,9 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
   };
 
   const onCancelDateChange = () => {
-    if (isDateChangeLocked(bidId)) return; // the answer is being applied; it closes the prompt itself
+    // This mount's answer is being applied; it closes the prompt itself. Another screen's answer does not
+    // block Cancel, which writes nothing.
+    if (dateChangeHolder(bidId) === userChange.owner) return;
     if (open) userChange.cancel(bidId);
     else putOffAmendment();
   };
@@ -405,7 +452,7 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
   // the change off first, and only when the viewer will open: the prompt closes, and closing the viewer
   // brings the prompt back (focus returns into it). From the notice, the notice simply stays.
   const openDateChangeSource = (from: 'prompt' | 'notice') => {
-    if (!amendmentDto || isDateChangeLocked(bidId)) return;
+    if (!amendmentDto || dateChangeHolder(bidId) === userChange.owner) return;
     if (!amendmentDoc || amendmentSourcePage === null) {
       toast.info('No source page for this change.'); // not reachable from SourceLink, which shows No source
       return;
@@ -470,7 +517,7 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
   };
 
   const notice =
-    amendmentDto && amendmentClosed === 'cancelled' && !open ? (
+    amendmentDto && !open && (amendmentClosed === 'cancelled' || (!amendmentClosed && lockedElsewhere)) ? (
       <AmendmentDateNotice
         amendmentNo={amendmentDto.amendmentNo}
         nextDue={amendmentDto.nextDue}

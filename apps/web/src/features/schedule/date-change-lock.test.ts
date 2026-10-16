@@ -1,7 +1,16 @@
 // @vitest-environment jsdom
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { isDateChangeLocked, subscribeDateChangeLocks, tryLockDateChange, useDateChangeBusy, withDateChangeLock } from './date-change-lock';
+import {
+  dateChangeHolder,
+  isDateChangeLocked,
+  lockedDateChangeBids,
+  subscribeDateChangeLocks,
+  tryLockDateChange,
+  useDateChangeBusy,
+  useDateChangeHolder,
+  withDateChangeLock,
+} from './date-change-lock';
 
 /** A promise the test settles by hand. */
 function deferred<T>() {
@@ -23,6 +32,8 @@ const lock = (bidId: string) => {
 
 afterEach(() => {
   held.splice(0).forEach((release) => release());
+  // The lock is module state: a test that leaves one held fails here, not in a later test.
+  expect(lockedDateChangeBids()).toEqual([]);
 });
 
 describe('date-change lock', () => {
@@ -104,5 +115,34 @@ describe('date-change lock', () => {
     expect(result.current).toBe(true);
     act(() => release!());
     expect(result.current).toBe(false);
+  });
+
+  it('records the holder, and useDateChangeHolder follows it', () => {
+    const mine = Symbol('mine');
+    const { result } = renderHook(() => useDateChangeHolder('bid-1'));
+    expect(result.current).toBeNull();
+    let release: (() => void) | null = null;
+    act(() => {
+      release = tryLockDateChange('bid-1', mine);
+    });
+    expect(dateChangeHolder('bid-1')).toBe(mine);
+    expect(result.current).toBe(mine);
+    act(() => release!());
+    expect(result.current).toBeNull();
+    // Without an owner the lock still has a holder, just not one any screen can claim as its own.
+    const anon = lock('bid-1');
+    expect(anon).not.toBeNull();
+    expect(dateChangeHolder('bid-1')).not.toBeNull();
+    expect(dateChangeHolder('bid-1')).not.toBe(mine);
+  });
+
+  it('withDateChangeLock takes the lock for its owner', async () => {
+    const mine = Symbol('mine');
+    const call = deferred<void>();
+    const run = withDateChangeLock('bid-1', () => call.promise, mine);
+    expect(dateChangeHolder('bid-1')).toBe(mine);
+    call.resolve();
+    await run;
+    expect(dateChangeHolder('bid-1')).toBeNull();
   });
 });

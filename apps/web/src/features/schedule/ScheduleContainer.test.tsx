@@ -1,15 +1,17 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { ApiError, type AdjustScheduleDto, type PendingDateChangeDto, type ScheduleActivityDto } from '@/api';
 import { mockFetch } from '@/test/fetch';
 import { bidDto, docDto, jobDto, meDto, orgPayload, organizationDto, scheduleActivityDto, tabProposalDto } from '@/test/fixtures';
 import { NEW_ROW_MISSING_MESSAGE, ROW_ALREADY_CLOSED_MESSAGE } from '@/features/proposals/controller';
+import { FALLBACK_MESSAGE } from '@/features/shared/messages';
 import { ShellContext, type ShellContextValue } from '@/features/shell/bid-context';
 import type { ScheduleExporter } from '@/schedule/export';
-import { AMENDMENT_GONE_MESSAGE, type ScheduleApi } from './controller';
+import { AMENDMENT_GONE_MESSAGE, DATE_CHANGE_BUSY_MESSAGE, type ScheduleApi } from './controller';
+import { dateChangeHolder, lockedDateChangeBids } from './date-change-lock';
 import { ScheduleContainer } from './ScheduleContainer';
 import { useUserDateChange, type UserDateChangeApi } from './use-user-date-change';
 
@@ -17,6 +19,11 @@ vi.mock('sonner', async (orig) => ({
   ...(await orig<typeof import('sonner')>()),
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn() }),
 }));
+
+// The date-change lock is module state: a test that leaves one held fails here, not in a later test.
+afterEach(async () => {
+  await waitFor(() => expect(lockedDateChangeBids()).toEqual([]));
+});
 
 const ts = (day: string) => `${day}T00:00:00.000Z`;
 const userRow = scheduleActivityDto();
@@ -901,62 +908,92 @@ describe('ScheduleContainer: the date-change lock shared with other screens (Set
     });
   const prompt = () => screen.findByRole('dialog', { name: TITLE });
   const button = (dialog: HTMLElement, name: string) => within(dialog).getByRole('button', { name }) as HTMLButtonElement;
+  const move = { previousDue: '2026-11-25', nextDue: '2026-12-09' };
 
   /** Settings stand-in: the same hook on its own api, rendered apart from the Schedule tab. */
   function otherScreen(api: UserDateChangeApi) {
     return renderHook(() => useUserDateChange<null>(api));
   }
 
-  it('does not answer the amendment while another screen applies a user change on the bid, then does', async () => {
+  /** Another screen starts a user answer on bid-1 that waits on getBid; returns how to finish it. */
+  function otherAnswerInFlight() {
     const bid = deferred<ReturnType<typeof bidDto>>();
-    const settingsApi = mockApi([userRow], { getBid: vi.fn(() => bid.promise) });
-    const settings = otherScreen(settingsApi);
+    const other = otherScreen(mockApi([userRow], { getBid: vi.fn(() => bid.promise) }));
     act(() => {
-      settings.result.current.open('bid-1', { previousDue: '2026-11-25', nextDue: '2026-12-09' }, null);
+      other.result.current.open('bid-1', move, null);
     });
     let run: Promise<unknown> | null = null;
     act(() => {
-      run = settings.result.current.resolve('bid-1', 'shift');
+      run = other.result.current.resolve('bid-1', 'keep');
     });
+    return {
+      other,
+      finish: async () => {
+        await act(async () => {
+          bid.resolve(bidDto({ dueDate: ts('2026-11-25') }));
+          await run;
+        });
+      },
+    };
+  }
+
+  it("shows the notice, not a dead prompt, while another screen's answer holds the bid; the prompt opens once it ends", async () => {
+    const { other, finish } = otherAnswerInFlight();
     // Settings unmounts (a tab switch) while its answer is still being applied; Schedule mounts next.
-    settings.unmount();
+    other.unmount();
 
     const api = pendingApi();
     const { user } = renderContainer({ api });
-    const dialog = await prompt();
-    const shift = button(dialog, 'Shift dates');
-    expect(shift.disabled).toBe(true);
-    fireEvent.click(shift);
-    fireEvent.click(button(dialog, 'Cancel'));
+    const review = await screen.findByRole('button', { name: 'Review date change' });
+    expect(screen.queryByRole('dialog', { name: TITLE })).toBeNull();
+    await user.click(review);
+    expect(toast.info).toHaveBeenCalledWith(DATE_CHANGE_BUSY_MESSAGE);
+    expect(screen.queryByRole('dialog', { name: TITLE })).toBeNull();
     expect(api.adjustSchedule).not.toHaveBeenCalled();
-    expect(screen.getByRole('dialog', { name: TITLE })).toBeTruthy();
 
-    await act(async () => {
-      bid.resolve(bidDto({ dueDate: ts('2026-11-25') }));
-      await run;
-    });
-    await waitFor(() => expect(button(dialog, 'Shift dates').disabled).toBe(false));
+    await finish();
+    const dialog = await prompt();
+    expect(button(dialog, 'Shift dates').disabled).toBe(false);
     await user.click(button(dialog, 'Shift dates'));
     await waitFor(() => expect(api.adjustSchedule).toHaveBeenCalledWith('bid-1', { mode: 'shift', amendmentId: 'amd-3' }));
     expect(api.adjustSchedule).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it("gives way to the notice when another screen's answer takes the bid while the prompt is open, and answers nothing", async () => {
+    const api = pendingApi();
+    const { user } = renderContainer({ api });
+    await prompt();
+    const { finish } = otherAnswerInFlight();
+    // The open prompt gives way to the notice; nothing is sent, and the user is not stuck behind it.
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: TITLE })).toBeNull());
+    expect(screen.getByRole('button', { name: 'Review date change' })).toBeTruthy();
+    expect(api.adjustSchedule).not.toHaveBeenCalled();
+    await finish();
+    await user.click(button(await prompt(), 'Cancel'));
+    expect(screen.queryByRole('dialog', { name: TITLE })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Review date change' })).toBeTruthy();
   });
 
   it("refuses another screen's user change while the amendment answer is being applied, and allows it after", async () => {
     const adjust = deferred<AdjustScheduleDto>();
     const api = pendingApi({ adjustSchedule: vi.fn(() => adjust.promise) });
     const { user } = renderContainer({ api });
-    await user.click(button(await prompt(), 'Shift dates'));
+    const dialog = await prompt();
+    await user.click(button(dialog, 'Shift dates'));
     await waitFor(() => expect(api.adjustSchedule).toHaveBeenCalledTimes(1));
+    // This mount's own answer is in flight: its prompt stays busy, and Cancel is refused.
+    expect(button(dialog, 'Cancel').disabled).toBe(true);
 
     const settingsApi = mockApi([userRow]);
     const settings = otherScreen(settingsApi);
     act(() => {
-      expect(settings.result.current.open('bid-1', { previousDue: '2026-11-25', nextDue: '2026-12-09' }, null)).toBe(false);
+      expect(settings.result.current.open('bid-1', move, null)).toBe(false);
     });
     expect(settings.result.current.current('bid-1')).toBeNull();
     // Another bid is not blocked.
     act(() => {
-      expect(settings.result.current.open('bid-2', { previousDue: '2026-11-25', nextDue: '2026-12-09' }, null)).toBe(true);
+      expect(settings.result.current.open('bid-2', move, null)).toBe(true);
     });
 
     adjust.resolve(adjusted);
@@ -967,33 +1004,95 @@ describe('ScheduleContainer: the date-change lock shared with other screens (Set
     expect(settingsApi.getBid).not.toHaveBeenCalled();
   });
 
-  it("disables the user prompt's answers while another screen's answer on the bid is in flight", async () => {
+  it("refuses the user prompt's answers with a message while another screen's answer is in flight, and lets it be cancelled", async () => {
     const api = mockApi();
     const { user } = renderContainer({ api });
     await ready();
     await changeDueTo(user, '2026-12-02');
     const dialog = await screen.findByRole('dialog');
+    const { finish } = otherAnswerInFlight();
 
-    const bid = deferred<ReturnType<typeof bidDto>>();
-    const settings = otherScreen(mockApi([userRow], { getBid: vi.fn(() => bid.promise) }));
-    act(() => {
-      settings.result.current.open('bid-1', { previousDue: '2026-11-25', nextDue: '2026-12-09' }, null);
-    });
-    let run: Promise<unknown> | null = null;
-    act(() => {
-      run = settings.result.current.resolve('bid-1', 'keep');
-    });
-    await waitFor(() => expect(button(dialog, 'Shift dates').disabled).toBe(true));
-    fireEvent.click(button(dialog, 'Shift dates'));
-    expect(api.getBid).not.toHaveBeenCalled();
-
-    await act(async () => {
-      bid.resolve(bidDto({ dueDate: ts('2026-11-25') }));
-      await run;
-    });
-    await waitFor(() => expect(button(dialog, 'Shift dates').disabled).toBe(false));
     await user.click(button(dialog, 'Shift dates'));
+    expect(toast.info).toHaveBeenCalledWith(DATE_CHANGE_BUSY_MESSAGE);
+    expect(api.getBid).not.toHaveBeenCalled();
+    expect(button(dialog, 'Cancel').disabled).toBe(false);
+    await user.click(button(dialog, 'Cancel'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await finish();
+
+    // Once it ends, a new change on the bid goes through.
+    await changeDueTo(user, '2026-12-02');
+    await user.click(button(await screen.findByRole('dialog'), 'Shift dates'));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(api.adjustSchedule).toHaveBeenCalledWith('bid-1', { mode: 'shift', previousDue: '2026-11-25', nextDue: '2026-12-02' });
+  });
+
+  it('says so when Change due date is refused because an answer is in flight', async () => {
+    const api = mockApi();
+    const { user } = renderContainer({ api });
+    await ready();
+    const { finish } = otherAnswerInFlight();
+    await changeDueTo(user, '2026-12-02');
+    expect(toast.info).toHaveBeenCalledWith(DATE_CHANGE_BUSY_MESSAGE);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await finish();
+  });
+
+  it('sets a first due date only under the lock, and says so when it is held', async () => {
+    const api = mockApi();
+    const { user } = renderContainer({ api, shell: { bid: bidDto({ dueDate: null }) } });
+    await ready();
+    const { finish } = otherAnswerInFlight();
+    const setDue = async () => {
+      await user.click(screen.getByRole('button', { name: 'Set due date' }));
+      fireEvent.change(screen.getByLabelText('New due date'), { target: { value: '2026-12-02' } });
+      await user.click(screen.getByRole('button', { name: 'Continue' }));
+    };
+    await setDue();
+    expect(toast.info).toHaveBeenCalledWith(DATE_CHANGE_BUSY_MESSAGE);
+    expect(api.updateBid).not.toHaveBeenCalled();
+    await finish();
+
+    const save = deferred<ReturnType<typeof bidDto>>();
+    vi.mocked(api.updateBid).mockReturnValueOnce(save.promise);
+    await setDue();
+    await waitFor(() => expect(api.updateBid).toHaveBeenCalledWith('bid-1', { dueDate: '2026-12-02' }));
+    // The first due date's PATCH holds the bid's lock while it runs.
+    expect(dateChangeHolder('bid-1')).not.toBeNull();
+    save.resolve(bidDto({ dueDate: ts('2026-12-02') }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Due date set.'));
+    await waitFor(() => expect(dateChangeHolder('bid-1')).toBeNull());
+  });
+
+  describe('an answer that throws instead of returning an outcome', () => {
+    const hostile = () =>
+      new Proxy(
+        {},
+        {
+          getPrototypeOf() {
+            throw new Error('boom');
+          },
+        },
+      );
+
+    it("reports the user's answer and still reloads", async () => {
+      const api = mockApi([userRow, aiRow], { getBid: vi.fn(() => Promise.reject(hostile())) });
+      const { shell, user } = renderContainer({ api });
+      await ready();
+      await changeDueTo(user, '2026-12-02');
+      await user.click(button(await screen.findByRole('dialog'), 'Shift dates'));
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(FALLBACK_MESSAGE));
+      await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
+      expect(shell.refresh).toHaveBeenCalled();
+    });
+
+    it("reports the amendment's answer and still reloads", async () => {
+      const api = pendingApi({ adjustSchedule: vi.fn(() => Promise.reject(hostile())) });
+      const { shell, user } = renderContainer({ api });
+      await user.click(button(await prompt(), 'Shift dates'));
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(FALLBACK_MESSAGE));
+      await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
+      expect(shell.refresh).toHaveBeenCalled();
+    });
   });
 });

@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type AdjustScheduleDto, type BidDto } from '@/api';
 import { bidDto, scheduleActivityDto } from '@/test/fixtures';
-import { CHECK_MESSAGE, NO_PROGRESS, STALE_MESSAGE, type DateChangeOutcome } from './controller';
-import { isDateChangeLocked, tryLockDateChange } from './date-change-lock';
+import { CHECK_MESSAGE, DATE_CHANGE_TIMEOUT_MS, NO_PROGRESS, STALE_MESSAGE, TIMEOUT_MESSAGE, type DateChangeOutcome } from './controller';
+import { dateChangeHolder, isDateChangeLocked, lockedDateChangeBids, tryLockDateChange } from './date-change-lock';
+
+afterEach(() => {
+  // The lock is module state: a test that leaves one held fails here, not in a later test.
+  expect(lockedDateChangeBids()).toEqual([]);
+});
 import { useUserDateChange, type UserDateChangeApi } from './use-user-date-change';
 
 const ts = (day: string) => `${day}T00:00:00.000Z`;
@@ -71,7 +76,7 @@ describe('useUserDateChange: opening and cancelling', () => {
     expect(result.current.current('bid-1')).toBeNull();
   });
 
-  it('refuses to open, answer, or cancel while the bid is locked by another answer', async () => {
+  it('refuses to open or answer while another answer holds the bid, but lets it be cancelled', async () => {
     const api = fakeApi();
     const { result } = setup(api);
     act(() => {
@@ -85,8 +90,9 @@ describe('useUserDateChange: opening and cancelling', () => {
       expect(result.current.current('bid-1')?.meta).toBe('meta');
       expect(await answer(result, 'bid-1')).toBeNull();
       expect(api.getBid).not.toHaveBeenCalled();
+      // Cancel writes nothing, so it is allowed while another screen holds the lock (no trapped prompt).
       act(() => result.current.cancel('bid-1'));
-      expect(result.current.current('bid-1')).not.toBeNull();
+      expect(result.current.current('bid-1')).toBeNull();
       expect(isDateChangeLocked('bid-1')).toBe(true);
     } finally {
       release();
@@ -325,5 +331,78 @@ describe('useUserDateChange: the lock', () => {
     });
     expect(result.current.current('bid-2')).toMatchObject({ meta: 'second', progress: NO_PROGRESS, dueSaved: false });
     expect(result.current.current('bid-1')).toBeNull();
+  });
+
+  it("refuses Cancel while this hook's own answer is in flight, and takes the lock as its owner", async () => {
+    const adjust = deferred<AdjustScheduleDto>();
+    const api = fakeApi({ adjustSchedule: vi.fn(() => adjust.promise) });
+    const { result } = setup(api);
+    act(() => {
+      result.current.open('bid-1', move, 'meta');
+    });
+    let run: Promise<DateChangeOutcome> | null = null;
+    act(() => {
+      run = result.current.resolve('bid-1', 'shift');
+    });
+    expect(dateChangeHolder('bid-1')).toBe(result.current.owner);
+    act(() => result.current.cancel('bid-1'));
+    expect(result.current.current('bid-1')).not.toBeNull();
+    await act(async () => {
+      adjust.resolve(adjusted);
+      await run;
+    });
+  });
+
+  it('uses the record written by the last try, even before React redraws (no stale progress)', async () => {
+    const api = fakeApi({
+      adjustSchedule: vi.fn<UserDateChangeApi['adjustSchedule']>().mockRejectedValueOnce(new ApiError('The API is not reachable', 0)),
+    });
+    const { result } = setup(api);
+    act(() => {
+      result.current.open('bid-1', move, 'meta');
+    });
+    // Keep the resolve of this render, as a click handler from before the redraw would.
+    const stale = result.current;
+    await act(async () => {
+      await stale.resolve('bid-1', 'shift');
+    });
+    vi.mocked(api.getBid).mockResolvedValue(bidDto({ dueDate: ts('2026-12-02') }));
+    vi.mocked(api.getTab).mockResolvedValue({
+      activities: [scheduleActivityDto({ startDate: ts('2026-11-20'), endDate: ts('2026-11-24') })],
+      workdaysOnly: true,
+      proposals: [],
+      pendingDateChange: null,
+    } as never);
+    let outcome: DateChangeOutcome | null = null;
+    await act(async () => {
+      outcome = await stale.resolve('bid-1', 'shift');
+    });
+    // With the first render's record (no progress) this would read as stale; with the last try's it checks.
+    expect(outcome).toEqual({ kind: 'check', message: CHECK_MESSAGE });
+    expect(api.adjustSchedule).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the lock when a call never answers, keeping the change open with its progress', async () => {
+    vi.useFakeTimers();
+    try {
+      const api = fakeApi({ adjustSchedule: vi.fn(() => new Promise<never>(() => {})) });
+      const { result } = setup(api);
+      act(() => {
+        result.current.open('bid-1', move, 'meta');
+      });
+      let run: Promise<DateChangeOutcome> | null = null;
+      act(() => {
+        run = result.current.resolve('bid-1', 'shift');
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DATE_CHANGE_TIMEOUT_MS);
+      });
+      const outcome = await run!;
+      expect(outcome).toMatchObject({ kind: 'adjust_failed', message: expect.stringContaining(TIMEOUT_MESSAGE) });
+      expect(isDateChangeLocked('bid-1')).toBe(false);
+      expect(result.current.current('bid-1')).toMatchObject({ dueSaved: true, progress: { dueWritten: true } });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

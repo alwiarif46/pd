@@ -106,6 +106,24 @@ describe('uploadFile', () => {
     expect(jsonBody(callAt(fetchMock, 1))).not.toHaveProperty('amendmentNo');
   });
 
+  it.each([0, 1000, 2.5, -1, Number.NaN])('refuses amendment number %s before any request', async (amendmentNo) => {
+    const fetchMock = mockFetch();
+    const error = await uploadFile('b1', tenByteFile(), 'amendment', { amendmentNo }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).message).toBe('Amendment number must be 1 to 999');
+    expect((error as ApiError).status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts amendment numbers 1 and 999', async () => {
+    setToken('tok');
+    const fetchMock = mockFetch(jsonResponse(200, { duplicate: true }), jsonResponse(200, { duplicate: true }));
+    await uploadFile('b1', tenByteFile(), 'amendment', { amendmentNo: 1 });
+    await uploadFile('b1', tenByteFile(), 'amendment', { amendmentNo: 999 });
+    expect(jsonBody(callAt(fetchMock, 0))).toMatchObject({ amendmentNo: 1 });
+    expect(jsonBody(callAt(fetchMock, 1))).toMatchObject({ amendmentNo: 999 });
+  });
+
   it('throws the server message when a chunk fails', async () => {
     const fetchMock = mockFetch(
       jsonResponse(201, { id: 's1', expiresAt: '2026-10-15T00:00:00.000Z' }),

@@ -63,6 +63,10 @@ export async function uploadFile(
   if (file.size === 0) {
     throw new ApiError('This file is empty', 400);
   }
+  // The server takes 1 to 999; refuse anything else here, before any request (or the file read).
+  if (kind === 'amendment' && amendmentNo !== undefined && !(Number.isInteger(amendmentNo) && amendmentNo >= 1 && amendmentNo <= 999)) {
+    throw new ApiError('Amendment number must be 1 to 999', 400);
+  }
   const chunkBytes = Math.min(CHUNK_BYTES, Math.max(1, Math.floor(options.chunkBytes ?? CHUNK_BYTES)));
   const bytes = await file.arrayBuffer();
   const sha256 = await sha256Hex(bytes);
