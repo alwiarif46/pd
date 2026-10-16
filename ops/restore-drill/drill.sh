@@ -106,8 +106,8 @@ if (( FROM_OFFSITE )); then
 fi
 export BORG_REPO="$REPO" BORG_PASSCOMMAND="cat $BORG_PASS_FILE" BORG_RELOCATED_REPO_ACCESS_IS_OK=no
 unset BORG_PASSPHRASE
-ARCHIVE="$(borg list --short | sort | tail -1)"
-[[ -n "$ARCHIVE" ]] || die "the repository holds no archive"
+ARCHIVE="$(bk_latest_archive)" || die "borg list failed"
+[[ -n "$ARCHIVE" ]] || die "the repository holds no regular archive (pd-<time>)"
 echo "newest archive: $ARCHIVE"
 
 echo "== 2. Scratch Postgres (no network)"
@@ -126,16 +126,8 @@ for i in $(seq 1 90); do
 done
 
 echo "== 4. Roles, database, restore"
-ROLES_SQL="DO \$\$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pd_app') THEN
-    CREATE ROLE pd_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pd_system') THEN
-    CREATE ROLE pd_system NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-  END IF;
-END \$\$;"
-docker exec "$NAME" psql -U pd_owner -d postgres -v ON_ERROR_STOP=1 -c "$ROLES_SQL" -c 'CREATE DATABASE pd OWNER pd_owner' >/dev/null
-borg extract --stdout "::$ARCHIVE" pd.dump | docker exec -i "$NAME" pg_restore -U pd_owner -d pd --exit-on-error --single-transaction
+docker exec "$NAME" psql -U pd_owner -d postgres -v ON_ERROR_STOP=1 -c "$BK_ROLES_SQL" -c "${BK_RECREATE_SQL[1]}" >/dev/null
+borg extract --stdout "::$ARCHIVE" pd.dump | docker exec -i "$NAME" pg_restore "${BK_PG_RESTORE_ARGS[@]}"
 
 echo "== 5. Verify"
 APPLIED="$(docker exec "$NAME" psql -U pd_owner -d pd -Atc 'select count(*) from drizzle.__drizzle_migrations' | tr -d '[:space:]')"

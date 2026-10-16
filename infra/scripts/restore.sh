@@ -4,7 +4,10 @@
 # database (errors or a partial, duplicated restore) through a decompressed copy in /tmp.
 #
 # Steps, in this order:
-#   1. the same mount and passphrase checks as backup.sh
+#   1. the same mount and passphrase checks as backup.sh; "latest" is the newest REGULAR archive (pd-<time>, never a
+#      pd-<time>-pre-restore safety copy or a .checkpoint)
+#   1b. the archive is validated BEFORE anything changes: borg extract --stdout ::A pd.dump | pg_restore --file=/dev/null
+#      (an empty, truncated or non-pg_dump archive is refused and the live database is left alone)
 #   2. a safety backup of the CURRENT database (backup.sh --no-offsite --tag pre-restore), unless --no-safety-backup
 #   3. stop the api and worker containers
 #   4. drop and recreate the database: DROP DATABASE IF EXISTS pd WITH (FORCE); CREATE DATABASE pd OWNER pd_owner
@@ -55,10 +58,10 @@ fi
 
 if [[ "$ARCHIVE" == latest ]]; then
   if is_dry; then
-    ARCHIVE="<newest archive>"
+    ARCHIVE="<newest regular archive>"
   else
-    ARCHIVE="$(borg list --short | sort | tail -1)"
-    [[ -n "$ARCHIVE" ]] || die "the Borg repository holds no archive"
+    ARCHIVE="$(bk_latest_archive)" || die "borg list failed"
+    [[ -n "$ARCHIVE" ]] || die "the Borg repository holds no regular archive (pd-<time>; -pre-restore copies are only restored by name)"
     log "latest archive: $ARCHIVE"
   fi
 fi
@@ -72,6 +75,15 @@ if (( CONFIRM )) && ! is_dry && [[ -t 0 ]]; then
 fi
 
 PSQL=("${COMPOSE[@]}" exec -T postgres psql -U pd_owner -d postgres -v ON_ERROR_STOP=1)
+
+echo "== 0. Validate archive $ARCHIVE (nothing is changed before this passes)"
+if is_dry; then
+  echo "[dry-run] borg extract --stdout ::$ARCHIVE pd.dump | ${COMPOSE[*]} exec -T postgres pg_restore --file=/dev/null"
+else
+  bk_validate_archive "$ARCHIVE" "${COMPOSE[@]}" exec -T postgres \
+    || die "archive $ARCHIVE is not a complete, readable pg_dump (pg_restore rejected it): the live database was NOT touched. Pick another one (--list)"
+  log "archive $ARCHIVE is a readable pg_dump"
+fi
 
 echo "== 1. Safety backup of the current database"
 if (( SAFETY )); then
@@ -87,25 +99,17 @@ echo "== 2. Stop api and worker"
 run "${COMPOSE[@]}" stop api worker
 
 echo "== 3. Recreate the database"
-run "${PSQL[@]}" -c 'DROP DATABASE IF EXISTS pd WITH (FORCE)' -c 'CREATE DATABASE pd OWNER pd_owner'
+run "${PSQL[@]}" -c "${BK_RECREATE_SQL[0]}" -c "${BK_RECREATE_SQL[1]}"
 
 echo "== 4. Roles (exact attributes of migration 0001)"
-ROLES_SQL="DO \$\$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pd_app') THEN
-    CREATE ROLE pd_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pd_system') THEN
-    CREATE ROLE pd_system NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-  END IF;
-END \$\$;"
-run "${PSQL[@]}" -c "$ROLES_SQL"
+run "${PSQL[@]}" -c "$BK_ROLES_SQL"
 
 echo "== 5. Restore archive $ARCHIVE"
 if is_dry; then
-  echo "[dry-run] borg extract --stdout ::$ARCHIVE pd.dump | ${COMPOSE[*]} exec -T postgres pg_restore -U pd_owner -d pd --exit-on-error --single-transaction"
+  echo "[dry-run] borg extract --stdout ::$ARCHIVE pd.dump | ${COMPOSE[*]} exec -T postgres pg_restore ${BK_PG_RESTORE_ARGS[*]}"
 else
   borg extract --stdout "::$ARCHIVE" pd.dump \
-    | "${COMPOSE[@]}" exec -T postgres pg_restore -U pd_owner -d pd --exit-on-error --single-transaction
+    | "${COMPOSE[@]}" exec -T postgres pg_restore "${BK_PG_RESTORE_ARGS[@]}"
 fi
 
 echo "== 6. Start api and worker"

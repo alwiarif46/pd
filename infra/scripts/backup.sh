@@ -2,14 +2,19 @@
 # infra/scripts/backup.sh - encrypted database backup (runs ON THE SERVER, as root; hourly via systemd timer).
 # Implements: docs/plans/01-infrastructure.md s4 (Drive PR #3 backup design, PD runs Borg itself).
 #
-#   pg_dump -Fc (custom format, inside the postgres container)
-#     | borg create --compression zstd --stdin-name pd.dump  ->  /mnt/pdbackup/borg  (LUKS volume, encrypted repo)
+#   borg create --content-from-command --stdin-name pd.dump ::pd-<UTC time> -- docker compose ... pg_dump -Fc
+#     -> /mnt/pdbackup/borg (LUKS volume, encrypted repo; borg >= 1.2, Ubuntu 24.04 ships 1.2.8)
+#   then the archive is checked (bk_validate_archive: the whole pd.dump through pg_restore --file=/dev/null),
 #   then borg prune (retention from [backup] borg_retention), borg compact,
 #   then ops/backup/offsite-sync.sh (rclone crypt copy to Backblaze B2) unless --no-offsite.
 #
-# What it fixes against the old script: it passes the compose file and env file explicitly (it used to fail
-# unless run next to a compose file); the dump is no longer a plain, unencrypted .sql.gz on the same disk; the
-# pipeline runs under set -euo pipefail so a failed pg_dump can never leave a "good" archive.
+# Why --content-from-command and not `pg_dump | borg create -`: with a pipe, borg only sees its stdin end and COMMITS
+# the empty or truncated stream as a good archive (exit 0) when pg_dump dies; prune could then keep only empty
+# archives and the off-site sync would copy them. With --content-from-command borg runs pg_dump itself and aborts the
+# archive when pg_dump exits non-zero. Belt and braces: if borg create fails, or the new archive does not validate,
+# the archive (and any NAME.checkpoint) is deleted, and the script stops before prune and the off-site copy.
+# It also passes the compose file and env file explicitly (the old script failed unless run next to a compose file),
+# and the dump is never a plain, unencrypted .sql.gz on the same disk.
 # Refuses unless /mnt/pdbackup is mounted from /dev/mapper/pdbackup (under --dry-run it only warns) and
 # /etc/pd/borg.pass is root, mode 0400. The passphrase goes to borg through BORG_PASSCOMMAND only: never in
 # argv, never in the environment. Nothing is written to /tmp or /data/backups. Live files are not backed up
@@ -70,14 +75,25 @@ if (( INIT )); then
   exit 0
 fi
 
-ARCHIVE="pd-{now:%Y-%m-%dT%H:%M:%S}${TAG:+-$TAG}"
+ARCHIVE="$(bk_new_archive_name "$TAG")"
+DUMP=("${COMPOSE[@]}" exec -T postgres pg_dump -U pd_owner -d pd -Fc)
 if is_dry; then
-  echo "[dry-run] ${COMPOSE[*]} exec -T postgres pg_dump -U pd_owner -d pd -Fc | borg create --compression zstd --stdin-name pd.dump ::$ARCHIVE -"
+  echo "[dry-run] borg create --compression zstd --content-from-command --stdin-name pd.dump ::$ARCHIVE -- ${DUMP[*]}"
+  echo "[dry-run] borg extract --stdout ::$ARCHIVE pd.dump | ${COMPOSE[*]} exec -T postgres pg_restore --file=/dev/null   (validate; a bad archive is deleted)"
 else
-  # The pipe is the whole point: nothing is written to disk in plaintext. pipefail (set above) fails the script
-  # when pg_dump fails, even though borg itself would happily store an empty stream.
-  "${COMPOSE[@]}" exec -T postgres pg_dump -U pd_owner -d pd -Fc \
-    | borg create --compression zstd --stdin-name pd.dump "::$ARCHIVE" -
+  # Never reuse a name: the clean-up below deletes by name, and it must only ever delete what this run wrote.
+  existing="$(borg list --short)" || die "borg list failed: is the repository there ($PD_BORG_REPO)?"
+  if grep -qxF -- "$ARCHIVE" <<<"$existing"; then die "archive $ARCHIVE already exists; try again in a second"; fi
+  # Nothing is written to disk in plaintext: borg reads pg_dump's stdout itself.
+  if ! borg create --compression zstd --content-from-command --stdin-name pd.dump "::$ARCHIVE" -- "${DUMP[@]}"; then
+    bk_drop_archive "$ARCHIVE" || true
+    die "pg_dump or borg create failed: no archive $ARCHIVE kept; no prune, no off-site copy"
+  fi
+  if ! bk_validate_archive "$ARCHIVE" "${COMPOSE[@]}" exec -T postgres; then
+    bk_drop_archive "$ARCHIVE" || die "archive $ARCHIVE is not a readable pg_dump AND could not be deleted: delete it by hand before the next prune (borg delete ::$ARCHIVE)"
+    die "archive $ARCHIVE is not a readable pg_dump (pg_restore rejected it): deleted; no prune, no off-site copy"
+  fi
+  log "archive $ARCHIVE created and validated"
 fi
 run borg prune "${RETENTION_ARGS[@]}" --glob-archives 'pd-*'
 run borg compact

@@ -28,7 +28,8 @@ setup() {
          PD_PROJECT_DIR="$S/project" PD_SKIP_OWNER_CHECK=1 \
          FAKE_CALLS="$S/calls" FAKE_STATE="$S/state" PATH="$FAKES:$ORIG_PATH" PD_SECRETS="$S/secrets.env"
   unset PD_SKIP_MODE_CHECK PD_TENANT FAKE_MOUNT_PDBACKUP FAKE_MOUNT_PDDATA FAKE_OLD_VOLUME FAKE_REMOTE_COUNT FAKE_LSF FAKE_BORG_EXIT FAKE_COMPOSE_EXIT \
-        FAKE_MIGRATIONS FAKE_ORGS FAKE_ACTIVE BORG_PASSPHRASE PD_OS_RELEASE PD_CLOUD_BOOT_FINISHED
+        FAKE_MIGRATIONS FAKE_ORGS FAKE_ACTIVE BORG_PASSPHRASE PD_OS_RELEASE PD_CLOUD_BOOT_FINISHED FAKE_OLD_VOLUMES FAKE_CONTAINERS_api \
+        FAKE_CONTAINERS_worker FAKE_PGDUMP_OUT FAKE_PGDUMP_EXIT FAKE_BORG_CC_LEAVE FAKE_BORG_LIST FAKE_REMOTE_MARKER FAKE_CAT_EXIT PD_MACHINE_ID_FILE
   : >"$FAKE_CALLS"
   : >"$S/secrets.env"
 }
@@ -85,7 +86,19 @@ backup_env() {
   chmod 0600 "$S/etc/rclone.env"
   if [[ "$(stat -c %a "$S/etc/borg.pass")" != 400 ]]; then export PD_SKIP_MODE_CHECK=1; else unset PD_SKIP_MODE_CHECK; fi
   : >"$FAKE_CALLS.env"
+  # the fake repository starts with one good hourly archive
+  seed_archive pd-2026-10-16T01:00:00
+  printf 'thismachine0000000000000000000001\n' >"$S/machine-id"; export PD_MACHINE_ID_FILE="$S/machine-id"
 }
+# seed_archive NAME [CONTENT]: put an archive into the fake borg's store (default content: a valid fake pg_dump)
+seed_archive() {
+  local st="$S/state/borg-archives"
+  mkdir -p "$st"
+  printf '%b' "${2-PGDMP seeded dump\nPGDMP-END\n}" >"$st/${1//:/_}"
+  printf '%s\n' "$1" >>"$st/.order"
+}
+archives() { cat "$S/state/borg-archives/.order" 2>/dev/null; }
+ARCH_RE='pd-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}'
 SECRET_ACCT="0012fakeaccountid0000000"
 SECRET_KEY="K00SECRETAPPKEYvalue123456789"
 no_secret_in() { # no_secret_in FILE... : none of the secret values appear
@@ -103,7 +116,9 @@ out="$(bash infra/scripts/backup.sh --dry-run 2>&1)"; rc=$?
 [[ $rc == 0 ]] && ok "backup.sh --dry-run exits 0" || bad "backup dry-run" "rc=$rc $(tail -3 <<<"$out")"
 grep -q -- "--env-file $S/project/.env -f $S/project/infra/docker-compose.yml exec -T postgres pg_dump -U pd_owner -d pd -Fc" <<<"$out" \
   && ok "backup plan passes --env-file and -f explicitly (bug 4: it used to need to run next to a compose file)" || bad "compose flags" "$out"
-grep -q "borg create --compression zstd --stdin-name pd.dump" <<<"$out" && ok "backup plan: pg_dump -Fc piped into borg create --stdin-name pd.dump" || bad "borg create" "$out"
+grep -qE "borg create --compression zstd --content-from-command --stdin-name pd.dump ::$ARCH_RE -- docker compose .* pg_dump -U pd_owner -d pd -Fc" <<<"$out" \
+  && ok "backup plan: borg create --content-from-command runs pg_dump -Fc itself (no pipe that borg would commit on failure)" || bad "borg create" "$out"
+grep -q "pg_restore --file=/dev/null" <<<"$out" && ok "backup plan validates the new archive (pg_restore --file=/dev/null)" || bad "backup validate plan" "$out"
 ! grep -qE '^(docker|borg) ' "$FAKE_CALLS" && ok "backup --dry-run runs no docker or borg command" || bad "dry-run made calls" "$(cat "$FAKE_CALLS")"
 
 backup_env bk-nomount
@@ -122,11 +137,21 @@ else
   skip "borg.pass mode guard (this file system has no POSIX modes)"
 fi
 
+# the PD_SKIP_* test switches are ignored when the process really runs as root (bash $EUID; the fake id cannot fake it)
+backup_env bk-rootskip
+out="$(PD_SKIP_OWNER_CHECK=1 PD_SKIP_MODE_CHECK=1 bash -c 'source infra/lib/ops-common.sh; source ops/lib/backup-common.sh; bk_real_uid() { printf 0; }; bk_check_pass; echo PASSED' 2>&1)"; rc=$?
+[[ $rc != 0 ]] && ! grep -q PASSED <<<"$out" && grep -q "is ignored: running as root" <<<"$out" && grep -qE "must be (root|0400)" <<<"$out" \
+  && ok "as root, PD_SKIP_OWNER_CHECK / PD_SKIP_MODE_CHECK are ignored and borg.pass is checked" || bad "skip switches honoured as root" "rc=$rc $out"
+out="$(PD_SKIP_OWNER_CHECK=1 PD_SKIP_MODE_CHECK=1 bash -c 'source infra/lib/ops-common.sh; source ops/lib/backup-common.sh; bk_check_pass; echo PASSED' 2>&1)"; rc=$?
+[[ "$EUID" != 0 ]] && { [[ $rc == 0 ]] && grep -q PASSED <<<"$out" && ok "unprivileged test runs may still skip the owner/mode checks" || bad "skip switches broken for tests" "rc=$rc $out"; }
+grep -q 'id -u' ops/lib/backup-common.sh && bad "backup-common.sh decides root-ness with id -u (fakeable)" || ok "backup-common.sh uses bash \$EUID, not id -u, for the skip switches"
+
 backup_env bk-real
 out="$(bash infra/scripts/backup.sh 2>&1)"; rc=$?
 [[ $rc == 0 ]] && ok "backup.sh real run against the fakes exits 0" || bad "backup real run" "rc=$rc $(tail -5 <<<"$out")"
 grep -q "^docker compose --env-file $S/project/.env -f $S/project/infra/docker-compose.yml exec -T postgres pg_dump -U pd_owner -d pd -Fc" "$FAKE_CALLS" \
-  && grep -q "^borg create --compression zstd --stdin-name pd.dump ::pd-{now:%Y-%m-%dT%H:%M:%S} -" "$FAKE_CALLS" && ok "backup ran pg_dump into borg create with the dated archive name" || bad "backup calls" "$(cat "$FAKE_CALLS")"
+  && grep -qE "^borg create --compression zstd --content-from-command --stdin-name pd.dump ::$ARCH_RE -- docker compose " "$FAKE_CALLS" && ok "backup ran pg_dump through borg create --content-from-command with a dated UTC archive name" || bad "backup calls" "$(cat "$FAKE_CALLS")"
+[[ "$(archives | grep -cE "^$ARCH_RE$")" == 2 ]] && grep -q "^docker-validate-bytes [1-9]" "$FAKE_CALLS" && ok "the new archive is in the repository and was validated through pg_restore --file=/dev/null" || bad "new archive / validation" "$(archives) $(cat "$FAKE_CALLS")"
 [[ "$(cat "$S/state/borg-create-bytes" 2>/dev/null)" -gt 0 ]] && ok "the dump stream reached borg (stdin bytes > 0)" || bad "no bytes into borg"
 no_secret_in "$FAKE_CALLS" "$FAKE_CALLS.env" <(printf '%s' "$out") && grep -q 'BORG_PASSCOMMAND' "$FAKE_CALLS.env" && ! grep -q 'BORG_PASSPHRASE' "$FAKE_CALLS.env" \
   && ok "the Borg passphrase is never in argv or the environment (BORG_PASSCOMMAND only)" || bad "passphrase leaked or BORG_PASSCOMMAND missing" "$(cat "$FAKE_CALLS.env")"
@@ -138,12 +163,30 @@ grep -q "^rclone --config $S/etc/rclone.conf sync $S/pdbackup/borg b2crypt:borg 
 backup_env bk-noff
 : >"$FAKE_CALLS"
 out="$(bash infra/scripts/backup.sh --no-offsite --tag pre-restore 2>&1)"; rc=$?
-[[ $rc == 0 ]] && ! grep -q '^rclone' "$FAKE_CALLS" && grep -q "^borg create .*::pd-{now:%Y-%m-%dT%H:%M:%S}-pre-restore -" "$FAKE_CALLS" && ok "--no-offsite skips rclone; --tag adds the suffix" || bad "no-offsite/tag" "$(cat "$FAKE_CALLS")"
+[[ $rc == 0 ]] && ! grep -q '^rclone' "$FAKE_CALLS" && grep -qE "^borg create .*::$ARCH_RE-pre-restore -- " "$FAKE_CALLS" && ok "--no-offsite skips rclone; --tag adds the suffix" || bad "no-offsite/tag" "$(cat "$FAKE_CALLS")"
 
+# A failed pg_dump must leave NO archive behind (finding: with `pg_dump | borg create -` borg commits the empty or
+# truncated stream and exits 0; prune could then keep only empty archives and the off-site sync would copy them).
 backup_env bk-pgfail
-out="$(FAKE_COMPOSE_EXIT=3 FAKE_BORG_EXIT=0 bash infra/scripts/backup.sh 2>&1)"; rc=$?
-# the fake compose prints nothing and exits 3: pipefail must fail the script before prune/offsite
-[[ $rc != 0 ]] && ! grep -q '^borg prune' "$FAKE_CALLS" && ! grep -q '^rclone' "$FAKE_CALLS" && ok "a failing pg_dump fails the backup (pipefail): no prune, no off-site copy" || bad "pipefail" "rc=$rc $(cat "$FAKE_CALLS")"
+out="$(FAKE_PGDUMP_OUT='PGDMP trunc' FAKE_PGDUMP_EXIT=3 bash infra/scripts/backup.sh 2>&1)"; rc=$?
+[[ $rc != 0 ]] && ! grep -q '^borg prune' "$FAKE_CALLS" && ! grep -q '^rclone' "$FAKE_CALLS" && ok "a failing pg_dump fails the backup: no prune, no off-site copy" || bad "pg_dump failure" "rc=$rc $(cat "$FAKE_CALLS")"
+[[ "$(archives)" == pd-2026-10-16T01:00:00 ]] && ok "a failing pg_dump leaves no archive in the repository (only the old good one)" || bad "archive left behind after a failed pg_dump" "$(archives)"
+backup_env bk-pgfail-leave
+out="$(FAKE_PGDUMP_EXIT=3 FAKE_BORG_CC_LEAVE=1 bash infra/scripts/backup.sh 2>&1)"; rc=$?
+[[ $rc != 0 && "$(archives)" == pd-2026-10-16T01:00:00 ]] && grep -qE "^borg delete ::$ARCH_RE.checkpoint" "$FAKE_CALLS" && ! grep -q '^borg prune' "$FAKE_CALLS" \
+  && ok "a .checkpoint borg leaves after a failed pg_dump is deleted before anything else runs" || bad "checkpoint left" "rc=$rc $(archives)"
+backup_env bk-pgbad
+out="$(FAKE_PGDUMP_OUT='' bash infra/scripts/backup.sh 2>&1)"; rc=$?
+[[ $rc != 0 && "$(archives)" == pd-2026-10-16T01:00:00 ]] && grep -q "not a readable pg_dump" <<<"$out" && ! grep -q '^borg prune' "$FAKE_CALLS" && ! grep -q '^rclone' "$FAKE_CALLS" \
+  && ok "an archive that pg_restore cannot read (pg_dump exited 0 with nothing) is deleted; no prune, no off-site copy" || bad "bad archive kept" "rc=$rc $(archives) $out"
+backup_env bk-dup
+# every name of the next two minutes "exists" (this machine can be slow to start the script)
+now_s="$(date -u +%s)"
+taken="$(archives; for i in $(seq 0 120); do date -u -d "@$((now_s + i))" +pd-%Y-%m-%dT%H:%M:%S; done)"
+out="$(FAKE_BORG_LIST="$taken" bash infra/scripts/backup.sh 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "already exists" <<<"$out" && ! grep -q '^borg delete' "$FAKE_CALLS" && ok "an existing archive name is never reused (and never deleted by the clean-up)" || bad "name reuse" "rc=$rc $out"
+# the pipe form must not come back
+! grep -vE '^\s*#' infra/scripts/backup.sh | grep -qE 'pg_dump[^|]*\|[[:space:]]*borg create|borg create .* -$' && ok "backup.sh has no 'pg_dump | borg create -' pipe" || bad "pipe form in backup.sh"
 
 backup_env bk-init
 rm -f "$S/pdbackup/borg/config"
@@ -165,12 +208,42 @@ backup_env rs-run
 out="$(bash infra/scripts/restore.sh --archive latest --confirm 2>&1)"; rc=$?
 [[ $rc == 0 ]] && ok "restore --archive latest --confirm exits 0 against the fakes" || bad "restore run" "rc=$rc $(tail -6 <<<"$out")"
 lno() { grep -nE -- "$1" "$FAKE_CALLS" | head -1 | cut -d: -f1; }
-l_safe="$(lno '^borg create')"; l_stop="$(lno 'stop api worker')"; l_drop="$(lno 'DROP DATABASE')"; l_roles="$(lno 'CREATE ROLE pd_app')"; l_ext="$(lno '^borg extract')"; l_pgr="$(lno 'exec -T postgres pg_restore')"; l_start="$(lno 'start api worker')"
-[[ -n "$l_safe" && -n "$l_ext" && -n "$l_pgr" && -n "$l_start" ]] && (( l_safe < l_stop && l_stop < l_drop && l_drop < l_roles && l_roles < l_ext && l_roles < l_pgr && l_ext < l_start && l_pgr < l_start ))   && ok "restore order: safety backup, stop api/worker, drop+create, roles, extract|pg_restore, start" || bad "restore order" "safe=$l_safe stop=$l_stop drop=$l_drop roles=$l_roles ext=$l_ext pgr=$l_pgr start=$l_start"
+lnol() { grep -nE -- "$1" "$FAKE_CALLS" | tail -1 | cut -d: -f1; }
+l_val="$(lno 'exec -T postgres pg_restore --file=/dev/null')"; l_safe="$(lno '^borg create')"; l_stop="$(lno 'stop api worker')"; l_drop="$(lno 'DROP DATABASE')"; l_roles="$(lno 'CREATE ROLE pd_app')"
+l_ext="$(lnol '^borg extract --stdout ::pd-2026-10-16T01:00:00 ')"; l_pgr="$(lno 'exec -T postgres pg_restore -U')"; l_start="$(lno 'start api worker')"
+[[ -n "$l_val" && -n "$l_safe" && -n "$l_ext" && -n "$l_pgr" && -n "$l_start" ]] && (( l_val < l_safe && l_safe < l_stop && l_stop < l_drop && l_drop < l_roles && l_roles < l_ext && l_roles < l_pgr && l_ext < l_start && l_pgr < l_start )) \
+  && ok "restore order: validate, safety backup, stop api/worker, drop+create, roles, extract|pg_restore, start" || bad "restore order" "val=$l_val safe=$l_safe stop=$l_stop drop=$l_drop roles=$l_roles ext=$l_ext pgr=$l_pgr start=$l_start"
 grep -q "pg_restore -U pd_owner -d pd --exit-on-error --single-transaction" "$FAKE_CALLS" && grep -q "^borg extract --stdout ::pd-2026-10-16T01:00:00 pd.dump" "$FAKE_CALLS" && ok "restore streams borg extract --stdout into pg_restore --exit-on-error --single-transaction" || bad "restore pipe" "$(cat "$FAKE_CALLS")"
 grep -q "DROP DATABASE IF EXISTS pd WITH (FORCE)" "$FAKE_CALLS" && grep -q "CREATE DATABASE pd OWNER pd_owner" "$FAKE_CALLS" && grep -q "CREATE ROLE pd_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE" "$FAKE_CALLS" \
   && grep -q "CREATE ROLE pd_system NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE" "$FAKE_CALLS" && ok "restore drops and recreates the database and creates the roles with migration 0001's attributes" || bad "restore sql"
 grep -q "pre-restore" "$FAKE_CALLS" && ok "the safety backup is tagged pre-restore" || bad "safety tag"
+# "latest" never picks a pre-restore safety copy or a checkpoint, even when it is newer
+backup_env rs-skip
+seed_archive pd-2026-10-16T05:00:00-pre-restore
+seed_archive pd-2026-10-16T06:00:00.checkpoint
+seed_archive pd-2026-10-16T02:00:00
+out="$(bash infra/scripts/restore.sh --archive latest --confirm --no-safety-backup 2>&1)"; rc=$?
+[[ $rc == 0 ]] && grep -q "^borg extract --stdout ::pd-2026-10-16T02:00:00 pd.dump" "$FAKE_CALLS" && ! grep -qE "^borg extract .*(pre-restore|checkpoint)" "$FAKE_CALLS" \
+  && ok "restore latest skips *-pre-restore and .checkpoint archives (picks pd-2026-10-16T02:00:00)" || bad "latest picked a safety copy" "rc=$rc $(grep '^borg extract' "$FAKE_CALLS")"
+# an invalid archive is refused BEFORE anything is dropped or stopped
+for bad_content in '' 'PGDMP truncated dump with no end' 'not a dump at all'; do
+  backup_env rs-invalid
+  seed_archive pd-2026-10-16T03:00:00 "$bad_content"
+  out="$(bash infra/scripts/restore.sh --archive latest --confirm 2>&1)"; rc=$?
+  if [[ $rc != 0 ]] && grep -q "not a complete, readable pg_dump" <<<"$out" && grep -q "live database was NOT touched" <<<"$out" \
+     && ! grep -qE 'DROP DATABASE|stop api worker|pg_restore -U|^borg create' "$FAKE_CALLS"; then
+    ok "restore refuses an invalid archive ('${bad_content:-empty}') before the safety backup, stop or DROP"
+  else
+    bad "restore went ahead with an invalid archive ('${bad_content:-empty}')" "rc=$rc $(cat "$FAKE_CALLS")"
+  fi
+done
+backup_env rs-missing
+out="$(bash infra/scripts/restore.sh --archive pd-2020-01-01T00:00:00 --confirm 2>&1)"; rc=$?
+[[ $rc != 0 ]] && ! grep -qE 'DROP DATABASE|stop api worker' "$FAKE_CALLS" && ok "restore of an archive that does not exist changes nothing" || bad "missing archive" "rc=$rc $(cat "$FAKE_CALLS")"
+backup_env rs-empty
+rm -rf "$S/state/borg-archives"
+out="$(bash infra/scripts/restore.sh --archive latest --confirm 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "holds no regular archive" <<<"$out" && ! grep -q 'DROP DATABASE' "$FAKE_CALLS" && ok "restore latest on an empty repository refuses" || bad "empty repo" "rc=$rc $out"
 backup_env rs-nosafety
 out="$(bash infra/scripts/restore.sh --archive pd-2026-10-16T01:00:00 --confirm --no-safety-backup 2>&1)"; rc=$?
 [[ $rc == 0 ]] && ! grep -q '^borg create' "$FAKE_CALLS" && grep -q 'stop api worker' "$FAKE_CALLS" && ok "--no-safety-backup skips the safety backup" || bad "no-safety" "$(cat "$FAKE_CALLS")"
