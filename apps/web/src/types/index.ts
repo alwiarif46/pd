@@ -6,6 +6,7 @@ export * from './auth';
 export * from './bids';
 export * from './overview';
 export * from './schedule';
+export * from './proposals';
 export * from './compliance';
 export * from './outline';
 export * from './resumes';

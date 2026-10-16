@@ -36,6 +36,8 @@ export interface DocumentRow {
   markingFound: string[] | null;
   extractStatus: string | null;
   scanStatus: string | null;
+  amendmentStatus?: string | null;
+  amendmentTabsStatus?: string | null;
 }
 
 export interface JobRow {
