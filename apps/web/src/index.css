@@ -211,28 +211,6 @@ tr.struck td { color: var(--muted); }
 
 .dialog .card { width: min(32rem, 100%); }
 
-.calendar { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; }
-.day {
-  min-height: 4.5rem;
-  background: #fff;
-  border: 1px solid var(--line);
-  padding: 0.2rem;
-  font-size: 0.75rem;
-}
-.day button.chip {
-  display: block;
-  width: 100%;
-  text-align: left;
-  border: 0;
-  background: var(--navy);
-  color: #fff;
-  border-radius: 4px;
-  margin-top: 0.15rem;
-  padding: 0.1rem 0.25rem;
-  cursor: grab;
-}
-.day button.chip.locked { background: var(--slate); cursor: not-allowed; }
-
 .menu-btn { display: none; background: transparent; border: 1px solid rgba(255,255,255,0.4); color: #fff; border-radius: 6px; padding: 0.3rem 0.5rem; }
 
 .skeleton { height: 1rem; background: linear-gradient(90deg, #e2e8f0, #f8fafc, #e2e8f0); border-radius: 4px; }

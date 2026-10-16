@@ -7,7 +7,9 @@ import type {
   OrganizationDto,
   OrgPayloadDto,
   RfpCreditDto,
+  ScheduleActivityDto,
 } from '@/api';
+import type { ScheduleActivity } from '@/types';
 
 /** API DTOs with plain defaults, for tests. Pass only the fields a test cares about. */
 
@@ -162,4 +164,57 @@ export function orgPayload(over: Partial<OrgPayloadDto> = {}): OrgPayloadDto {
 
 export function meDto(over: Partial<MeDto> = {}): MeDto {
   return { id: 'user-1', email: 'dana@northbridge.example', name: 'Dana Reyes', phone: null, orgId: 'org-1', ...over };
+}
+
+export function scheduleActivityDto(over: Partial<ScheduleActivityDto> = {}): ScheduleActivityDto {
+  return {
+    ...base,
+    bidId: 'bid-1',
+    id: 'act-1',
+    origin: 'user',
+    kind: 'writing',
+    reviewColor: null,
+    label: 'First draft writing',
+    phase: null,
+    startDate: '2026-11-16T00:00:00.000Z',
+    endDate: '2026-11-18T00:00:00.000Z',
+    time: null,
+    owner: null,
+    artifact: null,
+    note: null,
+    status: null,
+    locked: false,
+    documentId: null,
+    sourcePage: null,
+    sourcePageEnd: null,
+    sourceQuote: null,
+    quoteVerified: false,
+    amendmentNo: 0,
+    supersedeStatus: null,
+    supersededByRowId: null,
+    changedByAmendment: null,
+    confidence: null,
+    flags: null,
+    ...over,
+  };
+}
+
+/** The UI-contract shape of a schedule activity (see types/schedule.ts). */
+export function scheduleActivity(over: Partial<ScheduleActivity> = {}): ScheduleActivity {
+  return {
+    id: 'act-1',
+    label: 'First draft writing',
+    kind: 'writing',
+    reviewColor: null,
+    start: '2026-11-16',
+    end: '2026-11-18',
+    owner: null,
+    locked: false,
+    origin: 'user',
+    sourcePage: null,
+    sourcePageEnd: null,
+    sourceQuote: null,
+    amendment: { kind: 'original' },
+    ...over,
+  };
 }
