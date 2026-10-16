@@ -184,6 +184,7 @@ export function scheduleActivityDto(over: Partial<ScheduleActivityDto> = {}): Sc
     note: null,
     status: null,
     locked: false,
+    dateKey: 'other',
     documentId: null,
     sourcePage: null,
     sourcePageEnd: null,
