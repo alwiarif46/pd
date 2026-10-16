@@ -14,6 +14,7 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    allowedHosts: ['localhost', 'sb-3wqpb1x4cfpy.vercel.run', '.vercel.app', '.vusercontent.net'],
     proxy: {
       '/api': {
         target: 'http://localhost:3001',
