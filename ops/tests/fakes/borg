@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# fake borg for the backup/restore/drill tests. Logs argv (never stdin, never the passphrase) to $FAKE_CALLS and the
+# NAMES of BORG_* variables to $FAKE_CALLS.env. A passphrase in the environment (BORG_PASSPHRASE) is a test failure:
+# the scripts must use BORG_PASSCOMMAND.
+#
+# It keeps a small archive store in $FAKE_STATE/borg-archives (one file per archive holding pd.dump, plus .order with
+# the names in creation order), so the tests see what a real repository would hold afterwards:
+#   create ::NAME -            (stdin mode) commits WHATEVER arrives, even an empty stream, and exits 0, like real borg:
+#                              it cannot know that the producer of the pipe failed
+#   create --content-from-command ::NAME -- CMD...
+#                              runs CMD; a non-zero exit aborts the archive (exit 2, nothing committed), like borg 1.2.
+#                              FAKE_BORG_CC_LEAVE=1: a borg that leaves NAME.checkpoint behind anyway
+#   list --short               the stored names in creation order (FAKE_BORG_LIST overrides)
+#   extract --stdout ::NAME pd.dump   the stored content; an unknown archive exits 2
+#   delete ::NAME              removes it
+#   FAKE_BORG_RACE=1           create finds NAME just committed by "another run" and fails with "already exists"
+# FAKE_BORG_EXIT forces the exit status of every call.
+printf 'borg %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
+env | grep -o '^BORG_[A-Z_]*' | sort | tr '\n' ' ' >>"${FAKE_CALLS:-/dev/null}.env"; echo >>"${FAKE_CALLS:-/dev/null}.env"
+store="${FAKE_STATE:-/nonexistent}/borg-archives"
+fname() { printf '%s/%s' "$store" "$(printf '%s' "$1" | tr ':/' '__')"; }  # ':' is not allowed in Windows file names
+commit() { # commit NAME < content
+  mkdir -p "$store"; cat >"$(fname "$1")"; printf '%s\n' "$1" >>"$store/.order"
+}
+sub=""
+for a in "$@"; do case "$a" in -*) ;; *) sub="$a"; break ;; esac; done
+rc=0
+case "$sub" in
+  create)
+    cc=0 name="" cmd=() seen_dd=0
+    for a in "$@"; do
+      if (( seen_dd )); then cmd+=("$a"); continue; fi
+      case "$a" in
+        --content-from-command) cc=1 ;;
+        --) seen_dd=1 ;;
+        ::*) name="${a#::}" ;;
+      esac
+    done
+    [[ -n "$name" ]] || { echo "fake borg: no archive name" >&2; exit 2; }
+    # FAKE_BORG_RACE=1: another run committed NAME between the caller's pre-check and this create
+    [[ "${FAKE_BORG_RACE:-0}" == 1 ]] && printf 'PGDMP other run\nPGDMP-END\n' | commit "$name"
+    if grep -qxF -- "$name" "$store/.order" 2>/dev/null; then echo "Archive $name already exists" >&2; exit 2; fi
+    mkdir -p "$store"; tmp="$store/.incoming"
+    if (( cc )); then
+      "${cmd[@]}" >"$tmp"; crc=$?
+      wc -c <"$tmp" | tr -d ' ' >"${FAKE_STATE:-/nonexistent}/borg-create-bytes"
+      if (( crc != 0 )); then
+        echo "Command '${cmd[0]}' exited with status $crc" >&2
+        [[ "${FAKE_BORG_CC_LEAVE:-0}" == 1 ]] && commit "$name.checkpoint" <"$tmp"
+        rm -f "$tmp"; exit 2
+      fi
+    else
+      cat >"$tmp"
+      wc -c <"$tmp" | tr -d ' ' >"${FAKE_STATE:-/nonexistent}/borg-create-bytes"
+    fi
+    commit "$name" <"$tmp"; rm -f "$tmp"
+    echo "Archive created" ;;
+  init) echo "Repository initialised" ;;
+  key) [[ "${*: -1}" != :* ]] && printf 'FAKE BORG KEY EXPORT\n' >"${*: -1}" ;;
+  list)
+    if [[ -n "${FAKE_BORG_LIST+x}" ]]; then printf '%s\n' "$FAKE_BORG_LIST"
+    elif [[ -f "$store/.order" ]]; then cat "$store/.order"
+    fi ;;
+  extract)
+    name=""; for a in "$@"; do case "$a" in ::*) name="${a#::}" ;; esac; done
+    f="$(fname "$name")"
+    if [[ -f "$f" ]]; then cat "$f"; else echo "Archive $name does not exist" >&2; rc=2; fi ;;
+  delete)
+    name=""; for a in "$@"; do case "$a" in ::*) name="${a#::}" ;; esac; done
+    f="$(fname "$name")"
+    if [[ -f "$f" ]]; then
+      rm -f "$f"; { grep -vxF -- "$name" "$store/.order" || true; } >"$store/.order.new"; mv "$store/.order.new" "$store/.order"
+    else echo "Archive $name does not exist" >&2; rc=2; fi ;;
+  prune | compact | check | info) : ;;
+esac
+exit "${FAKE_BORG_EXIT:-$rc}"

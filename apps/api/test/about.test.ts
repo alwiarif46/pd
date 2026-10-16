@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, inject, it } from 'vitest';
 import { closeDb, getPool } from '@pd/core';
 import { activeModel } from '@pd/ai';
 
@@ -18,6 +18,17 @@ describe.skipIf(Boolean(unavailable))('GET /api/about/processing', () => {
   afterAll(async () => {
     await app?.close();
     await closeDb();
+  });
+
+  afterEach(() => {
+    delete process.env.PD_HOSTING_SUBPROCESSOR;
+  });
+
+  it('names the hosting provider first when the deployment sets one', async () => {
+    process.env.PD_HOSTING_SUBPROCESSOR = 'Hetzner Online GmbH (hosting)';
+    const body = (await app.inject({ method: 'GET', url: '/api/about/processing' })).json<{ subprocessors: string[] }>();
+    expect(body.subprocessors[0]).toBe('Hetzner Online GmbH (hosting)');
+    expect(body.subprocessors).toContain('Stripe');
   });
 
   it('answers without a session', async () => {

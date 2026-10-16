@@ -248,7 +248,7 @@ export function Privacy() {
   return (
     <main className="page card stack">
       <h1>Privacy</h1>
-      <p>Proposal files are processed by the AI provider configured for this installation. The Organization screen names the model, the provider, and the subprocessors (DeepInfra, Anthropic, Telnyx, and Stripe).</p>
+      <p>Proposal files are processed by the AI provider configured for this installation. The Organization screen names the model, the provider, and the subprocessors, including the hosting provider and, when configured, the off-site backup provider.</p>
       <p>A published privacy-policy document is not part of this build. Email and SMS codes are written to the server log until those providers are connected.</p>
     </main>
   );

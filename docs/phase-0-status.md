@@ -14,7 +14,7 @@
 
 ## Still external
 
-- OVH VPS, Cloudflare, and `https://pd.shaavir.com/health`
+- The server (provider set in `config/tenant.toml`), Cloudflare, and `https://pd.shaavir.com/health`
 - Telnyx 10DLC or toll-free verification
 - Written zero-retention terms from DeepInfra
 - The real golden set of 5 solicitations
@@ -29,7 +29,7 @@
 
 From the plan, Phase 0 requires:
 
-- [x] OVH US VPS (the account is in place), Ubuntu, firewall, Docker, nginx, Cloudflare DNS for the subdomain. Root and SSH: Amaan only until decided (01 s1).
+- [ ] Server at the provider set in `config/tenant.toml` (pluggable hosting; provider OPEN, H-02; scripts built, no server yet), Ubuntu, firewall, Docker, nginx, Cloudflare DNS for the subdomain. Root and SSH: Amaan only until decided (01 s1).
 - [x] Compose layout with the `sandbox` service and its host runner (01 s2.1). clamd limits at 300 MB or more and `ConcurrentDatabaseReload no`.
 - [x] Database roles `pd_owner`, `pd_app`, and `pd_system` (02 s4).
 - [x] GitHub repository, CI, container registry, staging environment (a separate small VPS if chosen; 🟨 **OPEN** in 01 s6).
@@ -93,8 +93,8 @@ From the plan, Phase 0 requires:
 
 ## Pending Tasks (External/Manual) ⏳
 
-### 1. OVH US VPS Provisioning
-- [ ] Provision OVH US VPS (8 GB RAM, 4 vCores)
+### 1. Server provisioning
+- [ ] Provision the server (8 GB RAM, 4 vCores) with `infra/provision.sh` or by hand for the `ssh` adapter (H-02)
 - [ ] Choose US location (Vint Hill, Virginia or Hillsboro, Oregon)
 - [ ] Run setup-server.sh on the server
 - [ ] Configure Cloudflare DNS for pd.shaavir.com
@@ -147,7 +147,7 @@ From 00-overview.md, these are still open:
 - 🟨 Product name and subdomain (working: pd.shaavir.com)
 - 🟨 Prices for Starter and Growth (provisional until Phase 6)
 - 🟨 Free email domain block plus one free organization per company domain
-- 🟨 Exact OVH US VPS plan name and price
+- 🟨 Exact server plan name and price at the chosen provider
 - 🟨 Transactional email provider
 - 🟨 Off-site backup target
 - 🟨 Error tracking service (must scrub request bodies)
@@ -171,7 +171,7 @@ The plan 05 screens live in `apps/web`: sign-up, bids, the bid workspace, and th
 
 ### Before Production
 1. Complete the pending external tasks above
-2. Run deployment on the OVH VPS
+2. Run deployment on the server
 3. Verify the health endpoint through Cloudflare
 4. Confirm DeepInfra terms or limit the golden set
 5. Assemble the golden set documents and run the live benchmark
@@ -179,6 +179,6 @@ The plan 05 screens live in `apps/web`: sign-up, bids, the bid workspace, and th
 ### Decision Points
 1. Staging VPS: separate small VPS or skip?
 2. Product name and subdomain: finalize?
-3. Archive provider: OVH Object Storage or Backblaze B2?
+3. Archive provider: the hosting provider's object storage or Backblaze B2?
 4. Email provider: choose one
 5. Error tracking: choose one that scrubs request bodies

@@ -1,0 +1,15 @@
+# /etc/pd/rclone.conf - rendered by ops/backup/rclone-setup.sh from ops/backup/rclone.conf.template.
+# Contains NO secrets: rclone reads the B2 key and the obscured crypt passwords from /etc/pd/rclone.env as
+# RCLONE_CONFIG_B2_ACCOUNT, RCLONE_CONFIG_B2_KEY, RCLONE_CONFIG_B2CRYPT_PASSWORD and
+# RCLONE_CONFIG_B2CRYPT_PASSWORD2 (rclone's per-remote environment variables).
+# Do not edit by hand; change config/tenant.toml ([backup] bucket, crypt_prefix) and re-run the script.
+
+[b2]
+type = b2
+hard_delete = false
+
+[b2crypt]
+type = crypt
+remote = b2:{{BUCKET}}/{{CRYPT_PREFIX}}
+filename_encryption = standard
+directory_name_encryption = true

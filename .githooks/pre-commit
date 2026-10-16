@@ -1,0 +1,13 @@
+#!/bin/sh
+# Pre-commit secret scan (00-README §9 rule 3). Blocks the commit if a staged file looks like it holds a secret.
+# Enable once per clone: git config core.hooksPath .githooks
+PY=""
+for c in python3 python py; do
+  # Skip the Windows Store alias stubs, which exist but do not run.
+  if command -v "$c" >/dev/null 2>&1 && "$c" -c "import sys" >/dev/null 2>&1; then PY="$c"; break; fi
+done
+if [ -z "$PY" ]; then
+  echo "pre-commit: python not found; cannot run secret scan" >&2
+  exit 1
+fi
+exec "$PY" "$(git rev-parse --show-toplevel)/.githooks/secret_scan.py" --staged

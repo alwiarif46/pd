@@ -58,7 +58,7 @@ Terms of use and the upload screen state:
 - Terms of Service
 - Privacy Policy
 - Data processing terms for organizations
-- Subprocessor list: OVHcloud US (hosting), DeepInfra (AI), Anthropic (AI, if used), Stripe, Telnyx, email provider, archive storage provider (🟨 **OPEN**, 01 s4), off-site backup target, error tracking service
+- Subprocessor list: the hosting provider named by `[infra] provider` (OVHcloud US, Hetzner Online, or the company behind an `ssh`-adapter server), the off-site backup target (Backblaze B2, proposed), DeepInfra (AI), Anthropic (AI, if used), Stripe, Telnyx, email provider, archive storage provider (🟨 **OPEN**, 01 s4), error tracking service
 
 The Terms and Privacy Policy disclose:
 - The AI model and provider in use, and that a China-origin model may process documents.

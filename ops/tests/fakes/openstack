@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# fake openstack CLI for the offline tests: see openstack_fake.py next to this file.
+exec "${FAKE_PY:-python3}" "$(dirname "${BASH_SOURCE[0]}")/openstack_fake.py" "$@"

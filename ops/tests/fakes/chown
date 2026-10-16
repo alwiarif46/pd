@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# fake chown (tests are not root): logs, changes nothing
+printf 'chown %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
+exit 0

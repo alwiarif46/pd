@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# fake docker for the ops tests: logs argv to $FAKE_CALLS (and the stdin size of exec/run), answers the few
+# queries the scripts make from FAKE_* env. The real Docker is never reached.
+#   pg_dump                 prints $FAKE_PGDUMP_OUT (default: a "custom-format" stream that starts with PGDMP and
+#                           ends with the line PGDMP-END) and exits $FAKE_PGDUMP_EXIT (default $FAKE_COMPOSE_EXIT, 0)
+#   pg_restore --file=/dev/null   the validation: reads stdin, exit 0 only for PGDMP...PGDMP-END (a truncated or empty
+#                           stream fails, like a real pg_restore that runs out of input)
+#   pg_restore -d ...       logs the stdin size, exits $FAKE_PGRESTORE_EXIT
+#   volume ls -q --filter label=com.docker.compose.volume=V   the names in $FAKE_OLD_VOLUMES that end in _V
+#                           (FAKE_OLD_VOLUME=1 is the same as FAKE_OLD_VOLUMES=infra_postgres_data)
+#   ps -a -q --filter label=com.docker.compose.service=S      $FAKE_CONTAINERS_<S> (ids)
+#   inspect --format ... ID $FAKE_MOUNTS_<ID>, e.g. "bind:/data/files " (Type:Destination per mount)
+printf 'docker %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
+printf 'env PD_IMAGE_PREFIX=%s PD_IMAGE_TAG=%s PD_HOSTING_SUBPROCESSOR=%s PD_BACKUP_SUBPROCESSOR=%s PD_DATA_ROOT=%s\n' "${PD_IMAGE_PREFIX:-}" "${PD_IMAGE_TAG:-}" "${PD_HOSTING_SUBPROCESSOR:-}" "${PD_BACKUP_SUBPROCESSOR:-}" "${PD_DATA_ROOT:-}" >>"${FAKE_CALLS:-/dev/null}.env"
+args=" $* "
+pg_dump_out() {
+  if [[ -n "${FAKE_PGDUMP_OUT+x}" ]]; then printf '%s' "$FAKE_PGDUMP_OUT"; else printf 'PGDMP fake custom-format dump\nPGDMP-END\n'; fi
+  exit "${FAKE_PGDUMP_EXIT:-${FAKE_COMPOSE_EXIT:-0}}"
+}
+pg_restore_validate() {
+  local data
+  data="$(cat; printf x)"; data="${data%x}"
+  printf 'docker-validate-bytes %s\n' "${#data}" >>"${FAKE_CALLS:-/dev/null}"
+  [[ "$data" == PGDMP* && "$data" == *$'\nPGDMP-END\n' ]] && exit 0
+  echo "pg_restore: error: could not read input file: end of file" >&2; exit 1
+}
+case "$1" in
+  compose)
+    case "$args" in
+      *" exec "*)
+        case "$args" in
+          *" pg_dump "*) pg_dump_out ;;
+          *" pg_restore --file=/dev/null "*) pg_restore_validate ;;
+          *" pg_restore "*) bytes="$(wc -c)"; printf 'docker-stdin-bytes %s\n' "$bytes" >>"${FAKE_CALLS:-/dev/null}"; exit "${FAKE_PGRESTORE_EXIT:-${FAKE_COMPOSE_EXIT:-0}}" ;;
+          *" pg_isready "*) : ;;
+          *) : ;;
+        esac ;;
+    esac
+    exit "${FAKE_COMPOSE_EXIT:-0}" ;;
+  volume)
+    if [[ "$2" == ls ]]; then
+      want=""; for a in "$@"; do case "$a" in label=com.docker.compose.volume=*) want="${a#label=com.docker.compose.volume=}" ;; esac; done
+      vols="${FAKE_OLD_VOLUMES:-}"; [[ "${FAKE_OLD_VOLUME:-0}" == 1 ]] && vols="$vols infra_postgres_data"
+      for v in $vols; do [[ -z "$want" || "$v" == *_"$want" ]] && echo "$v"; done
+      exit 0
+    fi
+    [[ "$2" == inspect ]] && exit 1
+    exit 0 ;;
+  ps)
+    svc=""; for a in "$@"; do case "$a" in label=com.docker.compose.service=*) svc="${a#label=com.docker.compose.service=}" ;; esac; done
+    v="FAKE_CONTAINERS_${svc}"; [[ -n "$svc" && -n "${!v:-}" ]] && printf '%s\n' ${!v}
+    exit 0 ;;
+  inspect)
+    id="${*: -1}"; v="FAKE_MOUNTS_${id}"; printf '%s\n' "${!v:-}"
+    exit 0 ;;
+  run) echo "fakecontainerid0123456789"; exit "${FAKE_DOCKER_RUN_EXIT:-0}" ;;
+  exec)
+    case "$args" in
+      *" pg_isready "*) exit 0 ;;
+      *" pg_dump "*) pg_dump_out ;;
+      *" pg_restore --file=/dev/null "*) pg_restore_validate ;;
+      *" psql "*)
+        case "$args" in
+          *"__drizzle_migrations"*) echo "${FAKE_MIGRATIONS:-3}" ;;
+          *"FROM pg_roles WHERE rolname IN"*)
+            # FAKE_ROLES_<container> overrides one side (container id = $3 in `docker exec -i ID psql ...`)
+            rv="FAKE_ROLES_${3//[^A-Za-z0-9_]/_}"
+            echo "${!rv-pd_app:login=t,super=f,bypassrls=f,createdb=f,createrole=f,inherit=t,replication=f pd_system:login=f,super=f,bypassrls=f,createdb=f,createrole=f,inherit=t,replication=f}" ;;
+          *"organizations"*) echo "${FAKE_ORGS:-2}" ;;
+          *) : ;;
+        esac
+        cat >/dev/null 2>&1 || true ;;
+      *" pg_restore "*) cat >/dev/null; exit "${FAKE_PGRESTORE_EXIT:-0}" ;;
+    esac
+    exit 0 ;;
+  rm | stop | start | pull | build | logs | image | cp) exit 0 ;;
+esac
+exit 0

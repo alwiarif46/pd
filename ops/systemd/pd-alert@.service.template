@@ -1,0 +1,8 @@
+# /etc/systemd/system/pd-alert@.service - rendered by ops/install.sh. Started by OnFailure= of pd-backup.service and
+# pd-backup-check.service with the failed unit's name as the instance (%i).
+[Unit]
+Description=PD alert: %i failed
+
+[Service]
+Type=oneshot
+ExecStart={{PROJECT_DIR}}/ops/backup/alert.sh %i

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# fake rclone: logs argv (never stdin) to $FAKE_CALLS; behaviour from FAKE_* env. The real remote is never reached.
+printf 'rclone %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
+for a in "$@"; do [[ "$a" == "--b2-hard-delete=true" || "$a" == "--b2-hard-delete" ]] && { echo "FAKE: hard delete requested" >&2; exit 99; }; done
+sub=""; skip=0
+for a in "$@"; do
+  if (( skip )); then skip=0; continue; fi
+  case "$a" in --config) skip=1 ;; -*) ;; *) sub="$a"; break ;; esac
+done
+case "$sub" in
+  version) echo "rclone v${FAKE_RCLONE_VERSION:-1.68.0}" ;;
+  obscure) IFS= read -r line; printf 'obsc-%s\n' "$(printf '%s' "$line" | base64 | tr -d '=\n' | tr '+/' '-_')" ;;
+  size) echo "{\"count\":${FAKE_REMOTE_COUNT:-0},\"bytes\":${FAKE_REMOTE_BYTES:-0}}" ;;
+  lsf) [[ -n "${FAKE_LSF:-}" ]] && printf '%s\n' "$FAKE_LSF" ;;
+  lsjson) printf '%s\n' "${FAKE_LSJSON:-[]}" ;;
+  copy) [[ -n "${FAKE_COPY_DEST_FILES:-}" ]] && { dest="${*: -1}"; mkdir -p "$dest/borg"; echo fake >"$dest/borg/config"; } ;;
+  # cat b2crypt:pd/last-offsite-ok: $FAKE_REMOTE_MARKER when set; otherwise "directory not found" (exit $FAKE_CAT_EXIT, 3)
+  cat) if [[ -n "${FAKE_REMOTE_MARKER+x}" ]]; then printf '%s' "$FAKE_REMOTE_MARKER"; rc=0; else echo "directory not found" >&2; rc="${FAKE_CAT_EXIT:-3}"; fi ;;
+  *) : ;;
+esac
+# record which secrets the process could see (names only) to prove env delivery
+env | grep -o '^RCLONE_CONFIG_[A-Z0-9_]*' | sort | tr '\n' ' ' >>"${FAKE_CALLS:-/dev/null}.env"; echo >>"${FAKE_CALLS:-/dev/null}.env"
+exit "${rc:-0}"

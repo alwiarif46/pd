@@ -1,0 +1,11 @@
+# /etc/systemd/system/pd-backup.timer - rendered by ops/install.sh. RPO 1 h (plan 01 s4).
+[Unit]
+Description=PD hourly database backup
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

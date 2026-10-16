@@ -1,15 +1,20 @@
-version: '3.9'
-
 # Build contexts are the repo root (the Dockerfiles need the workspace lockfile and packages).
 # Run from the repo root with the env file, e.g.:
 #   docker compose --env-file .env -f infra/docker-compose.yml build
+#
+# Data placement (Drive D-147 layout): Postgres, Redis and the uploaded files live on the LUKS volume mounted at
+# /mnt/pddata (infra/luks/README.md), NOT in Docker named volumes on the unencrypted root disk. PD_DATA_ROOT
+# overrides the mount point for tests only. deploy.sh refuses to start unless /mnt/pddata is mounted from the mapper.
+# Images: PD_IMAGE_PREFIX / PD_IMAGE_TAG select pre-built registry images (deploy.sh --pull-tag); the defaults
+# (pd-<app>:latest) are the locally built ones, as before.
+# The host sandbox runner needs DATA_DIR=/mnt/pddata/files (the same files, seen from the host).
 
 services:
   web:
     build:
       context: ..
       dockerfile: apps/web/Dockerfile
-    image: pd-web:latest
+    image: ${PD_IMAGE_PREFIX:-pd-}web:${PD_IMAGE_TAG:-latest}
     restart: unless-stopped
     # Static build served by nginx, not a running container
 
@@ -18,7 +23,7 @@ services:
       context: ..
       dockerfile: apps/api/Dockerfile
       target: runtime
-    image: pd-api:latest
+    image: ${PD_IMAGE_PREFIX:-pd-}api:${PD_IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       - postgres
@@ -28,6 +33,12 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - CORS_ORIGIN=https://pd.shaavir.com
+      - DATA_DIR=/data/files
+      # Named in the privacy statement (GET /api/about/processing). deploy.sh sets both from the tenant file.
+      - PD_HOSTING_SUBPROCESSOR=${PD_HOSTING_SUBPROCESSOR:-}
+      - PD_BACKUP_SUBPROCESSOR=${PD_BACKUP_SUBPROCESSOR:-}
+    volumes:
+      - ${PD_DATA_ROOT:-/mnt/pddata}/files:/data/files
     deploy:
       resources:
         limits:
@@ -42,7 +53,7 @@ services:
       context: ..
       dockerfile: apps/api/Dockerfile
       target: migrate
-    image: pd-migrate:latest
+    image: ${PD_IMAGE_PREFIX:-pd-}migrate:${PD_IMAGE_TAG:-latest}
     depends_on:
       - postgres
     environment:
@@ -52,7 +63,7 @@ services:
     build:
       context: ..
       dockerfile: apps/worker/Dockerfile
-    image: pd-worker:latest
+    image: ${PD_IMAGE_PREFIX:-pd-}worker:${PD_IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       - postgres
@@ -62,6 +73,9 @@ services:
       - DATABASE_URL=postgresql://pd_app:${PD_APP_PASSWORD}@postgres:5432/pd
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - DATA_DIR=/data/files
+    volumes:
+      - ${PD_DATA_ROOT:-/mnt/pddata}/files:/data/files
     deploy:
       resources:
         limits:
@@ -72,7 +86,7 @@ services:
     build:
       context: ..
       dockerfile: apps/sandbox/Dockerfile
-    image: pd-sandbox:latest
+    image: ${PD_IMAGE_PREFIX:-pd-}sandbox:${PD_IMAGE_TAG:-latest}
     profiles: ['tools'] # started on demand by the sandbox runner (docker compose run), not by up
     network_mode: none
     deploy:
@@ -85,7 +99,7 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ${PD_DATA_ROOT:-/mnt/pddata}/postgres:/var/lib/postgresql/data
     environment:
       - POSTGRES_DB=pd
       - POSTGRES_USER=pd_owner
@@ -106,7 +120,7 @@ services:
     restart: unless-stopped
     command: redis-server --appendonly yes
     volumes:
-      - redis_data:/data
+      - ${PD_DATA_ROOT:-/mnt/pddata}/redis:/data
     deploy:
       resources:
         limits:
@@ -125,7 +139,6 @@ services:
           cpus: '0.25'
           memory: 1.5G
 
+# Only the ClamAV signatures stay in a named volume: they are downloaded, not customer data.
 volumes:
-  postgres_data:
-  redis_data:
   clamav_data:

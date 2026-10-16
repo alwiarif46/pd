@@ -1,0 +1,11 @@
+# /etc/systemd/system/pd-backup-check.timer - rendered by ops/install.sh. Every 30 minutes; independent of
+# pd-backup.timer, so a disabled or stuck backup timer is noticed too.
+[Unit]
+Description=PD backup age check
+
+[Timer]
+OnCalendar=*:15,45
+Persistent=true
+
+[Install]
+WantedBy=timers.target
