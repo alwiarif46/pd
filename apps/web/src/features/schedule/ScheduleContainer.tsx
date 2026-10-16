@@ -433,9 +433,9 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
   const onOpenDateChangeSource = () => {
     if (!amendmentDto || busyRef.current.has(bidId)) return;
     putOffAmendment();
-    const doc = shell.docs.find(
-      (d) => d.kind === 'amendment' && d.amendmentNo === amendmentDto.amendmentNo && d.liveStatus !== 'deleted',
-    );
+    // PendingDateChangeDto has no documentId: find the amendment by its number (none without one).
+    const no = amendmentDto.amendmentNo;
+    const doc = no === null ? undefined : shell.docs.find((d) => d.kind === 'amendment' && d.amendmentNo === no && d.liveStatus !== 'deleted');
     if (!doc || amendmentDto.sourcePage === null) {
       toast.info('No source page for this change.');
       return;

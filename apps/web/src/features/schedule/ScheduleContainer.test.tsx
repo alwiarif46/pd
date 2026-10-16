@@ -762,4 +762,22 @@ describe('ScheduleContainer: amendment proposals', () => {
     expect(toast.info).toHaveBeenCalledWith('No source page for this row.');
     expect(document.querySelector('[aria-label="Source viewer"]')).toBeNull();
   });
+
+  it('does not guess the source document of an amendment without a number', async () => {
+    mockFetch();
+    const numberless = docDto({ id: 'doc-x', kind: 'amendment', amendmentNo: null });
+    const api = mockApi([userRow], {
+      getTab: vi.fn(async () => ({
+        activities: [userRow],
+        workdaysOnly: true,
+        proposals: [],
+        pendingDateChange: { amendmentId: 'amd-9', amendmentNo: null, previousDue: '2026-11-25', nextDue: '2026-12-02', sourcePage: 2, sourceQuote: null },
+      })) as unknown as ScheduleApi['getTab'],
+    });
+    const { user } = renderContainer({ api, shell: { docs: [docDto(), numberless] } });
+    const dialog = await screen.findByRole('dialog', { name: 'An amendment moved the due date' });
+    await user.click(within(dialog).getByRole('button', { name: 'Open source for the amendment, page 2' }));
+    expect(toast.info).toHaveBeenCalledWith('No source page for this change.');
+    expect(document.querySelector('[aria-label="Source viewer"]')).toBeNull();
+  });
 });
