@@ -37,3 +37,14 @@
 
 ## Plans
 - Product and build plans are in `docs/plans/`, the only copy (`plans/` holds just a pointer). Read `00-overview.md`, `05-ui.md`, and `09-ui-workflow.md` before UI work.
+
+## Tools (BUILD-PLAN s3)
+Verified in the cloud session on 17 Oct 2026. Commands that differ from BUILD-PLAN s3 are marked.
+- **Plugins:** `claude plugin marketplace add anthropics/claude-code` (name `claude-code-plugins`) and `obra/superpowers-marketplace` work. Install with `claude plugin install <name>@<marketplace> --scope project`. Differs: `superpowers` is not in `claude-plugins-official`; use `superpowers@superpowers-marketplace`. `.claude/settings.json` lists `extraKnownMarketplaces` and `enabledPlugins`.
+- **Agents:** `.claude/agents/` holds architect (opus), builder (sonnet), debugger (opus), reviewer (opus), fable-reviewer. The alias `model: fable` loads; no full id needed.
+- **Session hook:** `.claude/hooks/session-start.sh` prints a tool check line. Registering it in `settings.json` is an owner step (HUMAN-TODO H-12).
+- **rtk:** not installed. The install script URL 404s and the rtk-ai repo is outside the session's GitHub scope. Skip it.
+- **Context7:** `.mcp.json` runs `@upstash/context7-mcp@4.4.2` through npx (pinned; bump on purpose). Approve the project server when asked.
+- **Playwright:** `@playwright/test` is a root dev dependency. `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers` is preset with a matching Chromium, so a plain `chromium.launch()` works. Do not run `playwright install` in the session; CI installs it.
+- **Docker:** the CLI exists but the daemon does not run in the session. Use the native fallback (embedded Postgres, `redis-server`, test doubles). CI runs Compose.
+- **GitHub:** `gh` GraphQL commands (`gh pr view/create/merge`) fail. `gh api` (REST) and `gh run view` work. Use the GitHub MCP tools to create, review and merge PRs.
