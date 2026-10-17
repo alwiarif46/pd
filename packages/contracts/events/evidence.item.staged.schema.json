@@ -4,18 +4,21 @@
   "title": "evidence.item.staged",
   "x-owner": "evidence",
   "x-stream": "e2e.evidence.item.staged",
+  "x-schema-version": "1.0",
   "type": "object",
   "allOf": [
     {
       "$ref": "https://contracts.e2e.local/events/_envelope"
     }
   ],
+  "unevaluatedProperties": false,
   "properties": {
     "type": {
       "const": "evidence.item.staged"
     },
     "schema_version": {
-      "const": "1.0"
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
     },
     "payload": {
       "type": "object",

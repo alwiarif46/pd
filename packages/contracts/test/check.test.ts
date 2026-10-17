@@ -28,6 +28,63 @@ function runCheck(dir: string, env: Record<string, string> = {}) {
   return { code: r.status, out: `${r.stdout}\n${r.stderr}` };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Doc = Record<string, any>;
+
+function runGenerate(dir: string) {
+  const r = spawnSync(join(PACKAGE_ROOT, 'node_modules', '.bin', 'tsx'), [join(dir, 'scripts', 'generate.ts')], { cwd: dir, encoding: 'utf8' });
+  expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
+}
+
+function editJson(file: string, fn: (doc: Doc) => void): void {
+  const doc = JSON.parse(readFileSync(file, 'utf8')) as Doc;
+  fn(doc);
+  writeFileSync(file, JSON.stringify(doc, null, 2) + '\n');
+}
+
+const TS_ROUTES = (paths: string[]) =>
+  `export const routes: ReadonlyArray<{ method: string; path: string }> = [${paths.map((p) => `{ method: 'GET', path: '${p}' }`).join(', ')}];\n`;
+
+/** A copy with identity as a skeleton of the given language, plus a fake repo root. */
+function skeletonCopy(language: 'ts' | 'py'): { dir: string; repo: string; folder: string } {
+  const dir = copyPackage();
+  const svcFile = join(dir, 'services.json');
+  let folder = '';
+  editJson(svcFile, (doc) => {
+    const services = doc as unknown as Doc[];
+    const s = services.find((x) => x.id === 'identity')!;
+    s.skeleton = true;
+    s.language = language;
+    folder = s.folder;
+  });
+  const repo = mkdtempSync(join(dir, 'repo-'));
+  mkdirSync(join(repo, folder, 'src'), { recursive: true });
+  return { dir, repo, folder: join(repo, folder) };
+}
+
+function addUsersPath(dir: string): void {
+  const file = join(dir, 'openapi', 'identity.yaml');
+  const text = readFileSync(file, 'utf8').replace(
+    'components:\n',
+    `  /users/{id}:
+    get:
+      operationId: getUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The user.
+components:
+`,
+  );
+  writeFileSync(file, text);
+  runGenerate(dir);
+}
+
 describe('contracts:check', () => {
   it('passes on the repo', () => {
     const r = runCheck(PACKAGE_ROOT);
@@ -65,7 +122,7 @@ describe('contracts:check', () => {
     const r = runCheck(dir);
     expect(r.code).not.toBe(0);
     expect(r.out).toContain('info.version must be semver');
-    expect(r.out).toContain('no /healthz path');
+    expect(r.out).toContain('no GET /healthz');
   });
 
   it('compares skeleton routes with the OpenAPI paths', () => {
@@ -85,5 +142,197 @@ describe('contracts:check', () => {
     const r = runCheck(dir, { CONTRACTS_REPO_ROOT: repo });
     expect(r.code).not.toBe(0);
     expect(r.out).toContain('GET /users/{id} is in');
+  });
+  it('fails when an event drops its envelope allOf', () => {
+    const dir = copyPackage();
+    editJson(join(dir, 'events', 'render.done.schema.json'), (d) => {
+      delete d.allOf;
+    });
+    const r = runCheck(dir);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('allOf');
+  });
+
+  it('fails when an event allOf holds more than the envelope ref', () => {
+    const dir = copyPackage();
+    editJson(join(dir, 'events', 'render.done.schema.json'), (d) => {
+      d.allOf.push({});
+    });
+    const r = runCheck(dir);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('allOf');
+  });
+
+  it('fails when the envelope drops tenant_id', () => {
+    const dir = copyPackage();
+    editJson(join(dir, 'events', '_envelope.schema.json'), (d) => {
+      d.required = d.required.filter((f: string) => f !== 'tenant_id');
+    });
+    runGenerate(dir);
+    const r = runCheck(dir);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('envelope');
+    expect(r.out).toContain('tenant_id');
+  });
+
+  it('fails when an event drops unevaluatedProperties false', () => {
+    const dir = copyPackage();
+    editJson(join(dir, 'events', 'render.done.schema.json'), (d) => {
+      delete d.unevaluatedProperties;
+    });
+    const r = runCheck(dir);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('unevaluatedProperties');
+  });
+
+  it('fails on a schema_version pattern that does not match x-schema-version', () => {
+    const dir = copyPackage();
+    editJson(join(dir, 'events', 'render.done.schema.json'), (d) => {
+      d['x-schema-version'] = '2.0';
+    });
+    const r = runCheck(dir);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('schema_version');
+  });
+
+  it('fails on a stray file in generated/', () => {
+    const dir = copyPackage();
+    writeFileSync(join(dir, 'generated', 'openapi', 'old.txt'), 'x');
+    mkdirSync(join(dir, 'generated', 'extra'), { recursive: true });
+    writeFileSync(join(dir, 'generated', 'extra', 'a.d.ts'), 'x');
+    const r = runCheck(dir);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('generated/openapi/old.txt');
+    expect(r.out).toContain('generated/extra/a.d.ts');
+  });
+
+  it('fails on a bad event name shape', () => {
+    const dir = copyPackage();
+    writeFileSync(join(dir, 'events', 'Bad_Name.schema.json'), '{}');
+    const r = runCheck(dir);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('Bad_Name');
+  });
+
+  it('fails when /healthz has no get', () => {
+    const dir = copyPackage();
+    const file = join(dir, 'openapi', 'billing.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('    get:\n      operationId: healthz', '    post:\n      operationId: healthz'));
+    const r = runCheck(dir);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('GET /healthz');
+  });
+
+  describe('previous major event schemas', () => {
+    function withV1(): string {
+      const dir = copyPackage();
+      const base = join(dir, 'events', 'render.done.schema.json');
+      const old = JSON.parse(readFileSync(base, 'utf8')) as Doc;
+      old.$id = `${old.$id}.v1`;
+      writeFileSync(join(dir, 'events', 'render.done.v1.schema.json'), JSON.stringify(old, null, 2) + '\n');
+      editJson(base, (d) => {
+        d['x-schema-version'] = '2.0';
+        d.properties.schema_version = { type: 'string', pattern: '^2\\.\\d+$' };
+      });
+      return dir;
+    }
+
+    it('passes, and generates an EventV1 type', () => {
+      const dir = withV1();
+      runGenerate(dir);
+      const types = readFileSync(join(dir, 'generated', 'events.d.ts'), 'utf8');
+      expect(types).toContain('export interface RenderDoneEvent ');
+      expect(types).toContain('export interface RenderDoneEventV1 ');
+      const r = runCheck(dir);
+      expect(r.out).toContain('contracts:check ok');
+      expect(r.code).toBe(0);
+    });
+
+    it('fails when the v1 file has the wrong owner, stream, pattern or id', () => {
+      const dir = withV1();
+      runGenerate(dir);
+      editJson(join(dir, 'events', 'render.done.v1.schema.json'), (d) => {
+        d['x-owner'] = 'billing';
+        d['x-stream'] = 'e2e.other';
+        d.properties.schema_version.pattern = '^2\\.\\d+$';
+        d.$id = 'https://contracts.e2e.local/events/render.done.v9';
+      });
+      const r = runCheck(dir);
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain('render.done.v1.schema.json');
+      expect(r.out).toContain('x-owner');
+      expect(r.out).toContain('x-stream');
+      expect(r.out).toContain('pattern');
+      expect(r.out).toContain('$id');
+    });
+
+    it('fails on a v file with no base event, and on a v file at 1.x current', () => {
+      const dir = copyPackage();
+      writeFileSync(join(dir, 'events', 'render.done.v1.schema.json'), '{}');
+      writeFileSync(join(dir, 'events', 'nothing.here.v1.schema.json'), '{}');
+      const r = runCheck(dir);
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain('render.done.v1.schema.json');
+      expect(r.out).toContain('nothing.here.v1.schema.json');
+    });
+  });
+
+  describe('skeleton routes', () => {
+    it('ts: accepts /users/:id against /users/{id}', () => {
+      const { dir, repo, folder } = skeletonCopy('ts');
+      addUsersPath(dir);
+      writeFileSync(join(folder, 'src', 'routes.ts'), TS_ROUTES(['/healthz', '/users/:id']));
+      const r = runCheck(dir, { CONTRACTS_REPO_ROOT: repo });
+      expect(r.out).toContain('contracts:check ok');
+      expect(r.code).toBe(0);
+    });
+
+    it('ts: rejects :userId against {id}', () => {
+      const { dir, repo, folder } = skeletonCopy('ts');
+      addUsersPath(dir);
+      writeFileSync(join(folder, 'src', 'routes.ts'), TS_ROUTES(['/healthz', '/users/:userId']));
+      const r = runCheck(dir, { CONTRACTS_REPO_ROOT: repo });
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain('GET /users/{id} is in the OpenAPI file but not in');
+      expect(r.out).toContain('GET /users/{userId} is in');
+    });
+
+    it('ts: rejects braces in a Fastify path', () => {
+      const { dir, repo, folder } = skeletonCopy('ts');
+      addUsersPath(dir);
+      writeFileSync(join(folder, 'src', 'routes.ts'), TS_ROUTES(['/healthz', '/users/{id}']));
+      const r = runCheck(dir, { CONTRACTS_REPO_ROOT: repo });
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain('/users/{id}');
+      expect(r.out).toContain(':id');
+    });
+
+    it('py: reads routes.json with {id} paths', () => {
+      const { dir, repo, folder } = skeletonCopy('py');
+      addUsersPath(dir);
+      const file = join(folder, 'routes.json');
+      writeFileSync(file, JSON.stringify([{ method: 'GET', path: '/healthz' }, { method: 'get', path: '/users/{id}' }]));
+      const ok = runCheck(dir, { CONTRACTS_REPO_ROOT: repo });
+      expect(ok.out).toContain('contracts:check ok');
+      expect(ok.code).toBe(0);
+
+      writeFileSync(file, JSON.stringify([{ method: 'GET', path: '/healthz' }, { method: 'GET', path: '/users/:id' }]));
+      const bad = runCheck(dir, { CONTRACTS_REPO_ROOT: repo });
+      expect(bad.code).not.toBe(0);
+      expect(bad.out).toContain('GET /users/:id is in');
+      expect(bad.out).toContain('GET /users/{id} is in the OpenAPI file but not in');
+    });
+
+    it('py: fails when routes.json is missing or is not an array', () => {
+      const { dir, repo, folder } = skeletonCopy('py');
+      writeFileSync(join(folder, 'src', 'routes.ts'), TS_ROUTES(['/healthz']));
+      const missing = runCheck(dir, { CONTRACTS_REPO_ROOT: repo });
+      expect(missing.code).not.toBe(0);
+      expect(missing.out).toContain('routes.json');
+      writeFileSync(join(folder, 'routes.json'), '{}');
+      const bad = runCheck(dir, { CONTRACTS_REPO_ROOT: repo });
+      expect(bad.code).not.toBe(0);
+      expect(bad.out).toContain('routes.json');
+    });
   });
 });

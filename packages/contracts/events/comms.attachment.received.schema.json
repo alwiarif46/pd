@@ -4,18 +4,21 @@
   "title": "comms.attachment.received",
   "x-owner": "comms",
   "x-stream": "e2e.comms.attachment.received",
+  "x-schema-version": "1.0",
   "type": "object",
   "allOf": [
     {
       "$ref": "https://contracts.e2e.local/events/_envelope"
     }
   ],
+  "unevaluatedProperties": false,
   "properties": {
     "type": {
       "const": "comms.attachment.received"
     },
     "schema_version": {
-      "const": "1.0"
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
     },
     "payload": {
       "type": "object",

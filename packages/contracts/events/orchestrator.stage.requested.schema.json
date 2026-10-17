@@ -4,18 +4,21 @@
   "title": "orchestrator.stage.requested",
   "x-owner": "orchestrator",
   "x-stream": "e2e.orchestrator.stage.requested",
+  "x-schema-version": "1.0",
   "type": "object",
   "allOf": [
     {
       "$ref": "https://contracts.e2e.local/events/_envelope"
     }
   ],
+  "unevaluatedProperties": false,
   "properties": {
     "type": {
       "const": "orchestrator.stage.requested"
     },
     "schema_version": {
-      "const": "1.0"
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
     },
     "payload": {
       "type": "object",

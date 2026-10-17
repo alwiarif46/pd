@@ -6,7 +6,7 @@
 export interface IdentityTenantCreatedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "identity.tenant.created";
   /**
@@ -23,7 +23,7 @@ export interface IdentityTenantCreatedEvent {
 export interface IdentityTenantSuspendedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "identity.tenant.suspended";
   /**
@@ -40,7 +40,7 @@ export interface IdentityTenantSuspendedEvent {
 export interface IdentityUserJoinedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "identity.user.joined";
   /**
@@ -57,7 +57,7 @@ export interface IdentityUserJoinedEvent {
 export interface IdentityUserRemovedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "identity.user.removed";
   /**
@@ -74,7 +74,7 @@ export interface IdentityUserRemovedEvent {
 export interface IdentityRoleChangedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "identity.role.changed";
   /**
@@ -91,7 +91,7 @@ export interface IdentityRoleChangedEvent {
 export interface BillingCreditReservedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "billing.credit.reserved";
   /**
@@ -108,7 +108,7 @@ export interface BillingCreditReservedEvent {
 export interface BillingCreditConsumedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "billing.credit.consumed";
   /**
@@ -125,7 +125,7 @@ export interface BillingCreditConsumedEvent {
 export interface BillingCreditReleasedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "billing.credit.released";
   /**
@@ -142,7 +142,7 @@ export interface BillingCreditReleasedEvent {
 export interface BillingSubscriptionChangedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "billing.subscription.changed";
   /**
@@ -159,7 +159,7 @@ export interface BillingSubscriptionChangedEvent {
 export interface IngestDocumentIngestedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "ingest.document.ingested";
   /**
@@ -176,7 +176,7 @@ export interface IngestDocumentIngestedEvent {
 export interface IngestDocumentHeldEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "ingest.document.held";
   /**
@@ -193,7 +193,7 @@ export interface IngestDocumentHeldEvent {
 export interface IngestDocumentClassifiedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "ingest.document.classified";
   /**
@@ -210,7 +210,7 @@ export interface IngestDocumentClassifiedEvent {
 export interface IntelShredDoneEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "intel.shred.done";
   /**
@@ -227,7 +227,7 @@ export interface IntelShredDoneEvent {
 export interface IntelAmendmentDiffedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "intel.amendment.diffed";
   /**
@@ -244,7 +244,7 @@ export interface IntelAmendmentDiffedEvent {
 export interface IntelAiBanFlaggedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "intel.ai_ban.flagged";
   /**
@@ -261,7 +261,7 @@ export interface IntelAiBanFlaggedEvent {
 export interface IntelFitScoredEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "intel.fit.scored";
   /**
@@ -278,7 +278,7 @@ export interface IntelFitScoredEvent {
 export interface IntelScheduleChangedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "intel.schedule.changed";
   /**
@@ -295,7 +295,7 @@ export interface IntelScheduleChangedEvent {
 export interface OrchestratorRunStartedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "orchestrator.run.started";
   /**
@@ -312,7 +312,7 @@ export interface OrchestratorRunStartedEvent {
 export interface OrchestratorStageRequestedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "orchestrator.stage.requested";
   /**
@@ -329,7 +329,7 @@ export interface OrchestratorStageRequestedEvent {
 export interface OrchestratorStageDoneEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "orchestrator.stage.done";
   /**
@@ -346,7 +346,7 @@ export interface OrchestratorStageDoneEvent {
 export interface OrchestratorStageFailedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "orchestrator.stage.failed";
   /**
@@ -363,7 +363,7 @@ export interface OrchestratorStageFailedEvent {
 export interface OrchestratorGateOpenedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "orchestrator.gate.opened";
   /**
@@ -380,7 +380,7 @@ export interface OrchestratorGateOpenedEvent {
 export interface OrchestratorGateDecidedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "orchestrator.gate.decided";
   /**
@@ -397,7 +397,7 @@ export interface OrchestratorGateDecidedEvent {
 export interface OrchestratorRunPausedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "orchestrator.run.paused";
   /**
@@ -414,7 +414,7 @@ export interface OrchestratorRunPausedEvent {
 export interface OrchestratorRunFailedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "orchestrator.run.failed";
   /**
@@ -431,7 +431,7 @@ export interface OrchestratorRunFailedEvent {
 export interface OrchestratorRunCancelledEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "orchestrator.run.cancelled";
   /**
@@ -448,7 +448,7 @@ export interface OrchestratorRunCancelledEvent {
 export interface OrchestratorRunDoneEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "orchestrator.run.done";
   /**
@@ -465,7 +465,7 @@ export interface OrchestratorRunDoneEvent {
 export interface OrchestratorRunBudgetSetEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "orchestrator.run.budget_set";
   /**
@@ -482,7 +482,7 @@ export interface OrchestratorRunBudgetSetEvent {
 export interface ModelgwUsageMeteredEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "modelgw.usage.metered";
   /**
@@ -499,7 +499,7 @@ export interface ModelgwUsageMeteredEvent {
 export interface ModelgwBudgetExhaustedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "modelgw.budget.exhausted";
   /**
@@ -516,7 +516,7 @@ export interface ModelgwBudgetExhaustedEvent {
 export interface DraftingPageGatedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "drafting.page.gated";
   /**
@@ -533,7 +533,7 @@ export interface DraftingPageGatedEvent {
 export interface DraftingSectionDraftedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "drafting.section.drafted";
   /**
@@ -550,7 +550,7 @@ export interface DraftingSectionDraftedEvent {
 export interface DraftingNeedOpenedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "drafting.need.opened";
   /**
@@ -567,7 +567,7 @@ export interface DraftingNeedOpenedEvent {
 export interface DraftingNeedFilledEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "drafting.need.filled";
   /**
@@ -584,7 +584,7 @@ export interface DraftingNeedFilledEvent {
 export interface DraftingRoundDoneEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "drafting.round.done";
   /**
@@ -601,7 +601,7 @@ export interface DraftingRoundDoneEvent {
 export interface ReviewRedDeliveredEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "review.red.delivered";
   /**
@@ -618,7 +618,7 @@ export interface ReviewRedDeliveredEvent {
 export interface ReviewFindingDisposedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "review.finding.disposed";
   /**
@@ -635,7 +635,7 @@ export interface ReviewFindingDisposedEvent {
 export interface ReviewGoldDoneEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "review.gold.done";
   /**
@@ -652,7 +652,7 @@ export interface ReviewGoldDoneEvent {
 export interface RenderDoneEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "render.done";
   /**
@@ -669,7 +669,7 @@ export interface RenderDoneEvent {
 export interface RenderIssueFoundEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "render.issue.found";
   /**
@@ -686,7 +686,7 @@ export interface RenderIssueFoundEvent {
 export interface RenderPackageReadyEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "render.package.ready";
   /**
@@ -703,7 +703,7 @@ export interface RenderPackageReadyEvent {
 export interface EvidenceItemStagedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "evidence.item.staged";
   /**
@@ -720,7 +720,7 @@ export interface EvidenceItemStagedEvent {
 export interface EvidenceItemConfirmedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "evidence.item.confirmed";
   /**
@@ -737,7 +737,7 @@ export interface EvidenceItemConfirmedEvent {
 export interface EvidenceRepoItemAddedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "evidence.repo.item_added";
   /**
@@ -754,7 +754,7 @@ export interface EvidenceRepoItemAddedEvent {
 export interface CommsEmailSentEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "comms.email.sent";
   /**
@@ -771,7 +771,7 @@ export interface CommsEmailSentEvent {
 export interface CommsRequestReceivedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "comms.request.received";
   /**
@@ -788,7 +788,7 @@ export interface CommsRequestReceivedEvent {
 export interface CommsAttachmentReceivedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "comms.attachment.received";
   /**
@@ -805,7 +805,7 @@ export interface CommsAttachmentReceivedEvent {
 export interface CommsEbuyRfqReceivedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "comms.ebuy.rfq_received";
   /**
@@ -822,7 +822,7 @@ export interface CommsEbuyRfqReceivedEvent {
 export interface PortalSessionEndedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "portal.session.ended";
   /**
@@ -839,7 +839,7 @@ export interface PortalSessionEndedEvent {
 export interface PortalFileDownloadedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "portal.file.downloaded";
   /**
@@ -856,7 +856,7 @@ export interface PortalFileDownloadedEvent {
 export interface DriveFileAddedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "drive.file.added";
   /**
@@ -873,7 +873,7 @@ export interface DriveFileAddedEvent {
 export interface DriveDocEditedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "drive.doc.edited";
   /**
@@ -890,7 +890,7 @@ export interface DriveDocEditedEvent {
 export interface NotificationCreatedEvent {
   event_id: string;
   tenant_id: string;
-  schema_version: "1.0";
+  schema_version: string;
   occurred_at: string;
   type: "notification.created";
   /**

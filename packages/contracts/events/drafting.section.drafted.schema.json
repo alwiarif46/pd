@@ -4,18 +4,21 @@
   "title": "drafting.section.drafted",
   "x-owner": "drafting",
   "x-stream": "e2e.drafting.section.drafted",
+  "x-schema-version": "1.0",
   "type": "object",
   "allOf": [
     {
       "$ref": "https://contracts.e2e.local/events/_envelope"
     }
   ],
+  "unevaluatedProperties": false,
   "properties": {
     "type": {
       "const": "drafting.section.drafted"
     },
     "schema_version": {
-      "const": "1.0"
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
     },
     "payload": {
       "type": "object",

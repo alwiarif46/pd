@@ -4,18 +4,21 @@
   "title": "identity.user.joined",
   "x-owner": "identity",
   "x-stream": "e2e.identity.user.joined",
+  "x-schema-version": "1.0",
   "type": "object",
   "allOf": [
     {
       "$ref": "https://contracts.e2e.local/events/_envelope"
     }
   ],
+  "unevaluatedProperties": false,
   "properties": {
     "type": {
       "const": "identity.user.joined"
     },
     "schema_version": {
-      "const": "1.0"
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
     },
     "payload": {
       "type": "object",

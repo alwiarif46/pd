@@ -4,18 +4,21 @@
   "title": "modelgw.usage.metered",
   "x-owner": "modelgw",
   "x-stream": "e2e.modelgw.usage.metered",
+  "x-schema-version": "1.0",
   "type": "object",
   "allOf": [
     {
       "$ref": "https://contracts.e2e.local/events/_envelope"
     }
   ],
+  "unevaluatedProperties": false,
   "properties": {
     "type": {
       "const": "modelgw.usage.metered"
     },
     "schema_version": {
-      "const": "1.0"
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
     },
     "payload": {
       "type": "object",

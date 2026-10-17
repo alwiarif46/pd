@@ -4,18 +4,21 @@
   "title": "evidence.repo.item_added",
   "x-owner": "evidence",
   "x-stream": "e2e.evidence.repo.item_added",
+  "x-schema-version": "1.0",
   "type": "object",
   "allOf": [
     {
       "$ref": "https://contracts.e2e.local/events/_envelope"
     }
   ],
+  "unevaluatedProperties": false,
   "properties": {
     "type": {
       "const": "evidence.repo.item_added"
     },
     "schema_version": {
-      "const": "1.0"
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
     },
     "payload": {
       "type": "object",

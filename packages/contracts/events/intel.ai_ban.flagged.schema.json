@@ -4,18 +4,21 @@
   "title": "intel.ai_ban.flagged",
   "x-owner": "intel",
   "x-stream": "e2e.intel.ai_ban.flagged",
+  "x-schema-version": "1.0",
   "type": "object",
   "allOf": [
     {
       "$ref": "https://contracts.e2e.local/events/_envelope"
     }
   ],
+  "unevaluatedProperties": false,
   "properties": {
     "type": {
       "const": "intel.ai_ban.flagged"
     },
     "schema_version": {
-      "const": "1.0"
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
     },
     "payload": {
       "type": "object",
