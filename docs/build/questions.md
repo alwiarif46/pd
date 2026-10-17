@@ -51,6 +51,14 @@ One heading per chat. Each entry: question, options, choice made, why. Design ga
 
 ## Chat 4
 
+- **Bid-autopilot scripts are not in the repo.** 09 s4.10 says "PD source: None" and the 29 scripts and 7 prose scripts are not on master. Options: stop, or write the scripts Phase 3 needs. Chose to write the Phase 3 tools (format lock, shell, audit, caption fields, visual gate, page count) and register them with the toolrunner. The remaining scripts wait for their source. Owner to say where the originals live.
+- **Model gateway stub.** Chat 3 has not run. The vision check calls a client interface with a recorded-response double, switched by `RENDER_MODELGW_MODE`. The double lives in `python/render/tests/`. The vision check against a real model is unverified: waits on chat 3.
+- **Font request fee amount.** 06 s6 leaves it open. Billing owns the amount (09 s4.3). Chose a billing configuration value, with an unset value meaning null, so no number is invented. Owner to give the amount.
+- **Font fee ownership.** Render does not record the fee. `FontRequest` carries only `feeChargeId`, the id of billing's `font_fee` charge (03 s12), null until billing confirms. How render learns the id (event or API call) is decided with billing in chat 8. PR 9a codes to `feeChargeId`.
+- **Identity on font requests.** Render has no user input yet. `POST /fonts/requests` takes `x-user-id` and `x-user-roles`, set by the gateway, until identity issues signed tokens (09 s2). Render returns 403 for a non-Admin and records the user as `licenseConfirmedBy`. The gateway writes the audit_log entry (03 s2).
+- **Render event payloads at 1.1.** `render.done`, `render.issue.found` and `render.package.ready` had open payloads at 1.0 and no producer or consumer. The tightened payloads are their first definition, so they go to 1.1 and not 2.0.
+- **Contract fields deferred.** Package file kind and page count, signature items, the checklist, per-section page counts and a render failure event are not in this contract. Each lands with the PR that builds it (PR 5, 8, 10) as an optional field. The orchestrator failure path waits on chat 3.
+
 ## Chat 5
 
 ## Chat 6
