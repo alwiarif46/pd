@@ -15,7 +15,7 @@
     "folder": "services/identity",
     "schema": "identity",
     "stream_prefix": "e2e.identity",
-    "skeleton": false
+    "skeleton": true
   },
   {
     "id": "billing",
@@ -24,7 +24,7 @@
     "folder": "services/billing",
     "schema": "billing",
     "stream_prefix": "e2e.billing",
-    "skeleton": false
+    "skeleton": true
   },
   {
     "id": "ingest",
@@ -33,7 +33,7 @@
     "folder": "services/ingest",
     "schema": "ingest",
     "stream_prefix": "e2e.ingest",
-    "skeleton": false
+    "skeleton": true
   },
   {
     "id": "intel",
@@ -42,7 +42,7 @@
     "folder": "services/intel",
     "schema": "intel",
     "stream_prefix": "e2e.intel",
-    "skeleton": false
+    "skeleton": true
   },
   {
     "id": "orchestrator",
@@ -51,7 +51,7 @@
     "folder": "services/orchestrator",
     "schema": "orchestrator",
     "stream_prefix": "e2e.orchestrator",
-    "skeleton": false
+    "skeleton": true
   },
   {
     "id": "modelgw",
@@ -60,7 +60,7 @@
     "folder": "services/modelgw",
     "schema": "modelgw",
     "stream_prefix": "e2e.modelgw",
-    "skeleton": false
+    "skeleton": true
   },
   {
     "id": "drafting",
@@ -69,7 +69,7 @@
     "folder": "services/drafting",
     "schema": "drafting",
     "stream_prefix": "e2e.drafting",
-    "skeleton": false
+    "skeleton": true
   },
   {
     "id": "review",
@@ -78,7 +78,7 @@
     "folder": "services/review",
     "schema": "review",
     "stream_prefix": "e2e.review",
-    "skeleton": false
+    "skeleton": true
   },
   {
     "id": "render",
@@ -87,7 +87,7 @@
     "folder": "python/render",
     "schema": "render",
     "stream_prefix": "e2e.render",
-    "skeleton": false
+    "skeleton": true
   },
   {
     "id": "evidence",
@@ -96,7 +96,7 @@
     "folder": "services/evidence",
     "schema": "evidence",
     "stream_prefix": "e2e.evidence",
-    "skeleton": false
+    "skeleton": true
   },
   {
     "id": "comms",
@@ -105,7 +105,7 @@
     "folder": "services/comms",
     "schema": "comms",
     "stream_prefix": "e2e.comms",
-    "skeleton": false
+    "skeleton": true
   },
   {
     "id": "portal",
@@ -114,7 +114,7 @@
     "folder": "python/portal-agent",
     "schema": "portal",
     "stream_prefix": "e2e.portal",
-    "skeleton": false
+    "skeleton": true
   },
   {
     "id": "drive",
@@ -123,7 +123,7 @@
     "folder": "services/drive",
     "schema": "drive",
     "stream_prefix": "e2e.drive",
-    "skeleton": false
+    "skeleton": true
   },
   {
     "id": "notify",
@@ -132,6 +132,6 @@
     "folder": "services/notify",
     "schema": "notify",
     "stream_prefix": "e2e.notification",
-    "skeleton": false
+    "skeleton": true
   }
 ]
