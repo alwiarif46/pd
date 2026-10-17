@@ -17,6 +17,14 @@ vi.mock('sonner', async (orig) => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn() }),
 }));
 
+/** v0's SourceViewer: a Radix dialog (portalled to the body, never inside `.app-shell`) described by its page. */
+const sourceViewer = () => screen.queryByRole('dialog', { description: /^Pages? \d/ });
+async function findSourceViewer() {
+  const viewer = await screen.findByRole('dialog', { description: /^Pages? \d/ });
+  expect(viewer.closest('.app-shell')).toBeNull();
+  return viewer;
+}
+
 type LegacyProps = Parameters<typeof Workspace>[0];
 
 const mine = bidFactDto({ id: 'fact-1', field: 'Agency', value: 'VA' });
@@ -37,6 +45,7 @@ function shellValue(over: Partial<ShellContextValue> = {}): ShellContextValue {
     links: [],
     bidLoaded: true,
     selectedRowId: null,
+    detailHost: null,
     refresh: vi.fn(),
     openRow: vi.fn(),
     openUpgrade: vi.fn(),
@@ -161,8 +170,11 @@ describe('OverviewContainer', () => {
       api: mockApi([proposal, tabProposalDto({ ...next, id: 'fact-x', field: 'NAICS', documentId: null }, { linkId: 'link-b' })]),
     });
     await user.click(within(await card()).getByRole('button', { name: 'Open source for Agency, page 4' }));
-    expect(document.querySelector('.app-shell [aria-label="Source viewer"]')).toBeTruthy();
+    const viewer = await findSourceViewer();
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/documents/doc-amd/view-token'))).toBe(true));
+    // The viewer is modal: close it to reach the other card.
+    await user.click(within(viewer).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(sourceViewer()).toBeNull());
     const other = screen.getByRole('article', { name: 'Amendment 2: NAICS' });
     await user.click(within(other).getByRole('button', { name: 'Open source for NAICS, page 4' }));
     expect(toast.info).toHaveBeenCalledWith('No source page for this row.');
@@ -212,10 +224,10 @@ describe('OverviewContainer', () => {
     await user.click(within(await card()).getByRole('button', { name: 'Dismiss Amendment 2: Agency' }));
     await waitFor(() => expect(last().refreshKey).toBe('job-1:completed#1'));
     await user.click(within(await card()).getByRole('button', { name: 'Open source for Agency, page 4' }));
-    expect(document.querySelector('[aria-label="Source viewer"]')).toBeTruthy();
+    await findSourceViewer();
     update({ jobs }, 'bid-2');
     expect(last().refreshKey).toBe('job-1:completed');
     expect(last().bidId).toBe('bid-2');
-    expect(document.querySelector('[aria-label="Source viewer"]')).toBeNull();
+    expect(sourceViewer()).toBeNull();
   });
 });

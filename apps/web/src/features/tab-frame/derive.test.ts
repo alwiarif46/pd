@@ -226,9 +226,11 @@ describe('tabSignals', () => {
     ]);
   });
 
-  it('marks waiting for a blocked marking, a key mismatch, or proposed changes', () => {
+  it('marks waiting for a blocked marking, a key mismatch, an amendment that needs its number, or proposed changes', () => {
     expect(tabSignals([docDto({ markingStatus: 'blocked' })], [], [])).toEqual([{ tab: 'documents', signal: 'waiting' }]);
     expect(tabSignals([docDto({ kind: 'amendment', keyCheck: 'mismatch' })], [], [])).toEqual([{ tab: 'documents', signal: 'waiting' }]);
+    expect(tabSignals([docDto({ kind: 'amendment', amendmentStatus: 'needs_number' })], [], [])).toEqual([{ tab: 'documents', signal: 'waiting' }]);
+    expect(tabSignals([docDto({ kind: 'amendment', amendmentStatus: 'applied' })], [], [])).toEqual([]);
     expect(tabSignals([docDto()], [], [linkDto()])).toEqual([{ tab: 'compliance', signal: 'waiting' }]);
     expect(tabSignals([docDto()], [], [linkDto({ action: 'add' })])).toEqual([]);
     expect(tabSignals([docDto()], [], [linkDto({ rowTable: 'bid_facts' })])).toEqual([]);

@@ -199,18 +199,6 @@ tr.struck td { color: var(--muted); }
   border-radius: 6px;
 }
 
-.dialog {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.45);
-  display: grid;
-  place-items: center;
-  z-index: 40;
-  padding: 1rem;
-}
-
-.dialog .card { width: min(32rem, 100%); }
-
 .menu-btn { display: none; background: transparent; border: 1px solid rgba(255,255,255,0.4); color: #fff; border-radius: 6px; padding: 0.3rem 0.5rem; }
 
 .skeleton { height: 1rem; background: linear-gradient(90deg, #e2e8f0, #f8fafc, #e2e8f0); border-radius: 4px; }

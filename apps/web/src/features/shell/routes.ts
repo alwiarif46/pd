@@ -1,4 +1,4 @@
-import type { OutsidePage, Tab } from '@/types';
+import type { OutsidePage, Plan, Tab } from '@/types';
 
 /**
  * The app's hash routes. The hashes are the ones the app has always used:
@@ -126,4 +126,18 @@ export function activePageOf(route: AppRoute): OutsidePage | null {
   if (route.kind === 'page') return route.page;
   if (route.kind === 'new_bid') return 'bids';
   return null;
+}
+
+/** What the shell draws as a tab's content (ShellContainer's content() and its row detail host both use it). */
+export type TabBody = 'bid_error' | 'locked' | 'orals_off' | 'registered' | 'legacy';
+
+/**
+ * In order: the bid could not be loaded; a paid tab on Free (the locked state, 09 s5.1); Orals turned off for
+ * the bid; the tab's registered screen; else the legacy Workspace.
+ */
+export function tabBodyOf(input: { tab: Tab; plan: Plan; bidError: string | null; oralsOff: boolean; registered: boolean }): TabBody {
+  if (input.bidError) return 'bid_error';
+  if (input.plan === 'free' && isPaidTab(input.tab)) return 'locked';
+  if (input.tab === 'orals' && input.oralsOff) return 'orals_off';
+  return input.registered ? 'registered' : 'legacy';
 }

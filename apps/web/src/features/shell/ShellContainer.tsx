@@ -33,8 +33,8 @@ import {
   type ShellData,
 } from './controller';
 import { LegacyFrame } from './LegacyFrame';
-import type { PageKey } from './registry';
-import { activePageOf, isPaidTab, pageHref, TAB_TITLES, tabHref, type AppRoute } from './routes';
+import type { PageKey, ScreenRegistry } from './registry';
+import { activePageOf, pageHref, TAB_TITLES, tabBodyOf, tabHref, type AppRoute } from './routes';
 import { screens } from './screens';
 
 type ShellState = { kind: 'loading' } | { kind: 'error'; message: string } | ShellData;
@@ -47,6 +47,8 @@ interface Props {
   api?: ShellApi;
   /** Test seam: leaves the app for Stripe. Defaults to `window.location.assign`. */
   leaveTo?: (url: string) => void;
+  /** Test seam: the screen registry. Defaults to the route modules (screens.ts). */
+  registry?: ScreenRegistry;
 }
 
 function go(hash: string) {
@@ -77,7 +79,7 @@ function PageFrame({ children }: { children: ReactNode }) {
  * dialog, the confirm dialog and the session. Polls every 3 s while anything on the bid is queued or
  * running, never when idle; reloads on window focus and after every change (`refresh`).
  */
-export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Props) {
+export function ShellContainer({ route, api = shellApi, leaveTo = assign, registry = screens }: Props) {
   const [shell, setShell] = useState<ShellState>({ kind: 'loading' });
   const [shellVersion, setShellVersion] = useState(0);
   const [checking, setChecking] = useState(false);
@@ -93,6 +95,11 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
     key: 0,
   });
   const resolveConfirm = useRef<((ok: boolean) => void) | null>(null);
+  /**
+   * The row detail host (09 s5.17): the element AppShell's `detail` slot holds while a `rowDetail` tab has a
+   * row selected. Set by a ref callback when the host mounts and cleared when it unmounts, never by an effect.
+   */
+  const [detailHost, setDetailHost] = useState<HTMLElement | null>(null);
 
   const bidId = route.kind === 'tab' ? route.bidId : null;
   const tab: Tab | null = route.kind === 'tab' ? route.tab : null;
@@ -268,12 +275,13 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
       links: bidData?.links ?? [],
       bidLoaded: bidData !== null,
       selectedRowId: rowId,
+      detailHost,
       refresh,
       openRow,
       openUpgrade,
       confirm,
     };
-  }, [ready, summary, bidId, tab, bidData, rowId, refresh, openRow, openUpgrade, confirm]);
+  }, [ready, summary, bidId, tab, bidData, rowId, detailHost, refresh, openRow, openUpgrade, confirm]);
 
   const dialogs = (
     <ConfirmDialog
@@ -378,11 +386,29 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
   const bidDto = bidData?.bid ?? listed;
   const signals = bidData ? tabSignals(bidData.docs, bidData.jobs, bidData.links) : [];
   const oralsEnabled = bidDto?.oralsEnabled ?? false;
+  // What content() draws for the tab; the row detail host below follows the same answer.
+  const tabBody =
+    route.kind === 'tab'
+      ? tabBodyOf({
+          tab: route.tab,
+          plan: org.plan,
+          bidError,
+          oralsOff: bidDto !== null && !bidDto.oralsEnabled,
+          registered: registry.tabs.has(route.tab),
+        })
+      : null;
+  // One host, only while a `rowDetail` tab is drawn with a row selected: the tab portals its RowDetail into
+  // it, so the slider sits in AppShell's aside, outside `.app-shell`, while staying in the tab's React tree.
+  // Legacy tabs (Workspace) and tabs that did not opt in get no slot: they draw their own detail.
+  const detail =
+    route.kind === 'tab' && route.rowId !== null && tabBody === 'registered' && registry.detailTabs.has(route.tab) ? (
+      <div ref={setDetailHost} className="contents" />
+    ) : null;
 
   function content(): ReactNode {
     if (route.kind !== 'tab') {
       const key: PageKey = route.kind === 'new_bid' ? 'new_bid' : route.page;
-      const Registered = screens.pages.get(key);
+      const Registered = registry.pages.get(key);
       if (Registered) {
         return (
           <PageFrame>
@@ -392,7 +418,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
       }
       return <LegacyFrame>{legacyPage(key)}</LegacyFrame>;
     }
-    if (bidError) {
+    if (tabBody === 'bid_error') {
       return (
         <PageFrame>
           <div role="alert" className="flex max-w-md flex-col items-start gap-3 text-ink">
@@ -404,8 +430,8 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
         </PageFrame>
       );
     }
-    // A paid tab on Free: the shell draws the locked state; no tab screen loads.
-    if (org.plan === 'free' && isPaidTab(route.tab)) {
+    // A paid tab on Free: the container draws the locked state as the shell's children (09 s5.1); no tab screen loads.
+    if (tabBody === 'locked') {
       return (
         <TabFrameContainer tab={route.tab} title={TAB_TITLES[route.tab]}>
           {null}
@@ -413,7 +439,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
       );
     }
     // Orals is hidden from the tab list while it is off for the bid; a typed or stale link says so.
-    if (route.tab === 'orals' && bidDto && !bidDto.oralsEnabled) {
+    if (tabBody === 'orals_off') {
       const settings = tabHref(route.bidId, 'settings');
       return (
         <PageFrame>
@@ -425,7 +451,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
         </PageFrame>
       );
     }
-    const Registered = screens.tabs.get(route.tab);
+    const Registered = tabBody === 'registered' ? registry.tabs.get(route.tab) : undefined;
     if (Registered) return <Registered bidId={route.bidId} tab={route.tab} selectedRowId={route.rowId} />;
     return (
       <LegacyFrame>
@@ -444,12 +470,16 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
     );
   }
 
+  const shellBid = bidId ? (bidDto ? toShellBid(bidDto) : placeholderShellBid(bidId, bidError !== null)) : null;
   const switcherBids = current.bids.map((bid) => ({ id: bid.id, name: bid.name }));
+  // v0's bid switcher is a select that shows the name of the matching entry: a bid that is loading, or
+  // could not be loaded, is not in the list, so its placeholder joins it to keep the trigger labelled.
+  if (shellBid && !switcherBids.some((bid) => bid.id === shellBid.id)) switcherBids.push({ id: shellBid.id, name: shellBid.name });
 
   return (
     <ShellContext.Provider value={ctx}>
       <AppShell
-        bid={bidId ? (bidDto ? toShellBid(bidDto) : placeholderShellBid(bidId, bidError !== null)) : null}
+        bid={shellBid}
         bids={switcherBids}
         activeTab={tab}
         activePage={activePageOf(route)}
@@ -459,13 +489,14 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
         oralsEnabled={oralsEnabled}
         tabSignals={signals}
         user={userOf(current.me)}
-        detail={null}
+        detail={detail}
         onSelectTab={(next) => {
           if (bidId) go(tabHref(bidId, next));
         }}
         onSwitchBid={(id) => go(tabHref(id, tab ?? 'overview'))}
         onOpenPage={(page: OutsidePage) => go(pageHref(page))}
-        onUpgrade={() => openUpgrade('locked_tab')}
+        // The top bar's button now shows only at 0 credits (a locked tab has its own button in LockedTab).
+        onUpgrade={() => openUpgrade(org.creditsLeft <= 0 ? 'out_of_credits' : 'plan')}
         onSignOut={signOut}
       >
         {content()}
@@ -475,7 +506,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
         reason={upgrade.reason}
         plan={org.plan}
         creditsLeft={org.creditsLeft}
-        creditsResetOn={org.creditsResetOn}
+        creditsResetOn={localDayOf(org.creditsResetOn)}
         onChoosePlan={choosePlan}
         onClose={() => setUpgrade((prev) => ({ ...prev, open: false }))}
       />

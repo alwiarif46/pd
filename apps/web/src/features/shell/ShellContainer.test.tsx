@@ -11,6 +11,8 @@ import { AppRoot } from './AppRoot';
 import { ShellContext, type ShellContextValue } from './bid-context';
 import type { ShellApi } from './controller';
 import { LegacyFrame } from './LegacyFrame';
+import { collectRoutes, type TabScreenProps } from './registry';
+import { useDetailPortal } from '@/features/row-detail/use-detail-portal';
 import { ShellContainer } from './ShellContainer';
 import { savePendingInvite } from '@/features/membership/pending-invite';
 
@@ -63,27 +65,46 @@ describe('ShellContainer', () => {
     expect(screen.getByRole('button', { name: 'Outline (locked)' }).getAttribute('aria-current')).toBe('page');
     // The interim bar is gone: v0's shell has the account menu and the bid switcher.
     expect(screen.queryByRole('navigation', { name: 'Account and bid' })).toBeNull();
-    expect(screen.queryByRole('combobox')).toBeNull();
+    // With credits left the top bar has no Upgrade plan button: the locked tab's own button opens the dialog.
+    expect(within(screen.getByRole('banner')).queryByRole('button', { name: 'Upgrade plan' })).toBeNull();
 
-    await userEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Upgrade plan' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Upgrade plan' }));
     expect(await screen.findByText('This tab is on a paid plan.')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Choose Starter' }));
     expect(api.startCheckout).toHaveBeenCalledWith('starter');
     await waitFor(() => expect(screen.queryByText('This tab is on a paid plan.')).toBeNull());
   });
 
-  it('opens the upgrade dialog when a locked tab is clicked in the tab list, and does not navigate', async () => {
+  it('navigates to a locked tab, shows the locked state, and its Upgrade plan opens the dialog', async () => {
     render(<ShellContainer route={{ kind: 'tab', bidId: 'bid-1', tab: 'overview', rowId: null }} api={mockApi()} />);
     await userEvent.click(await screen.findByRole('button', { name: 'Reviews (locked)' }));
+    expect(window.location.hash).toBe('#/bids/bid-1/reviews');
+    expect(screen.queryByText('This tab is on a paid plan.')).toBeNull();
+    // The route is a prop, so the click only navigates; draw the state it leads to.
+    cleanup();
+    render(<ShellContainer route={{ kind: 'tab', bidId: 'bid-1', tab: 'reviews', rowId: null }} api={mockApi()} />);
+    expect(await screen.findByText('reviews is on a paid plan')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Upgrade plan' }));
     expect(await screen.findByText('This tab is on a paid plan.')).toBeTruthy();
-    expect(window.location.hash).toBe('');
+  });
+
+  it('shows the out-of-credits dialog with the reset as a calendar day, without throwing', async () => {
+    process.env.TZ = 'America/New_York';
+    const api = mockApi({
+      getOrg: vi.fn(async () =>
+        orgPayload({ credits: creditDto({ allowed: 2, used: 2, reserved: 0, periodEnd: '2026-11-01T04:00:00.000Z' }) }),
+      ),
+    });
+    render(<ShellContainer route={{ kind: 'tab', bidId: 'bid-1', tab: 'compliance', rowId: null }} api={api} />);
+    await userEvent.click(within(await screen.findByRole('banner')).getByRole('button', { name: 'Upgrade plan' }));
+    expect(await screen.findByText(/They reset on Nov 1\./)).toBeTruthy();
   });
 
   it('switches bids from the bid switcher, keeping the tab, and tabs through the tab list', async () => {
     render(<ShellContainer route={outline} api={mockApi()} />);
     await screen.findByText('outline is on a paid plan');
-    await userEvent.click(screen.getByRole('button', { name: /VA EHR Support/ }));
-    await userEvent.click(await screen.findByRole('menuitem', { name: 'Navy IT' }));
+    await userEvent.click(screen.getByRole('combobox', { name: 'Bid' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Navy IT' }));
     expect(window.location.hash).toBe('#/bids/bid-2/outline');
     await userEvent.click(screen.getByRole('button', { name: 'Compliance' }));
     expect(window.location.hash).toBe('#/bids/bid-1/compliance');
@@ -138,8 +159,8 @@ describe('ShellContainer', () => {
     });
     render(<ShellContainer route={{ kind: 'tab', bidId: 'bid-1', tab: 'overview', rowId: null }} api={api} />);
     // Due 2026-11-03 stored as midnight UTC: Nov 3, not Nov 2.
-    expect(await screen.findByText('Due Nov 3, 2026 at 14:00 (America/New_York)')).toBeTruthy();
-    expect(screen.getByText(/resets Nov 8, 2026/)).toBeTruthy();
+    expect(await screen.findByText('Due Nov 3, 2:00 PM ET')).toBeTruthy();
+    expect(screen.getByText(/resets Nov 8/)).toBeTruthy();
   });
 
   it('polls every 3 s while a job runs and stops when the bid is idle', async () => {
@@ -209,7 +230,7 @@ describe('ShellContainer', () => {
     const api = mockApi({ startCheckout: vi.fn(() => new Promise<{ url: string }>((resolve) => (finish = resolve))) });
     const leaveTo = vi.fn();
     render(<ShellContainer route={outline} api={api} leaveTo={leaveTo} />);
-    await userEvent.click(within(await screen.findByRole('banner')).getByRole('button', { name: 'Upgrade plan' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Upgrade plan' }));
     const choose = await screen.findByRole('button', { name: 'Choose Growth' });
     await userEvent.click(choose);
     await userEvent.click(choose);
@@ -222,7 +243,7 @@ describe('ShellContainer', () => {
     const api = mockApi({ startCheckout: vi.fn(async () => ({ url: 'https://evil.example/pay' })) });
     const leaveTo = vi.fn();
     render(<ShellContainer route={outline} api={api} leaveTo={leaveTo} />);
-    await userEvent.click(within(await screen.findByRole('banner')).getByRole('button', { name: 'Upgrade plan' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Upgrade plan' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Choose Starter' }));
     await waitFor(() => expect(screen.queryByText('This tab is on a paid plan.')).toBeNull());
     expect(leaveTo).not.toHaveBeenCalled();
@@ -351,6 +372,7 @@ describe('TabFrameContainer', () => {
       links: [linkDto()],
       bidLoaded: true,
       selectedRowId: null,
+      detailHost: null,
       refresh: vi.fn(),
       openRow: vi.fn(),
       openUpgrade: vi.fn(),
@@ -512,5 +534,79 @@ describe('ShellContainer seat-locked on a bid', () => {
     });
     expect(getBid.mock.calls.length).toBe(bidCalls);
     expect(listJobs.mock.calls.length).toBe(jobCalls);
+  });
+});
+
+describe('ShellContainer row detail host', () => {
+  /** A tab that opted in: it portals its detail into the shell's host. */
+  function DetailTab({ tab, selectedRowId }: TabScreenProps) {
+    const detail = useDetailPortal(<p>Detail for {selectedRowId}</p>);
+    return (
+      <>
+        <p>{tab} body</p>
+        {selectedRowId && detail}
+      </>
+    );
+  }
+  /** A registered tab that did not opt in: it gets no host, so its portal renders nothing. */
+  function PlainTab({ tab, selectedRowId }: TabScreenProps) {
+    const detail = useDetailPortal(<p>Plain detail</p>);
+    return (
+      <>
+        <p>{tab} body</p>
+        {selectedRowId && detail}
+      </>
+    );
+  }
+  const registry = collectRoutes({
+    '../a/route.tsx': {
+      routes: [
+        { tab: 'compliance', Component: DetailTab, rowDetail: true },
+        { tab: 'overview', Component: PlainTab },
+      ],
+    },
+  });
+  const detailAsides = () => screen.queryAllByRole('complementary', { name: 'Row detail' });
+  const at = (tab: 'compliance' | 'overview' | 'documents', rowId: string | null) => ({ kind: 'tab', bidId: 'bid-1', tab, rowId }) as const;
+
+  it('renders one host for an opted-in tab with a row selected, and the detail lands in it, outside .app-shell', async () => {
+    const api = mockApi();
+    const { rerender } = render(<ShellContainer route={at('compliance', 'req-1')} api={api} registry={registry} />);
+    const detail = await screen.findByText('Detail for req-1');
+    expect(detailAsides()).toHaveLength(1);
+    expect(detailAsides()[0]!.contains(detail)).toBe(true);
+    expect(detail.closest('.app-shell')).toBeNull();
+    expect(document.querySelector('.app-shell')).toBeNull();
+    // Another row keeps the one host.
+    rerender(<ShellContainer route={at('compliance', 'req-2')} api={api} registry={registry} />);
+    expect(await screen.findByText('Detail for req-2')).toBeTruthy();
+    expect(detailAsides()).toHaveLength(1);
+    expect(screen.queryByText('Detail for req-1')).toBeNull();
+    // No row: no host.
+    rerender(<ShellContainer route={at('compliance', null)} api={api} registry={registry} />);
+    await waitFor(() => expect(detailAsides()).toHaveLength(0));
+    expect(screen.getByText('compliance body')).toBeTruthy();
+  });
+
+  it('gives no host to a registered tab that did not opt in', async () => {
+    render(<ShellContainer route={at('overview', 'fact-1')} api={mockApi()} registry={registry} />);
+    expect(await screen.findByText('overview body')).toBeTruthy();
+    expect(detailAsides()).toHaveLength(0);
+    expect(screen.queryByText('Plain detail')).toBeNull();
+  });
+
+  it('leaves legacy tabs (Workspace) without a host', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, [])));
+    render(<ShellContainer route={at('documents', 'doc-1')} api={mockApi()} registry={registry} />);
+    await waitFor(() => expect(document.querySelector('.app-shell')).toBeTruthy());
+    expect(detailAsides()).toHaveLength(0);
+    vi.unstubAllGlobals();
+  });
+
+  it('draws no host while the bid could not be loaded', async () => {
+    const api = mockApi({ getBid: vi.fn(async () => Promise.reject(new ApiError('Bid not found.', 404))) });
+    render(<ShellContainer route={at('compliance', 'req-1')} api={api} registry={registry} />);
+    expect(await screen.findByText('Bid not found.')).toBeTruthy();
+    expect(detailAsides()).toHaveLength(0);
   });
 });

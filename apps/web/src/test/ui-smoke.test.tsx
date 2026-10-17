@@ -118,8 +118,8 @@ describe('shell', () => {
     expect(screen.getByRole('button', { name: 'Outline (locked)' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Orals/ })).toBeNull();
     // Date-only strings: v0 splits them itself.
-    expect(screen.getByText('Due Nov 3, 2026 at 14:00 (America/New_York)')).toBeTruthy();
-    expect(screen.getByText(/resets Nov 1, 2026/)).toBeTruthy();
+    expect(screen.getByText('Due Nov 3, 2:00 PM ET')).toBeTruthy();
+    expect(screen.getByText(/resets Nov 1/)).toBeTruthy();
   });
 
   it('opens Account, Privacy and Sign out from the account menu', async () => {
@@ -157,12 +157,12 @@ describe('shell', () => {
         <p>Tab content</p>
       </AppShell>,
     );
-    await userEvent.click(screen.getByRole('button', { name: /VA EHR Support Services/ }));
-    await userEvent.click(await screen.findByRole('menuitem', { name: 'Navy IT' }));
+    await userEvent.click(screen.getByRole('combobox', { name: 'Bid' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Navy IT' }));
     expect(onSwitchBid).toHaveBeenCalledWith('2');
   });
 
-  it('sends a locked tab click to onUpgrade and an open tab click to onSelectTab', async () => {
+  it('sends both a locked and an open tab click to onSelectTab', async () => {
     const onUpgrade = vi.fn();
     const onSelectTab = vi.fn();
     render(
@@ -171,8 +171,8 @@ describe('shell', () => {
       </AppShell>,
     );
     await userEvent.click(screen.getByRole('button', { name: 'Outline (locked)' }));
-    expect(onUpgrade).toHaveBeenCalledTimes(1);
-    expect(onSelectTab).not.toHaveBeenCalled();
+    expect(onSelectTab).toHaveBeenCalledWith('outline');
+    expect(onUpgrade).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole('button', { name: 'Schedule' }));
     expect(onSelectTab).toHaveBeenCalledWith('schedule');
   });
@@ -233,18 +233,31 @@ describe('shell', () => {
     );
     expect(screen.getByRole('button', { name: 'Organization' })).toBeTruthy();
     expect(screen.getByText('Detail')).toBeTruthy();
-    // The narrow-screen sheet starts closed, so the page stays reachable.
-    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(within(screen.getByRole('complementary', { name: 'Row detail' })).getByText('Detail')).toBeTruthy();
   });
 
-  it('opens the row detail sheet from its button', async () => {
+  it('always draws its children, also for a locked tab on Free', () => {
     render(
-      <AppShell {...base} bid={null} activeTab={null} activePage="bids" oralsEnabled plan="growth" detail={<p>Detail</p>}>
-        <p>Page</p>
+      <AppShell {...base} bid={bid} activeTab="outline" activePage={null} oralsEnabled>
+        <p>Locked tab from the container</p>
       </AppShell>,
     );
-    await userEvent.click(screen.getByRole('button', { name: 'View row detail' }));
-    expect(within(await screen.findByRole('dialog')).getByText('Detail')).toBeTruthy();
+    expect(screen.getByText('Locked tab from the container')).toBeTruthy();
+  });
+
+  it('shows Upgrade plan in the top bar only at 0 credits', () => {
+    const { rerender } = render(
+      <AppShell {...base} bid={bid} activeTab="overview" activePage={null} oralsEnabled>
+        <p>Tab content</p>
+      </AppShell>,
+    );
+    expect(screen.queryByRole('button', { name: 'Upgrade plan' })).toBeNull();
+    rerender(
+      <AppShell {...base} creditsLeft={0} bid={bid} activeTab="overview" activePage={null} oralsEnabled>
+        <p>Tab content</p>
+      </AppShell>,
+    );
+    expect(screen.getByRole('button', { name: 'Upgrade plan' })).toBeTruthy();
   });
 
   it('renders the dialogs open', () => {

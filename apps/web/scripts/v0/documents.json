@@ -1,0 +1,10 @@
+{
+  "sourceCommit": "c0c3ae070324f1bde9783947f3270a93216b10b3",
+  "files": [
+    "DocumentsPanel.tsx",
+    "OverrideKeyDialog.tsx",
+    "sample-data.ts",
+    "types.ts"
+  ],
+  "keepLocal": []
+}

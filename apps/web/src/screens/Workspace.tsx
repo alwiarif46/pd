@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, api, uploadFile } from '../legacy-api';
-import { Dialog } from '../components/Dialog';
 import { RowDetail } from '../components/RowDetail';
 import { SourceViewer } from '../components/SourceViewer';
-import { amendmentTabsNote } from '../features/shared/amendment-tabs-status';
-import { downloadCsv, downloadDocx, downloadXlsx } from '../export';
+import { downloadDocx, downloadXlsx } from '../export';
 import {
   type Bid,
   type DocumentRow,
@@ -315,15 +313,15 @@ function TabPanel(props: {
   switch (tab) {
     case 'overview': return <Overview {...props} bid={bid} />;
     case 'schedule': return null; // features/schedule/route.tsx renders it; the shell never embeds it here.
-    case 'compliance': return <Compliance {...props} bid={bid} />;
+    case 'compliance': return null; // features/compliance/route.tsx renders it; the shell never embeds it here.
     case 'outline': return <Outline {...props} bid={bid} />;
     case 'resumes': return <Resumes {...props} bid={bid} />;
     case 'reviews': return <Reviews {...props} bid={bid} />;
     case 'production': return <Production {...props} bid={bid} />;
     case 'orals': return <Orals {...props} bid={bid} />;
     case 'lessons': return <Lessons {...props} bid={bid} />;
-    case 'documents': return <Documents {...props} bid={bid} />;
-    case 'settings': return <Settings {...props} bid={bid} />;
+    case 'documents': return null; // features/documents/route.tsx renders it; the shell never embeds it here.
+    case 'settings': return null; // features/settings/route.tsx renders it; the shell never embeds it here.
     default: {
       const unreachable: never = tab;
       return unreachable;
@@ -383,101 +381,6 @@ function Overview({ bid, data, onOpen, onReload, onError }: Panel) {
 
 function activeJobsNote(facts: unknown[]): string | null {
   return facts.length > 0 ? null : null;
-}
-
-function Compliance({ bid, data, onOpen, onReload, onError }: Panel) {
-  const all = rowsOf<SourceFields & { reqId: string; requirementText: string; status: string | null; owner: string | null }>(data, 'rows');
-  const [section, setSection] = useState('');
-  const [type, setType] = useState('');
-  const [status, setStatus] = useState('');
-  const [owner, setOwner] = useState('');
-  const [amendment, setAmendment] = useState('');
-  const [flagged, setFlagged] = useState(false);
-  const [hideClosed, setHideClosed] = useState(false);
-  const [checkThese, setCheckThese] = useState(false);
-  const [picked, setPicked] = useState<string[]>([]);
-  const federal = bid.bidType === 'federal';
-  const rows = all.filter((row) => {
-    if (section && !(row.sectionRef ?? '').toLowerCase().includes(section.toLowerCase())) return false;
-    if (type && row.reqType !== type) return false;
-    if (status && !(row.status ?? '').toLowerCase().includes(status.toLowerCase())) return false;
-    if (owner && !(row.owner ?? '').toLowerCase().includes(owner.toLowerCase())) return false;
-    if (amendment && String(row.amendmentNo ?? 0) !== amendment) return false;
-    if (flagged && !(row.flags ?? []).some((flag) => flag === 'maybe_not_requirement' || flag.includes('page') || flag.includes('ocr'))) return false;
-    if (hideClosed && (row.supersedeStatus === 'superseded' || row.supersedeStatus === 'withdrawn')) return false;
-    if (checkThese && !(row.flags ?? []).includes('unmatched')) return false;
-    return true;
-  });
-  const lRef = federal ? 'L ref' : 'Instruction ref';
-  const mRef = federal ? 'M factor' : 'Evaluation factor';
-  const sheet = [[ 'ID', 'Section', 'Requirement', 'Type', lRef, mRef, 'Response', 'Owner', 'Status', 'Amendment', 'Supersede' ], ...all.map((row) => [
-    row.reqId ?? '', row.sectionRef ?? '', row.requirementText, row.reqType ?? '', row.instrRef ?? '', row.evalRef ?? '', '', row.owner ?? '', row.status ?? '', String(row.amendmentNo ?? 0), row.supersedeStatus ?? 'active',
-  ])];
-  return (
-    <div className="stack">
-      <p className="banner">Draft. Review every row before you rely on it.</p>
-      <div className="row">
-        <label>Section <input aria-label="Filter section" value={section} onChange={(event) => setSection(event.target.value)} /></label>
-        <label>Type <input aria-label="Filter type" value={type} onChange={(event) => setType(event.target.value)} /></label>
-        <label>Status <input aria-label="Filter status" value={status} onChange={(event) => setStatus(event.target.value)} /></label>
-        <label>Owner <input aria-label="Filter owner" value={owner} onChange={(event) => setOwner(event.target.value)} /></label>
-        <label>Amendment <input aria-label="Filter amendment" value={amendment} onChange={(event) => setAmendment(event.target.value)} /></label>
-        <label><input type="checkbox" checked={flagged} onChange={(event) => setFlagged(event.target.checked)} /> Flagged</label>
-        <label><input type="checkbox" checked={hideClosed} onChange={(event) => setHideClosed(event.target.checked)} /> Hide superseded and withdrawn</label>
-        <label><input type="checkbox" checked={checkThese} onChange={(event) => setCheckThese(event.target.checked)} /> Check these</label>
-      </div>
-      {checkThese ? <p className="small muted">Unmatched pre-scan hits appear here when a row is flagged unmatched. None are stored separately from the matrix.</p> : null}
-      <div className="row no-print">
-        <button className="btn secondary" type="button" onClick={() => downloadXlsx('compliance.xlsx', sheet)}>XLSX</button>
-        <button className="btn secondary" type="button" onClick={() => downloadCsv('compliance.csv', sheet)}>CSV</button>
-        <button className="btn secondary" type="button" disabled={picked.length < 2} onClick={() => {
-          api(`/api/bids/${bid.id}/compliance/merge`, { method: 'POST', body: JSON.stringify({ ids: picked }) }).then(() => { setPicked([]); onReload(); }).catch((err: Error) => onError(err.message));
-        }}>Merge selected</button>
-      </div>
-      <AddForm label="Add a requirement" onSubmit={(body) => postRow(bid.id, 'compliance', { requirementText: body.name, sectionRef: body.extra }, onReload, onError)} />
-      {rows.length === 0 ? <p>No items found.</p> : null}
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th />
-              <th>ID</th><th>Section</th><th>Requirement</th><th>Type</th><th>{lRef}</th><th>{mRef}</th><th>Response</th><th>Owner</th><th>Status</th><th>Source</th><th>Amendment</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => {
-              const closed = row.supersedeStatus === 'superseded' || row.supersedeStatus === 'withdrawn';
-              return (
-                <tr key={row.id} className={closed ? 'struck' : undefined}>
-                  <td><input aria-label={`Select ${row.reqId}`} type="checkbox" checked={picked.includes(row.id)} onChange={(event) => setPicked(event.target.checked ? [...picked, row.id] : picked.filter((id) => id !== row.id))} /></td>
-                  <td><button type="button" onClick={() => onOpen('compliance_rows', row.id)}>{row.reqId}</button></td>
-                  <td>{row.sectionRef}</td>
-                  <td>
-                    {closed ? <s>{row.requirementText}</s> : row.requirementText}
-                    {row.supersedeStatus === 'superseded' ? <span className="tag superseded">{row.changedByAmendment ? `Superseded by Amd ${row.changedByAmendment}` : 'Superseded'}</span> : null}
-                    {row.supersedeStatus === 'withdrawn' ? <span className="tag withdrawn">{row.changedByAmendment ? `Withdrawn by Amd ${row.changedByAmendment}` : 'Withdrawn'}</span> : null}
-                    {!closed && row.amendmentNo ? <span className="tag added">Added by Amd {row.amendmentNo}</span> : null}
-                    {row.origin === 'user' ? <span className="tag">added by user</span> : null}
-                    {row.supersedeStatus === 'superseded' && row.supersededByRowId ? (
-                      <button type="button" onClick={() => onOpen('compliance_rows', row.supersededByRowId!)}>Open replacement</button>
-                    ) : null}
-                  </td>
-                  <td>{row.reqType}</td>
-                  <td>{row.instrRef}</td>
-                  <td>{row.evalRef}</td>
-                  <td>{(row as { responseSection?: string | null }).responseSection}</td>
-                  <td>{row.owner}</td>
-                  <td>{row.status}</td>
-                  <td>{row.sourcePage ? <button type="button" onClick={() => onOpen('compliance_rows', row.id)}>p. {row.sourcePage}</button> : '—'}</td>
-                  <td className="num">{row.amendmentNo || 'Original'}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
 }
 
 function Outline({ bid, data, onOpen, onReload, onError }: Panel) {
@@ -691,180 +594,6 @@ function Lessons({ bid, data, onReload, onError }: Panel) {
       <AddForm label="Add a note" onSubmit={(body) => postRow(bid.id, 'lessons', { question: body.name, answer: body.extra }, onReload, onError)} />
       <button className="btn secondary" type="button" onClick={() => downloadDocx('lessons.docx', items.map((item) => `${item.question} ${item.answer}`))}>DOCX</button>
     </div>
-  );
-}
-
-/** The amendment tabs status beside a document's status (legacy tag classes). */
-function TabsNote({ doc }: { doc: DocumentRow }) {
-  const note = amendmentTabsNote(doc);
-  return note ? <span className={note.tone === 'bad' ? 'tag withdrawn' : 'tag'}>{note.text}</span> : null;
-}
-
-function Documents({ bid, plan, docs, onReload, onError, onNotice }: Panel) {
-  const [kind, setKind] = useState('attachment');
-  const [reason, setReason] = useState('');
-  const [overrideId, setOverrideId] = useState<string | null>(null);
-  const used = docs.reduce((sum, doc) => sum + doc.sizeBytes, 0);
-  const cap = capMb(plan);
-  return (
-    <div className="stack">
-      <p className="num">{mb(used)} of {cap} MB used</p>
-      <form className="row" onSubmit={(event) => {
-        event.preventDefault();
-        const input = (event.currentTarget.elements.namedItem('file') as HTMLInputElement);
-        const file = input.files?.[0];
-        if (!file) return;
-        uploadFile(bid.id, file, kind).then((result) => {
-          if (result.duplicate) onNotice('Already uploaded.');
-          onReload();
-        }).catch((err: Error) => {
-          if (err instanceof ApiError && err.status === 413) onError(`This file is larger than the ${mb(Math.max(0, cap * 1024 * 1024 - used))} left.`);
-          else if (err.message.toLowerCase().includes('password')) onError('Upload an unlocked copy.');
-          else onError(err.message);
-        });
-      }}>
-        <label className="field">Kind
-          <select aria-label="File kind" value={kind} onChange={(event) => setKind(event.target.value)}>
-            {['solicitation', 'amendment', 'attachment', 'resume', 'draft'].map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </label>
-        <label className="field">File
-          <input name="file" type="file" required aria-label="File to upload" />
-        </label>
-        <button className="btn" type="submit">Upload</button>
-      </form>
-      {docs.length === 0 ? <p>No items found.</p> : (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Name</th><th>Kind</th><th>Amd</th><th>Pages</th><th>Size</th><th>Uploaded</th><th>Live until</th><th>Status</th><th>Marking</th><th /></tr></thead>
-            <tbody>
-              {docs.map((doc) => (
-                <tr key={doc.id}>
-                  <td>{doc.fileName}</td>
-                  <td>{doc.kind}</td>
-                  <td className="num">{doc.amendmentNo ?? '—'}</td>
-                  <td className="num">{doc.pageCount ?? (doc.pagesEstimated ? `${doc.pagesEstimated} est.` : '—')}</td>
-                  <td className="num">{mb(doc.sizeBytes)}</td>
-                  <td className="num">{doc.createdAt.slice(0, 10)}</td>
-                  <td className="num">{doc.liveUntil?.slice(0, 10) ?? '—'}</td>
-                  <td>
-                    {doc.liveStatus || doc.extractStatus || doc.scanStatus || 'processing'}
-                    {' '}
-                    <TabsNote doc={doc} />
-                  </td>
-                  <td>{doc.markingStatus || 'none'}</td>
-                  <td className="row">
-                    {doc.liveStatus === 'archived' ? <button className="btn secondary" type="button" onClick={() => api(`/api/documents/${doc.id}/restore`, { method: 'POST' }).then(() => onNotice('Restore requested')).then(onReload).catch((err: Error) => onError(err.message))}>Restore</button> : null}
-                    {doc.liveStatus === 'restoring' ? <span>Restoring (a short wait)</span> : null}
-                    {doc.kind === 'amendment' ? <button className="btn secondary" type="button" onClick={() => setOverrideId(doc.id)}>Override</button> : null}
-                    <button className="btn danger" type="button" onClick={() => api(`/api/documents/${doc.id}`, { method: 'DELETE' }).then(onReload)}>Delete</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {overrideId ? (
-        <Dialog title={`Override solicitation key for this amendment. ${2 - bid.keyOverridesUsed} left.`} onCancel={() => setOverrideId(null)}>
-          <form className="stack" onSubmit={(event) => {
-            event.preventDefault();
-            api(`/api/documents/${overrideId}/key-override`, { method: 'POST', body: JSON.stringify({ reason }) })
-              .then(() => { setOverrideId(null); onNotice('Override recorded.'); onReload(); })
-              .catch((err: Error) => onError(err.message));
-          }}>
-            <label className="field">Reason
-              <input required value={reason} onChange={(event) => setReason(event.target.value)} />
-            </label>
-            <button className="btn" type="submit">Override</button>
-          </form>
-        </Dialog>
-      ) : null}
-    </div>
-  );
-}
-
-function Settings({ bid, plan, onReload, onError }: Panel) {
-  const [name, setName] = useState(bid.name);
-  const [agency, setAgency] = useState(bid.agency ?? '');
-  const [bidType, setBidType] = useState(bid.bidType);
-  const [number, setNumber] = useState(bid.solicitationNumber);
-  const [start, setStart] = useState(dayKey(bid.startDate));
-  const [due, setDue] = useState(dayKey(bid.dueDate));
-  const [time, setTime] = useState(bid.dueTime ?? '');
-  const [zone, setZone] = useState(bid.timeZone ?? '');
-  const [orals, setOrals] = useState(bid.oralsEnabled);
-  const [keep, setKeep] = useState(dayKey(bid.retentionExtendedUntil));
-  const [prompt, setPrompt] = useState<string | null>(null);
-  const [confirmName, setConfirmName] = useState('');
-  const [deleting, setDeleting] = useState(false);
-
-  function save(mode?: 'shift' | 'scale' | 'keep') {
-    const previous = dayKey(bid.dueDate);
-    api<Bid>(`/api/bids/${bid.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({
-        name, agency, bidType, solicitationNumber: number,
-        startDate: start || null, dueDate: due || null, dueTime: time, timeZone: zone,
-        oralsEnabled: orals,
-        retentionExtendedUntil: plan === 'free' ? undefined : (keep || null),
-      }),
-    }).then(() => {
-      if (mode && previous && due && previous !== due) {
-        return api(`/api/bids/${bid.id}/schedule/adjust`, { method: 'POST', body: JSON.stringify({ mode, previousDue: previous, nextDue: due }) });
-      }
-      return undefined;
-    }).then(() => {
-      setPrompt(null);
-      onReload();
-    }).catch((err: Error) => onError(err.message));
-  }
-
-  return (
-    <form className="card stack" onSubmit={(event) => {
-      event.preventDefault();
-      if (dayKey(bid.dueDate) && due && dayKey(bid.dueDate) !== due) setPrompt(due);
-      else save();
-    }}>
-      <label className="field">Name <input value={name} onChange={(event) => setName(event.target.value)} /></label>
-      <label className="field">Agency <input value={agency} onChange={(event) => setAgency(event.target.value)} /></label>
-      <label className="field">Bid type
-        <select value={bidType} onChange={(event) => setBidType(event.target.value === 'sled' ? 'sled' : 'federal')}>
-          <option value="federal">Federal</option>
-          <option value="sled">SLED</option>
-        </select>
-      </label>
-      <label className="field">Solicitation number <input value={number} onChange={(event) => setNumber(event.target.value)} /></label>
-      <label className="field">Start date <input type="date" value={start} onChange={(event) => setStart(event.target.value)} /></label>
-      <label className="field">Due date <input type="date" value={due} onChange={(event) => setDue(event.target.value)} /></label>
-      <label className="field">Time <input value={time} onChange={(event) => setTime(event.target.value)} /></label>
-      <label className="field">Time zone <input value={zone} onChange={(event) => setZone(event.target.value)} /></label>
-      <label className="row"><input type="checkbox" checked={orals} onChange={(event) => setOrals(event.target.checked)} /> Orals</label>
-      {plan !== 'free' ? <label className="field">Keep files live until <input type="date" value={keep} onChange={(event) => setKeep(event.target.value)} /></label> : null}
-      <button className="btn" type="submit">Save</button>
-      <button className="btn danger" type="button" onClick={() => setDeleting(true)}>Delete the bid</button>
-      {prompt ? (
-        <Dialog title="The due date changed" onCancel={() => setPrompt(null)}>
-          <p>Move unlocked schedule activities with the new date, scale them, or keep them.</p>
-          <div className="row">
-            <button className="btn" type="button" onClick={() => save('shift')}>Shift</button>
-            <button className="btn" type="button" onClick={() => save('scale')}>Scale</button>
-            <button className="btn secondary" type="button" onClick={() => save('keep')}>Keep</button>
-          </div>
-        </Dialog>
-      ) : null}
-      {deleting ? (
-        <Dialog title={`Delete ${bid.name}`} onCancel={() => setDeleting(false)}>
-          <p>Type the bid name to delete it and its archive copies. A consumed credit is not returned. A reserved credit is released.</p>
-          <label className="field">Bid name
-            <input value={confirmName} onChange={(event) => setConfirmName(event.target.value)} />
-          </label>
-          <button className="btn danger" type="button" disabled={confirmName !== bid.name} onClick={() => {
-            api(`/api/bids/${bid.id}`, { method: 'DELETE' }).then(() => { window.location.hash = '#/bids'; }).catch((err: Error) => onError(err.message));
-          }}>Delete {bid.name}</button>
-        </Dialog>
-      ) : null}
-    </form>
   );
 }
 

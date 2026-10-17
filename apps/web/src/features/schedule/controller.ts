@@ -62,6 +62,49 @@ export const STALE_MESSAGE = 'The due date changed while this was open. Check th
 export const CHECK_MESSAGE =
   'The schedule changed after the last try, so it may already have moved. Check the dates before you change them again.';
 
+/**
+ * The client-side bound on one date-change answer (every call it makes, together), so the per-bid lock
+ * (date-change-lock.ts) is always released. 60 s: an answer is two or three small reads and writes plus
+ * one adjust transaction over a bid's activities, normally done in well under a few seconds; 60 s is also
+ * the usual idle timeout of the proxies and load balancers in front of an API, so a response that has
+ * not come by then is not coming. Long enough not to cut a slow but live request, short enough that a
+ * stuck one does not hold the prompt for minutes.
+ */
+export const DATE_CHANGE_TIMEOUT_MS = 60_000;
+
+export const TIMEOUT_MESSAGE = 'The server did not answer in time. It may still have saved the change, so check before you try again.';
+export const DATE_CHANGE_BUSY_MESSAGE = 'A due-date change for this bid is still being applied.';
+
+export interface DateChangeOptions {
+  /** Defaults to DATE_CHANGE_TIMEOUT_MS. */
+  timeoutMs?: number;
+}
+
+/**
+ * Settles with `call`, or rejects with an `ApiError` status 0 (TIMEOUT_MESSAGE) once `ms` passes. A
+ * status-0 error is what a lost response already is: not a refusal, so the callers treat the write as
+ * maybe applied (progress.dueWritten, the adjust snapshot, the server's 409 on a repeated amendment
+ * answer), and a retry after a timeout goes through the same checks as one after a dropped connection.
+ * The request itself is not cancelled; like any lost response it may still land on the server.
+ */
+export function withDeadline<T>(call: Promise<T>, ms: number = DATE_CHANGE_TIMEOUT_MS): Promise<T> {
+  return deadline(ms).race(call);
+}
+
+/** One bound shared by every step of an answer; `race` clears the timer once the step settles. */
+function deadline(ms: number) {
+  const end = Date.now() + ms;
+  return {
+    race<T>(call: Promise<T>): Promise<T> {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new ApiError(TIMEOUT_MESSAGE, 0)), Math.max(0, end - Date.now()));
+      });
+      return Promise.race([call, late]).finally(() => clearTimeout(timer));
+    },
+  };
+}
+
 /** A 4xx is a refusal: the server did not apply the request. Anything else (network, 5xx, a lost response) may have. */
 function refused(error: unknown): boolean {
   return error instanceof ApiError && error.status >= 400 && error.status < 500;
@@ -102,13 +145,15 @@ export async function resolveDateChange(
   change: DueMove,
   mode: DateChangeMode,
   progress: DateChangeProgress = NO_PROGRESS,
+  opts: DateChangeOptions = {},
 ): Promise<DateChangeOutcome> {
   const { previousDue, nextDue } = change;
   let state = progress;
+  const bound = deadline(opts.timeoutMs ?? DATE_CHANGE_TIMEOUT_MS);
 
   let due: string | null;
   try {
-    due = dayOf((await deps.getBid(bidId)).dueDate);
+    due = dayOf((await bound.race(deps.getBid(bidId))).dueDate);
   } catch (error) {
     return { kind: 'failed', message: messageOf(error), progress: state };
   }
@@ -117,7 +162,7 @@ export async function resolveDateChange(
     if (due !== previousDue) return { kind: 'stale', message: STALE_MESSAGE };
     if (previousDue !== nextDue) {
       try {
-        await deps.updateBid(bidId, { dueDate: nextDue });
+        await bound.race(deps.updateBid(bidId, { dueDate: nextDue }));
       } catch (error) {
         return { kind: 'failed', message: messageOf(error), progress: refused(error) ? state : { ...state, dueWritten: true } };
       }
@@ -131,7 +176,7 @@ export async function resolveDateChange(
   const notMoved = (error: unknown) => `The new due date is saved, but the schedule did not move. ${messageOf(error)}`;
   let current: ActivitySnapshot[];
   try {
-    current = snapshotOf((await deps.getTab(bidId, 'schedule')).activities);
+    current = snapshotOf((await bound.race(deps.getTab(bidId, 'schedule'))).activities);
   } catch (error) {
     return { kind: 'adjust_failed', message: notMoved(error), progress: state };
   }
@@ -141,7 +186,7 @@ export async function resolveDateChange(
 
   const before = state.snapshot ?? current;
   try {
-    const result = await deps.adjustSchedule(bidId, { mode, previousDue, nextDue });
+    const result = await bound.race(deps.adjustSchedule(bidId, { mode, previousDue, nextDue }));
     return { kind: 'done', result };
   } catch (error) {
     return {
@@ -184,10 +229,11 @@ export async function answerAmendmentDateChange(
   bidId: string,
   change: Pick<PendingDateChangeDto, 'amendmentId' | 'previousDue'>,
   mode: DateChangeMode,
+  opts: DateChangeOptions = {},
 ): Promise<AmendmentAnswerOutcome> {
   if (mode !== 'keep' && change.previousDue === null) return { kind: 'failed', message: KEEP_ONLY_MESSAGE };
   try {
-    const result = await deps.adjustSchedule(bidId, { mode, amendmentId: change.amendmentId });
+    const result = await withDeadline(deps.adjustSchedule(bidId, { mode, amendmentId: change.amendmentId }), opts.timeoutMs);
     return { kind: 'done', result };
   } catch (error) {
     if (error instanceof ApiError && error.status === 409 && error.code === 'date_change_resolved') {

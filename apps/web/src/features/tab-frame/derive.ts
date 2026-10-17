@@ -272,7 +272,7 @@ function pick(flags: { waiting: boolean; failed: boolean; processing: boolean })
 
 /**
  * The sidebar signals. Bid-wide state goes on Documents (any active job; a blocked marking or an
- * amendment whose solicitation number does not match; any failed job); compliance state goes on
+ * amendment whose solicitation number does not match or whose number needs setting; any failed job); compliance state goes on
  * Compliance (its AI stages running or failed; proposed amendment changes). One signal per tab:
  * waiting (needs you) wins over failed, which wins over processing.
  */
@@ -283,7 +283,7 @@ export function tabSignals(docs: DocumentDto[], jobs: JobDto[], links: Amendment
   const out: { tab: Tab; signal: TabSignal }[] = [];
 
   const documents = pick({
-    waiting: live.some((doc) => doc.markingStatus === 'blocked' || doc.keyCheck === 'mismatch'),
+    waiting: live.some((doc) => doc.markingStatus === 'blocked' || doc.keyCheck === 'mismatch' || doc.amendmentStatus === 'needs_number'),
     failed: failed.length > 0,
     processing: active.length > 0 || live.some(isProcessing),
   });

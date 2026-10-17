@@ -230,3 +230,11 @@ GROUND RULES: same as parts A and B.
 
 When done: push to v0/ui-screens, then list each folder you changed and the components in it.
 ````
+
+---
+
+## Round 3 (17 Oct 2026)
+
+v0 did not push round 3. At the owner's request, Claude Code applied the round-3 fix text to `design/v0/shell`, `settings`, `compliance` and `documents` on branch `ui/v0-round2-batch1` (commits titled `design: <screen> fix round 3 (applied by Claude Code at the owner's request)`), then integrated them into `src/ui/`. This is a one-time exception to "never edit `design/v0`".
+
+v0's next round must start from these files, not from its own earlier copies, or it will undo the fixes. Outline, Resumes, Reviews, Production, Orals and Lessons (Prompts B and C) are untouched.

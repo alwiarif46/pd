@@ -1,9 +1,10 @@
 {
-  "sourceCommit": "4098136e4b4d89cd9f4d0c961e10deccbfd8ae3b",
+  "sourceCommit": "a615736c47a00ab7dcda0db840f3dc8602fae56d",
   "files": [
     "AppShell.tsx",
     "ConfirmDialog.tsx",
     "UpgradeDialog.tsx",
+    "sample-data.ts",
     "types.ts"
   ],
   "keepLocal": []

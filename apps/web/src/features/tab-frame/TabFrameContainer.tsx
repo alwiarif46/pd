@@ -14,6 +14,8 @@ interface Props {
   title: string;
   /** The tab has AI-extracted rows: shows the draft notice when nothing is processing. */
   hasAiRows?: boolean;
+  /** Draw the marking prompts of blocked files in the waiting slot (default). Documents turns it off: its panel draws one under each file. */
+  markings?: boolean;
   children: ReactNode;
   /** Test seam; defaults to the typed client. */
   api?: TabFrameApi;
@@ -24,7 +26,7 @@ interface Props {
  * retry, confirm or remove a marked file, confirm or reject amendment changes, upload, upgrade. Every
  * action waits for the server, then refreshes the shell.
  */
-export function TabFrameContainer({ tab, title, hasAiRows = false, children, api = tabFrameApi }: Props) {
+export function TabFrameContainer({ tab, title, hasAiRows = false, markings = true, children, api = tabFrameApi }: Props) {
   const shell = useRequiredShell();
   const [busy, setBusy] = useState<string[]>([]);
   const model = deriveTabFrame(
@@ -59,10 +61,11 @@ export function TabFrameContainer({ tab, title, hasAiRows = false, children, api
     if (ok) await run(documentId, () => runAction(() => api.deleteDocument(documentId)));
   }
 
+  const shownMarkings = markings ? model.markings : [];
   const waiting =
-    model.markings.length > 0 || model.proposals.length > 0 ? (
+    shownMarkings.length > 0 || model.proposals.length > 0 ? (
       <div className="flex flex-col gap-4">
-        {model.markings.map((request) => (
+        {shownMarkings.map((request) => (
           <MarkingPrompt
             key={request.documentId}
             fileName={request.fileName}
