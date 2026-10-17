@@ -102,13 +102,16 @@ Calls to `withStubSkills(fn)` must not overlap: it sets one process-wide environ
 
 ## Test doubles for the native stack (`E2E_STACK=native`)
 
-`src/doubles/` holds three small servers behind the protocols of the real things. They exist so the stack can run without Docker (BUILD-PLAN s8, stub rule). `pnpm dev:stack start` runs them with real Postgres and Redis (`infra/local/native-stack.sh`). Production code never imports them: `test/no-prod-imports.test.ts` and an ESLint rule fail if it does.
+`src/doubles/` holds four small servers behind the protocols of the real things. They exist so the stack can run without Docker (BUILD-PLAN s8, stub rule). `pnpm dev:stack start` runs them with real Postgres and Redis (`infra/local/native-stack.sh`). Production code never imports them: `test/no-prod-imports.test.ts` and an ESLint rule fail if it does.
 
 | Double | Stands in for | What it speaks |
 |---|---|---|
-| `startMockOidc()` | Zitadel | Discovery, `/jwks`, `/authorize` (logs in at once as tenant A's or B's admin: `?user=a` or `?user=b`, default `a`), `/token` (authorization code with PKCE, and refresh), `/userinfo`. RS256 tokens signed with a key made at start; the tenant id is in the `urn:zitadel:iss:org:id` claim. |
+| `startMockOidc()` | Zitadel (sign-in) | Discovery (with `end_session_endpoint`), `/jwks`, `/authorize` (logs in at once as tenant A's or B's admin: `?user=a` or `?user=b`, default `a`; also `?user=free` for `someone@gmail.com` and `?user=unverified` for an unverified email; `login_hint` picks a user by email; `prompt=none` answers `error=login_required` unless a session cookie or `setLoggedIn(true)` says logged in), `/token` (authorization code with PKCE, refresh, and the `urn:ietf:params:oauth:grant-type:jwt-bearer` grant for assertions signed by a key added with `registerServiceKey`), `/userinfo`, `/end_session`. RS256 tokens signed with a key made at start. The org id is in `urn:zitadel:iss:org:id` and `urn:zitadel:iam:user:resourceowner:id` (option `orgId` fixes it). Tokens carry `amr` and `email_verified` per user. The option `tokenError` (or `setTokenError`) makes `/token` fail with a chosen OAuth error. `createServiceKey(userId)` makes a machine key, its Zitadel-style key file and signed assertions. |
+| `startMockZitadel({ oidc })` | Zitadel (admin API) | In-memory state for the calls identity makes: `POST /v2/organizations` (honors `organization_id`, 409 on duplicate), user get, deactivate and reactivate, projects and OIDC apps (with `_search`), login policy, second and multi factors, Google and Azure IdPs, login policy IdPs, action targets (returns a `signingKey`) and executions. Each call needs a bearer token from the mock issuer's jwt-bearer grant (`requireAuth: false` turns that off). It records `calls`, and `injectFailure({ method?, path, status?, times? })` returns 5xx. |
 | `startMockS3()` | The S3 store (SeaweedFS in Compose) | Path-style CreateBucket, PutObject, GetObject (Range), HeadObject, DeleteObject, ListObjectsV2 (prefix, delimiter, paging). Needs an `Authorization` header; the signature is not checked. |
 | `startMockClamd()` | ClamAV | `zPING`, `zVERSION`, `zINSTREAM` (and the `n` forms). Replies `stream: OK`, or `stream: Eicar-Test-Signature FOUND` when the stream holds the EICAR string. |
+
+`signZitadelEvent(body, signingKey)` and `verifyZitadelEvent(body, header, signingKey)` use the header `ZITADEL-Signature: t=<unix>,v1=<hex hmac-sha256 of "t.body">` with a 300 second window. That format comes from the design note. The real format and every admin path detail are "verify in CI" against the CI Zitadel.
 
 `stackMode()` reads `E2E_STACK` (`compose` by default, or `native`). Each double has a unit test that uses a real protocol client.
 
