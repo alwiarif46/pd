@@ -345,6 +345,7 @@ jobs:
           docker inspect pd-local-clamav-1 --format '{{json .State}}' || true
           $COMPOSE exec -T clamav ps aux || true
           $COMPOSE exec -T clamav /usr/local/bin/clamdcheck.sh || echo "clamdcheck exit $?"
+          $COMPOSE exec -T clamav sh -c 'cat /usr/local/bin/clamdcheck.sh; echo ---; ls -l /tmp/*.sock /run/clamav 2>&1; echo ---; tail -n 40 /var/log/clamav/clamd.log 2>&1; echo ---; grep -E "^(TCP|Local|Log)" /etc/clamav/clamd.conf' || true
           free -m || true
       - name: pgvector and the databases
         run: python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env postgres
