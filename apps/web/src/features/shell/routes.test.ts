@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activePageOf, hrefFor, parseRoute, tabHref, type AppRoute } from './routes';
+import { activePageOf, hrefFor, parseRoute, tabBodyOf, tabHref, type AppRoute } from './routes';
 
 describe('parseRoute', () => {
   it.each([
@@ -63,5 +63,18 @@ describe('activePageOf', () => {
     expect(activePageOf({ kind: 'page', page: 'account' })).toBe('account');
     expect(activePageOf({ kind: 'new_bid' })).toBe('bids');
     expect(activePageOf({ kind: 'tab', bidId: 'b', tab: 'overview', rowId: null })).toBeNull();
+  });
+});
+
+describe('tabBodyOf', () => {
+  const base = { tab: 'compliance', plan: 'starter', bidError: null, oralsOff: false, registered: true } as const;
+  it('picks what the shell draws for a tab, in order: bid error, locked, Orals off, registered, legacy', () => {
+    expect(tabBodyOf({ ...base, bidError: 'Bid not found.' })).toBe('bid_error');
+    expect(tabBodyOf({ ...base, tab: 'outline', plan: 'free', bidError: 'x' })).toBe('bid_error');
+    expect(tabBodyOf({ ...base, tab: 'outline', plan: 'free' })).toBe('locked');
+    expect(tabBodyOf({ ...base, tab: 'compliance', plan: 'free' })).toBe('registered');
+    expect(tabBodyOf({ ...base, tab: 'orals', oralsOff: true })).toBe('orals_off');
+    expect(tabBodyOf({ ...base, tab: 'orals', oralsOff: false })).toBe('registered');
+    expect(tabBodyOf({ ...base, registered: false })).toBe('legacy');
   });
 });

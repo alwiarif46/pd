@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { isAbortError, type DocumentDto, type RowHistoryDto } from '@/api';
 import type { FormStatus } from '@/types';
@@ -16,6 +16,7 @@ import {
   type RowDetailApi,
   type RowSourceRef,
 } from './controller';
+import { currentOpener, returnTarget, type Opener } from './focus-return';
 import { useDetailPortal } from './use-detail-portal';
 
 export interface RowDetailContainerProps<T extends DetailTable> {
@@ -32,7 +33,7 @@ export interface RowDetailContainerProps<T extends DetailTable> {
   onSaved: () => void;
   /** Selects another row of the tab (the "Superseded by" jump). */
   onJumpToRow: (id: string) => void;
-  /** Closes the slider (clears `?row=`); the tab returns focus to the row. */
+  /** Closes the slider (clears `?row=`). Focus has already been returned to the row (focus-return.ts). */
   onClose: () => void;
   /** Test seam; defaults to the typed client. */
   api?: RowDetailApi;
@@ -47,7 +48,8 @@ const keyOf = (bidId: string, table: DetailTable, rowId: string) => `${bidId}/${
  * The row detail slider (09 s5.17) for one row of a tab that opted into the shell's slot (`rowDetail`): loads
  * the row and its history, maps them to v0's RowDetail, saves the changed fields, and renders the slider into
  * the shell's detail host (useDetailPortal). Everything is keyed by bid, table and row: an answer for a row
- * (or bid) no longer selected is dropped, and a save's status shows only on the row it was made on.
+ * (or bid) no longer selected is dropped, and a save's status shows only on the row it was made on. On close
+ * (X, Close or Esc) focus returns to the element that opened the slider, or to the shown row's element.
  */
 export function RowDetailContainer<T extends DetailTable>({
   bidId,
@@ -75,6 +77,16 @@ export function RowDetailContainer<T extends DetailTable>({
   useEffect(() => {
     closeRef.current = onClose;
   });
+  /**
+   * The element that had focus when the slider opened. Read in a layout effect on mount, before v0's RowDetail
+   * moves focus to its heading (a passive effect). Kept from the first run, so StrictMode's second run (after
+   * the heading took focus) does not replace it.
+   */
+  const [openedFor] = useState(rowId);
+  const openerRef = useRef<Opener | null>(null);
+  useLayoutEffect(() => {
+    openerRef.current ??= currentOpener(openedFor);
+  }, [openedFor]);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -89,7 +101,10 @@ export function RowDetailContainer<T extends DetailTable>({
         if (abort.signal.aborted || isAbortError(error)) return;
         toast.error(messageOf(error));
         // A failed first load closes the slider; a failed reload keeps the row shown.
-        if (shownRef.current !== loadKey) closeRef.current();
+        if (shownRef.current !== loadKey) {
+          returnTarget(openerRef.current, rowId)?.focus();
+          closeRef.current();
+        }
       },
     );
     return () => abort.abort();
@@ -113,8 +128,15 @@ export function RowDetailContainer<T extends DetailTable>({
   const onSave = (values: Record<string, string>) => {
     if (!current || savingRef.current.has(key)) return;
     const patch = rowPatchFor(table, values, editFields);
-    if (Object.keys(patch).length === 0) return;
     const saveKey = key;
+    if (Object.keys(patch).length === 0) {
+      // Nothing to send: report done (after a submitting render, so v0 sees the change) and the form closes.
+      setSave({ key: saveKey, status: { state: 'submitting' } });
+      void Promise.resolve().then(() =>
+        setSave((prev) => (prev?.key === saveKey ? { key: saveKey, status: { state: 'done', message: 'No changes.' } } : prev)),
+      );
+      return;
+    }
     savingRef.current.add(saveKey);
     setSave({ key: saveKey, status: { state: 'submitting' } });
     api.updateRow(bidId, table, rowId, patch).then(
@@ -131,6 +153,11 @@ export function RowDetailContainer<T extends DetailTable>({
     );
   };
 
+  const close = () => {
+    returnTarget(openerRef.current, rowId)?.focus();
+    onClose();
+  };
+
   return useDetailPortal(
     <RowDetail
       open
@@ -142,7 +169,7 @@ export function RowDetailContainer<T extends DetailTable>({
       onOpenSource={openSource}
       onSave={onSave}
       onJumpToRow={onJumpToRow}
-      onClose={onClose}
+      onClose={close}
     />,
   );
 }

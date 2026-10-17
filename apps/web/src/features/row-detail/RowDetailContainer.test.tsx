@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { StrictMode } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -249,10 +250,105 @@ describe('RowDetailContainer', () => {
     expect(screen.getByRole('heading', { name: 'BID-2 ROW', level: 2 })).toBeTruthy();
   });
 
+  it('leaves the form without a request when Save changes has nothing changed', async () => {
+    const { api, user } = renderContainer();
+    await titled('REQ-1');
+    await user.click(within(host).getByRole('button', { name: 'Edit' }));
+    await user.click(within(host).getByRole('button', { name: 'Save changes' }));
+    expect(within(host).queryByRole('button', { name: 'Save changes' })).toBeNull();
+    expect(api.updateRow).not.toHaveBeenCalled();
+  });
+
   it('closes with the message when the row cannot be loaded', async () => {
     const api = mockApi({ getRow: vi.fn(async () => Promise.reject(new ApiError('Row not found.', 404))) as RowDetailApi['getRow'] });
     const { onClose } = renderContainer({ api });
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     expect(toast.error).toHaveBeenCalledWith('Row not found.');
+  });
+});
+
+describe('RowDetailContainer: focus returns to the row on close (09 s5.17)', () => {
+  let list: HTMLElement;
+  beforeEach(() => {
+    list = document.createElement('div');
+    list.innerHTML =
+      '<div data-row="req-1"><button type="button">Open REQ-1</button></div>' +
+      '<div data-row="req-2"><button type="button">Open REQ-2</button></div>';
+    document.body.appendChild(list);
+  });
+  afterEach(() => list.remove());
+  const opener = (name: string) => within(list).getByRole('button', { name });
+
+  it.each([
+    ['Close', 'button'],
+    ['Close row detail', 'button'],
+    ['Escape', 'key'],
+  ] as const)('returns focus to the element that opened the slider on %s', async (name, how) => {
+    opener('Open REQ-1').focus();
+    const { onClose, user } = renderContainer();
+    const heading = await titled('REQ-1');
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    if (how === 'key') fireEvent.keyDown(heading, { key: 'Escape' });
+    else await user.click(within(host).getByRole('button', { name }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(opener('Open REQ-1'));
+  });
+
+  it('keeps the opener under StrictMode, whose second effect run comes after the heading took focus', async () => {
+    opener('Open REQ-1').focus();
+    const api = mockApi();
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <StrictMode>
+        <ShellContext.Provider value={shellValue()}>
+          <RowDetailContainer
+            bidId="bid-1"
+            table="compliance_rows"
+            rowId="req-1"
+            federal
+            docs={[]}
+            rowIds={new Set(['req-1'])}
+            api={api}
+            onOpenSource={vi.fn()}
+            onSaved={vi.fn()}
+            onJumpToRow={vi.fn()}
+            onClose={onClose}
+          />
+        </ShellContext.Provider>
+      </StrictMode>,
+    );
+    await titled('REQ-1');
+    await user.click(within(host).getByRole('button', { name: 'Close' }));
+    expect(document.activeElement).toBe(opener('Open REQ-1'));
+  });
+
+  it('returns focus when a failed first load closes the slider', async () => {
+    opener('Open REQ-1').focus();
+    const api = mockApi({ getRow: vi.fn(async () => Promise.reject(new ApiError('Row not found.', 404))) as RowDetailApi['getRow'] });
+    const { onClose } = renderContainer({ api });
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(document.activeElement).toBe(opener('Open REQ-1'));
+  });
+
+  it('falls back to the row element by id when the opener is gone', async () => {
+    const gone = document.createElement('button');
+    document.body.appendChild(gone);
+    gone.focus();
+    const { user } = renderContainer();
+    await titled('REQ-1');
+    gone.remove();
+    await user.click(within(host).getByRole('button', { name: 'Close' }));
+    expect(document.activeElement).toBe(opener('Open REQ-1'));
+  });
+
+  it('returns focus to the row shown at close after a jump to another row', async () => {
+    opener('Open REQ-1').focus();
+    const { update, user } = renderContainer();
+    await titled('REQ-1');
+    update({ rowId: 'req-2' });
+    await titled('REQ-2');
+    await user.click(within(host).getByRole('button', { name: 'Close' }));
+    expect(document.activeElement).toBe(opener('Open REQ-2'));
   });
 });

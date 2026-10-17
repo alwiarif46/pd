@@ -62,6 +62,9 @@ export function SourceViewerContainer({ source, docs, onClose, api = sourceApi }
       abort.abort();
       if (url) URL.revokeObjectURL(url);
       url = null;
+      // The view is dropped with its URL: reopening the same source shows loading, never a revoked page or an
+      // old error.
+      setLoaded((prev) => (prev?.key === loadKey ? null : prev));
     };
   }, [api, documentId, page, pageEnd, kind, version]);
 

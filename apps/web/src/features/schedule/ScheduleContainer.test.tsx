@@ -115,12 +115,12 @@ function renderContainer(
   const shell = shellValue(opts.shell);
   const now = opts.now ?? (() => new Date(2026, 10, 20, 9));
   const user = userEvent.setup();
-  const tree = (bidId: string, value: ShellContextValue) => (
+  const tree = (bidId: string, value: ShellContextValue, rowId: string | null = opts.selectedRowId ?? null) => (
     <ShellContext.Provider value={value}>
       <ScheduleContainer
         bidId={bidId}
         tab="schedule"
-        selectedRowId={opts.selectedRowId ?? null}
+        selectedRowId={rowId}
         api={api}
         exporter={exporter}
         now={now}
@@ -131,7 +131,9 @@ function renderContainer(
   const view = render(tree('bid-1', shell));
   /** The shell switching bids without remounting the container (the same registered component). */
   const switchTo = (bidId: string, over: Partial<ShellContextValue> = {}) => view.rerender(tree(bidId, shellValue({ bidId, ...over })));
-  return { api, exporter, shell, user, switchTo, ...view };
+  /** The shell selecting a row (`?row=`) or clearing it. */
+  const select = (rowId: string | null) => view.rerender(tree('bid-1', shell, rowId));
+  return { api, exporter, shell, user, switchTo, select, ...view };
 }
 
 /** A promise the test settles by hand. */
@@ -1165,6 +1167,24 @@ describe('ScheduleContainer: row detail', () => {
     await user.click(within(host).getByRole('button', { name: 'Open source' }));
     const viewer = await findSourceViewer();
     expect(within(viewer).getByText('Page 12')).toBeTruthy();
+    host.remove();
+  });
+
+  it('returns focus to the row that opened the slider when it closes', async () => {
+    const host = withHost();
+    const { shell, user, select } = renderContainer({ api: mockApi([userRow, sourced]), rowApi: rowApi(), shell: { detailHost: host } });
+    await ready();
+    await user.click(screen.getByRole('tab', { name: 'Milestones' }));
+    const details = screen.getByRole('button', { name: 'Details for Proposal due' });
+    await user.click(details);
+    expect(shell.openRow).toHaveBeenCalledWith('act-ai');
+    select('act-ai');
+    const heading = await within(host).findByRole('heading', { name: 'Proposal due', level: 2 });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    fireEvent.keyDown(heading, { key: 'Escape' });
+    expect(shell.openRow).toHaveBeenLastCalledWith(null);
+    select(null);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Details for Proposal due' }));
     host.remove();
   });
 });

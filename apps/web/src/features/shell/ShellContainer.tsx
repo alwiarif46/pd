@@ -34,7 +34,7 @@ import {
 } from './controller';
 import { LegacyFrame } from './LegacyFrame';
 import type { PageKey, ScreenRegistry } from './registry';
-import { activePageOf, isPaidTab, pageHref, TAB_TITLES, tabHref, type AppRoute } from './routes';
+import { activePageOf, pageHref, TAB_TITLES, tabBodyOf, tabHref, type AppRoute } from './routes';
 import { screens } from './screens';
 
 type ShellState = { kind: 'loading' } | { kind: 'error'; message: string } | ShellData;
@@ -386,18 +386,22 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign, regist
   const bidDto = bidData?.bid ?? listed;
   const signals = bidData ? tabSignals(bidData.docs, bidData.jobs, bidData.links) : [];
   const oralsEnabled = bidDto?.oralsEnabled ?? false;
-  // The registered tab screen is drawn (content() below), not an error, the locked state or Orals turned off.
-  const tabScreenShown =
-    route.kind === 'tab' &&
-    registry.tabs.has(route.tab) &&
-    !bidError &&
-    !(org.plan === 'free' && isPaidTab(route.tab)) &&
-    !(route.tab === 'orals' && bidDto !== null && !bidDto.oralsEnabled);
+  // What content() draws for the tab; the row detail host below follows the same answer.
+  const tabBody =
+    route.kind === 'tab'
+      ? tabBodyOf({
+          tab: route.tab,
+          plan: org.plan,
+          bidError,
+          oralsOff: bidDto !== null && !bidDto.oralsEnabled,
+          registered: registry.tabs.has(route.tab),
+        })
+      : null;
   // One host, only while a `rowDetail` tab is drawn with a row selected: the tab portals its RowDetail into
   // it, so the slider sits in AppShell's aside, outside `.app-shell`, while staying in the tab's React tree.
   // Legacy tabs (Workspace) and tabs that did not opt in get no slot: they draw their own detail.
   const detail =
-    route.kind === 'tab' && route.rowId !== null && tabScreenShown && registry.detailTabs.has(route.tab) ? (
+    route.kind === 'tab' && route.rowId !== null && tabBody === 'registered' && registry.detailTabs.has(route.tab) ? (
       <div ref={setDetailHost} className="contents" />
     ) : null;
 
@@ -414,7 +418,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign, regist
       }
       return <LegacyFrame>{legacyPage(key)}</LegacyFrame>;
     }
-    if (bidError) {
+    if (tabBody === 'bid_error') {
       return (
         <PageFrame>
           <div role="alert" className="flex max-w-md flex-col items-start gap-3 text-ink">
@@ -427,7 +431,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign, regist
       );
     }
     // A paid tab on Free: the container draws the locked state as the shell's children (09 s5.1); no tab screen loads.
-    if (org.plan === 'free' && isPaidTab(route.tab)) {
+    if (tabBody === 'locked') {
       return (
         <TabFrameContainer tab={route.tab} title={TAB_TITLES[route.tab]}>
           {null}
@@ -435,7 +439,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign, regist
       );
     }
     // Orals is hidden from the tab list while it is off for the bid; a typed or stale link says so.
-    if (route.tab === 'orals' && bidDto && !bidDto.oralsEnabled) {
+    if (tabBody === 'orals_off') {
       const settings = tabHref(route.bidId, 'settings');
       return (
         <PageFrame>
@@ -447,7 +451,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign, regist
         </PageFrame>
       );
     }
-    const Registered = registry.tabs.get(route.tab);
+    const Registered = tabBody === 'registered' ? registry.tabs.get(route.tab) : undefined;
     if (Registered) return <Registered bidId={route.bidId} tab={route.tab} selectedRowId={route.rowId} />;
     return (
       <LegacyFrame>

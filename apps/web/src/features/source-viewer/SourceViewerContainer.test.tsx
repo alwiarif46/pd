@@ -197,6 +197,41 @@ describe('SourceViewerContainer', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('shows the loading state first when the same source is opened again, never the revoked page', async () => {
+    let finish!: (blob: Blob) => void;
+    const getDocumentFile = vi
+      .fn()
+      .mockResolvedValueOnce(new Blob(['%PDF']))
+      .mockImplementationOnce(() => new Promise<Blob>((resolve) => (finish = resolve))) as SourceApi['getDocumentFile'];
+    const { show } = renderViewer({ api: mockApi({ getDocumentFile }) });
+    await within(await viewer()).findByTitle('Document page');
+    show(null);
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:pdf-1');
+    show({ ...source });
+    const dialog = await viewer();
+    expect(within(dialog).queryByTitle('Document page')).toBeNull();
+    expect(dialog.querySelector('[aria-busy="true"]')).toBeTruthy();
+    await act(async () => finish(new Blob(['%PDF'])));
+    expect((await within(dialog).findByTitle('Document page')).getAttribute('src')).toBe('blob:pdf-2#page=4');
+  });
+
+  it('shows the loading state first when a source that failed is opened again', async () => {
+    let fail!: (error: unknown) => void;
+    const getDocumentPages = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError('Could not load the page.', 500))
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => (fail = reject))) as SourceApi['getDocumentPages'];
+    const { show } = renderViewer({ api: mockApi({ getDocumentPages }) });
+    expect(await within(await viewer()).findByRole('alert')).toBeTruthy();
+    show(null);
+    show({ ...source });
+    const dialog = await viewer();
+    expect(within(dialog).queryByRole('alert')).toBeNull();
+    expect(dialog.querySelector('[aria-busy="true"]')).toBeTruthy();
+    await act(async () => fail(new ApiError('Still failing.', 500)));
+    expect((await within(dialog).findByRole('alert')).textContent).toBe('Still failing.');
+  });
+
   it('revokes a URL made after the viewer closed', async () => {
     let finish!: (blob: Blob) => void;
     const api = mockApi({ getDocumentFile: vi.fn(() => new Promise<Blob>((resolve) => (finish = resolve))) });
