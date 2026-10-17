@@ -59,6 +59,11 @@ export async function buildApp(options: { logger?: boolean } = {}): Promise<Fast
     return { status: 'ok', timestamp: new Date().toISOString() };
   });
 
+  // Standard service health shape (09 s9.1). The gateway has no schema, so no migration level.
+  fastify.get('/healthz', async () => {
+    return { service: 'gateway', version: '0.1.0', schemaMigration: 'none' };
+  });
+
   await registerAuth(fastify);
   await registerOrg(fastify);
   await registerInvites(fastify);
