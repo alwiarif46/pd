@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/identity.audit.recorded",
+  "title": "identity.audit.recorded",
+  "x-owner": "identity",
+  "x-stream": "e2e.identity.audit.recorded",
+  "x-schema-version": "1.0",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "unevaluatedProperties": false,
+  "properties": {
+    "type": {
+      "const": "identity.audit.recorded"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of identity.audit.recorded. One audited action in the identity service. The notify service writes it to the audit log.",
+      "required": [
+        "action",
+        "target_type",
+        "target_id"
+      ],
+      "properties": {
+        "actor_user_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The signed-in user who did it. Absent for a system action."
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A stable action name such as confirm_marking."
+        },
+        "target_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The id of the thing acted on. Usually a uuid; a string so any target fits."
+        },
+        "detail": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Small extra facts. Never a secret or file text."
+        }
+      }
+    }
+  }
+}

@@ -51,14 +51,14 @@ function editJson(file: string, fn: (doc: Doc) => void): void {
 const TS_ROUTES = (paths: string[]) =>
   `export const routes: ReadonlyArray<{ method: string; path: string }> = [${paths.map((p) => `{ method: 'GET', path: '${p}' }`).join(', ')}];\n`;
 
-/** A copy with identity as a skeleton of the given language, plus a fake repo root. */
+/** A copy with billing as a skeleton of the given language, plus a fake repo root. */
 function skeletonCopy(language: 'ts' | 'py'): { dir: string; repo: string; folder: string } {
   const dir = copyPackage();
   const svcFile = join(dir, 'services.json');
   let folder = '';
   editJson(svcFile, (doc) => {
     const services = doc as unknown as Doc[];
-    const s = services.find((x) => x.id === 'identity')!;
+    const s = services.find((x) => x.id === 'billing')!;
     s.skeleton = true;
     s.language = language;
     folder = s.folder;
@@ -69,7 +69,7 @@ function skeletonCopy(language: 'ts' | 'py'): { dir: string; repo: string; folde
 }
 
 function addUsersPath(dir: string): void {
-  const file = join(dir, 'openapi', 'identity.yaml');
+  const file = join(dir, 'openapi', 'billing.yaml');
   const text = readFileSync(file, 'utf8').replace(
     'components:\n',
     `  /users/{id}:
@@ -157,11 +157,11 @@ describe('contracts:check', () => {
     const dir = copyPackage();
     const svcFile = join(dir, 'services.json');
     const services = JSON.parse(readFileSync(svcFile, 'utf8')) as Array<{ id: string; skeleton: boolean }>;
-    services.find((s) => s.id === 'identity')!.skeleton = true;
+    services.find((s) => s.id === 'billing')!.skeleton = true;
     writeFileSync(svcFile, JSON.stringify(services));
     const repo = mkdtempSync(join(dir, 'repo-'));
-    mkdirSync(join(repo, 'services', 'identity', 'src'), { recursive: true });
-    const routesFile = join(repo, 'services', 'identity', 'src', 'routes.ts');
+    mkdirSync(join(repo, 'services', 'billing', 'src'), { recursive: true });
+    const routesFile = join(repo, 'services', 'billing', 'src', 'routes.ts');
 
     writeFileSync(routesFile, "export const routes: ReadonlyArray<{ method: string; path: string }> = [{ method: 'GET', path: '/healthz' }];\n");
     expect(runCheck(dir, { CONTRACTS_REPO_ROOT: repo }).code).toBe(0);

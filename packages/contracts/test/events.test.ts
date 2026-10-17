@@ -2,16 +2,38 @@ import { describe, expect, it } from 'vitest';
 import { SERVICES, acceptsSchemaVersion, eventNames, loadEventSchema, makeEvent, parseVersion, supportedMajorsFor, validateEvent } from '../src/index';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
+const ID = '33333333-3333-4333-8333-333333333333';
+const BID = '44444444-4444-4444-8444-444444444444';
+const AUDIT = { action: 'confirm_marking', target_type: 'document', target_id: ID };
+
+// Events whose payload is tightened. Every other event still takes any object.
+const TIGHT: Record<string, Record<string, unknown>> = {
+  'ingest.document.classified': { document_id: ID, bid_id: BID, kind: 'amendment', amendment_no: 2 },
+  'ingest.document.deleted': { document_id: ID, bid_id: BID, kind: 'attachment', reason: 'user' },
+  'intel.bid.deleted': { bid_id: BID },
+  'identity.audit.recorded': AUDIT,
+  'ingest.audit.recorded': AUDIT,
+  'intel.audit.recorded': AUDIT,
+};
 
 describe('event schemas', () => {
-  it('has 53 events and 15 services', () => {
-    expect(eventNames).toHaveLength(53);
+  it('has 58 events and 15 services', () => {
+    expect(eventNames).toHaveLength(58);
     expect(SERVICES).toHaveLength(15);
   });
 
   it.each(eventNames)('%s accepts makeEvent output', (name) => {
-    const result = validateEvent(name, makeEvent(name, TENANT, { any: 'thing' }));
+    const result = validateEvent(name, makeEvent(name, TENANT, TIGHT[name] ?? { any: 'thing' }));
     expect(result.valid).toBe(true);
+  });
+
+  it.each(Object.keys(TIGHT))('%s rejects a payload missing its required fields', (name) => {
+    expect(validateEvent(name as never, makeEvent(name as never, TENANT, {})).valid).toBe(false);
+  });
+
+  it('ingest.document.classified rejects an amendment_no outside 1 to 999', () => {
+    const bad = makeEvent('ingest.document.classified', TENANT, { ...TIGHT['ingest.document.classified'], amendment_no: 1000 });
+    expect(validateEvent('ingest.document.classified', bad).valid).toBe(false);
   });
 
   it.each(eventNames)('%s rejects a missing tenant_id, a wrong type and a bad schema_version', (name) => {

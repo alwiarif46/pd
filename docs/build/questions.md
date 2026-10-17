@@ -46,6 +46,7 @@ One heading per chat. Each entry: question, options, choice made, why. Design ga
 - **Copy of existing PD data.** 09 s9.3 bans cross-schema references in migrations. Chose one-off admin copy scripts (run per tenant, as the admin) instead of migrations that read `public`.
 - **audit_log.** The notification service is not built. Chose that each service writes `<svc>.audit.recorded` events to its own outbox, and the old table stays frozen and readable.
 - **Lock-based race tests.** They assert row-lock serialization across bids, documents and credits. After the split they become idempotency tests. They are rewritten, not deleted.
+- **Tightening an open payload (PR 1, contracts).** Tightening an open payload with no producer or consumer (`ingest.document.classified` 1.0 to 1.1) is a minor bump.
 
 ## Chat 3
 

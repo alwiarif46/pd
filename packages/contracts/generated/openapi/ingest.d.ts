@@ -17,6 +17,286 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/bids/{id}/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a chunked upload on a bid
+         * @description Checks the key, the bid size cap and the credit (through the billing bridge), then opens a session that lasts a day. An identical file already on the bid answers 200 with duplicate true and charges nothing. Errors: invalid_upload (400), out_of_credits (402), key_mismatch, key_required, solicitation_first, bid_cap_exceeded, amendment_no_taken (409). The bid must belong to the caller's tenant, else 404. The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["createUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/uploads/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Cancel an open upload
+         * @description Releases the credit the session reserved and removes the chunks. Only an open session can be cancelled. The tenant comes from the verified token. No tenant id is sent.
+         */
+        delete: operations["cancelUpload"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/uploads/{id}/chunks/{index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Send one chunk
+         * @description One chunk of 1 byte to 20 MB. Sending a chunk twice is safe. An index past chunkCount is 400. The tenant comes from the verified token. No tenant id is sent.
+         */
+        put: operations["putUploadChunk"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/uploads/{id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish an upload
+         * @description Joins the chunks, checks the size and the sha256, creates the document and queues the scan job. A second call answers 409. The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["completeUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a bid's documents
+         * @description Each document carries what the Documents tab shows from ingest: liveUntil, restoredUntil and markingPage. The key check and amendment status live in intel (GET /bids/{id}/amendments). The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["listBidDocuments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{id}/view-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a one-hour viewer token
+         * @description The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["createViewToken"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/view/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve a viewer token
+         * @description Returns the document the token names. An unknown or expired token is 404. The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["resolveViewToken"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{id}/pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read page text
+         * @description Page text stays after the file is deleted, so source quotes keep resolving. The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["listDocumentPages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{id}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download the viewer PDF
+         * @description Streams the viewer copy. 410 when the file was deleted, 409 while it is archived or being restored. The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["getDocumentFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for an archived file back
+         * @description Moves archived to restore_requested. A second call while a restore is pending answers with the current status. 402 plan_required when the plan does not allow restores. 409 no_archive_copy or not archived. The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["restoreDocument"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{id}/confirm-marking": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm a held file
+         * @description A file the marking check blocked waits for this. It queues the classify job and writes an audit record. 409 when classified or not waiting. The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["confirmDocumentMarking"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a document
+         * @description Removes the stored file and keeps page text. Emits ingest.document.deleted, which intel uses to drop rows and to settle the credit. Deleting twice is fine. The tenant comes from the verified token. No tenant id is sent.
+         */
+        delete: operations["deleteDocument"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a bid's ingest jobs
+         * @description Scan, convert, extract and classify jobs, with queue position and a time estimate for unfinished ones. The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["listIngestJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry a failed ingest job
+         * @description Only a failed job retries, and only the newest step of its file (409 retry_superseded). A solicitation that lost its credit reserves one again (402 out_of_credits). The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["retryIngestJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -27,11 +307,234 @@ export interface components {
             /** @description Name of the last applied migration for this service's schema. */
             schemaMigration: string;
         };
+        Error: {
+            /** @description A sentence a person can read. */
+            error: string;
+            /** @description A stable machine code the client can branch on, such as out_of_credits. */
+            code?: string;
+        };
+        Ok: {
+            /** @constant */
+            ok: true;
+        };
+        /** @enum {string} */
+        FileKind: "solicitation" | "amendment" | "attachment" | "resume" | "draft";
+        CreateUploadRequest: {
+            fileName: string;
+            kind: components["schemas"]["FileKind"];
+            /** @description Bytes. Must fit the plan's file cap. */
+            declaredSize: number;
+            sha256: string;
+            /** @description Chunks of 1 byte to 20 MB each. */
+            chunkCount: number;
+            /** @description The number printed on the file, when the client knows it. */
+            solicitationNumber?: string;
+            /** @description Amendments only: the number the user typed. It rides on the session and then on ingest.document.classified. */
+            amendmentNo?: number | null;
+        };
+        UploadSession: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            expiresAt: string;
+            creditReserved: boolean;
+        };
+        DuplicateUpload: {
+            /** @constant */
+            duplicate: true;
+            /** Format: uuid */
+            documentId: string;
+        };
+        CancelUploadResponse: {
+            /** @constant */
+            ok: true;
+            creditReleased?: boolean;
+        };
+        CompleteUploadResponse: {
+            /** Format: uuid */
+            documentId: string;
+            /** Format: uuid */
+            jobId: string;
+        };
+        Document: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            fileName: string;
+            mime?: string;
+            sizeBytes?: number;
+            sha256?: string;
+            kind: components["schemas"]["FileKind"];
+            /** @description Amendments only. The number typed on the upload session, or confirmed later. */
+            amendmentNo?: number | null;
+            /** @description Where amendmentNo came from. "sequence" means assumed. */
+            amendmentNoSource?: string | null;
+            /** @description The number read from the file. */
+            amendmentNoFound?: number | null;
+            /** @enum {string} */
+            liveStatus: "live" | "archived" | "restore_requested" | "restoring" | "restored" | "deleted";
+            /** Format: date-time */
+            liveUntil?: string | null;
+            /** Format: date-time */
+            restoredUntil?: string | null;
+            scanStatus?: string | null;
+            extractStatus?: string | null;
+            extractMethod?: string | null;
+            pageCount?: number | null;
+            pagesEstimated?: number | null;
+            /** @enum {string|null} */
+            markingStatus?: "none" | "blocked" | "confirmed" | null;
+            markingPage?: number | null;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        ViewToken: {
+            token: string;
+            /** @constant */
+            expiresInSeconds: 3600;
+        };
+        ViewTokenTarget: {
+            /** Format: uuid */
+            documentId: string;
+        };
+        Page: {
+            pageNo: number;
+            text: string;
+        } & {
+            [key: string]: unknown;
+        };
+        PagesResponse: {
+            fileName: string;
+            liveStatus: string;
+            pagesEstimated?: number | null;
+            extractMethod?: string | null;
+            pages: components["schemas"]["Page"][];
+        };
+        RestoreResponse: {
+            /** @enum {string} */
+            status: "restore_requested" | "restoring" | "restored" | "archived" | "live" | "deleted";
+        };
+        DeleteDocumentResponse: {
+            /** @constant */
+            ok: true;
+            creditReleased?: boolean;
+        };
+        IngestJob: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId?: string | null;
+            /** Format: uuid */
+            documentId?: string | null;
+            /** @description scan, convert, extract, ocr, marking, classify or chunk. */
+            type: string;
+            /** @enum {string} */
+            status: "pending" | "running" | "completed" | "failed";
+            progress?: number;
+            error?: string | null;
+            /** Format: date-time */
+            startedAt?: string | null;
+            /** Format: date-time */
+            finishedAt?: string | null;
+            stage?: string | null;
+            queuePosition?: number | null;
+            queueDepth?: number;
+            etaSeconds?: number | null;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        RetryJobResponse: {
+            /** Format: uuid */
+            id: string;
+        };
     };
-    responses: never;
-    parameters: never;
+    responses: {
+        /** @description The request body or a parameter is not valid. */
+        BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description No valid token. */
+        Unauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The plan or the credits do not allow this. */
+        PaymentRequired: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The caller may not do this. */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Not found. Also the answer when the id belongs to another tenant. */
+        NotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The current state does not allow this. */
+        Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The feature is not configured on this deployment (billing_unavailable). */
+        ServiceUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+    };
+    parameters: {
+        /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+        CsrfHeader: "e2e";
+        /** @description Page size. */
+        Limit: number;
+        /** @description The X-Next-Cursor value of the previous page. */
+        Cursor: string;
+    };
     requestBodies: never;
-    headers: never;
+    headers: {
+        /** @description Present when more rows remain. Send it as cursor to get the next page. */
+        NextCursor: string;
+    };
     pathItems: never;
 }
 export type $defs = Record<string, never>;
@@ -54,6 +557,433 @@ export interface operations {
                     "application/json": components["schemas"]["HealthResponse"];
                 };
             };
+        };
+    };
+    createUpload: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description The file is already on the bid. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuplicateUpload"];
+                };
+            };
+            /** @description The session is open. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            402: components["responses"]["PaymentRequired"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    cancelUpload: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancelled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelUploadResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    putUploadChunk: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                id: string;
+                /** @description Zero-based chunk number. */
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    completeUpload: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The document exists and the scan is queued. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompleteUploadResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listBidDocuments: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The X-Next-Cursor value of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The documents. */
+            200: {
+                headers: {
+                    "X-Next-Cursor": components["headers"]["NextCursor"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Document"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createViewToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The token. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ViewToken"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    resolveViewToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The document id. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ViewTokenTarget"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listDocumentPages: {
+        parameters: {
+            query?: {
+                from?: number;
+                /** @description Defaults to from. */
+                to?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pages. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PagesResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getDocumentFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The PDF. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            /** @description The file was deleted. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    restoreDocument: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The status after the request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            402: components["responses"]["PaymentRequired"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    confirmDocumentMarking: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Confirmed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteDocument: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteDocumentResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listIngestJobs: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The X-Next-Cursor value of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The jobs. */
+            200: {
+                headers: {
+                    "X-Next-Cursor": components["headers"]["NextCursor"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestJob"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    retryIngestJob: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new job. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetryJobResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            402: components["responses"]["PaymentRequired"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
 }

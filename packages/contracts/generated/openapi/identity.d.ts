@@ -17,6 +17,278 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tenants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the caller's tenant
+         * @description Returns the tenant, the caller's role and the plan limits that the identity service owns. The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["getTenant"];
+        put?: never;
+        /**
+         * Create the caller's tenant
+         * @description The caller has a token but no tenant yet, and becomes the owner. A user belongs to one tenant. The response sets a fresh e2e_session cookie and returns a fresh token that carries the new tenant. There is no separate refresh route: silent re-login covers expiry.
+         */
+        post: operations["createTenant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Rename the tenant
+         * @description Owner only. The tenant comes from the verified token. No tenant id is sent.
+         */
+        patch: operations["updateTenant"];
+        trace?: never;
+    };
+    "/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the tenant's members
+         * @description Members past the plan's seats carry seatLocked. The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["listMembers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/members/{userId}/owner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Make a member the owner
+         * @description The caller becomes a member. 400 when userId is the caller. A user id from another tenant answers 404. Emits identity.role.changed twice. Owner only. The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["transferOwnership"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/members/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a member
+         * @description The owner cannot remove themself: transfer ownership first. Emits identity.user.removed. Owner only. The tenant comes from the verified token. No tenant id is sent.
+         */
+        delete: operations["removeMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Invite a member by work email
+         * @description Holds a seat until accepted or expired (7 days). 402 when the plan has no seat left. 409 invite_pending when the email has an open invite. The code goes out of band to the invitee, never in the response. Owner only. The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["createInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/invites/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept an invite
+         * @description The caller has a token but no tenant yet. On success it sets a fresh e2e_session cookie and returns a fresh token that carries the tenant (no separate refresh route; silent re-login covers expiry). Error codes: invite_invalid (404), invite_email_mismatch (403), invite_used, invite_expired, already_in_org, seats_full (409). A foreign or guessed code is invite_invalid.
+         */
+        post: operations["acceptInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the signed-in user
+         * @description The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["getMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the user's name
+         * @description Only the name changes here. Zitadel owns credentials, MFA factors and passkeys. The tenant comes from the verified token. No tenant id is sent.
+         */
+        patch: operations["updateMe"];
+        trace?: never;
+    };
+    "/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start the OIDC code flow
+         * @description Redirects the browser to Zitadel (authorization code with PKCE). Zitadel serves the login, MFA, passkey and SSO screens. No password reaches this service. Public: no token needed.
+         */
+        get: operations["authLogin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Finish the OIDC code flow
+         * @description Exchanges the code for tokens, upserts the user mirror, sets the e2e_session cookie and redirects to returnTo. A wrong state is 400. Public: no token needed.
+         */
+        get: operations["authCallback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign out
+         * @description Clears the cookie and returns the Zitadel end-session URL for the browser to visit.
+         */
+        post: operations["authLogout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tokens/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify an access token (internal)
+         * @description Private network only. The gateway calls it when it cannot check the signature itself. A bad, expired or revoked token is 401.
+         */
+        post: operations["verifyToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/internal/zitadel/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receive a Zitadel event (internal)
+         * @description Private network only, and not on the gateway. Zitadel posts user and organization events here. The service checks the signature header and updates the user mirror. No tenant header: the event names its Zitadel organization.
+         */
+        post: operations["receiveZitadelEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/jwks.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public signing keys
+         * @description Services fetch these keys to verify access tokens. Public keys only. Public: no token needed.
+         */
+        get: operations["getJwks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -27,11 +299,228 @@ export interface components {
             /** @description Name of the last applied migration for this service's schema. */
             schemaMigration: string;
         };
+        Error: {
+            /** @description A sentence a person can read. */
+            error: string;
+            /** @description A stable machine code the client can branch on, such as out_of_credits. */
+            code?: string;
+        };
+        Ok: {
+            /** @constant */
+            ok: true;
+        };
+        /** @enum {string} */
+        Role: "owner" | "member";
+        Tenant: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            emailDomain?: string | null;
+            /** @description The plan id. Billing owns the plan; identity mirrors it. */
+            plan: string;
+            planStatus: string;
+            /** Format: date-time */
+            cycleStart?: string | null;
+            /** Format: date-time */
+            cycleEnd?: string | null;
+            /** Format: date-time */
+            freeFirstMonthEnds?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        TenantView: {
+            tenant: components["schemas"]["Tenant"];
+            role: components["schemas"]["Role"];
+            seatLimit: number;
+            /** @description Largest upload for the plan, in megabytes. */
+            mbCap?: number;
+        };
+        CreateTenantRequest: {
+            name: string;
+        };
+        UpdateTenantRequest: {
+            name: string;
+        };
+        /** @description orgId is the tenant id. */
+        Member: {
+            /** Format: uuid */
+            orgId?: string;
+            /** Format: uuid */
+            userId: string;
+            name?: string | null;
+            /** Format: email */
+            email: string;
+            role: components["schemas"]["Role"];
+            /** Format: date-time */
+            joinedAt: string;
+            isYou: boolean;
+            seatLocked: boolean;
+        };
+        CreateTenantResponse: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            plan: string;
+            /** @description A fresh access token that carries the new tenant. */
+            token: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        /** @description Zitadel's event body, passed through. Identity reads aggregate_type, event_type, aggregate_id and resource_owner. */
+        ZitadelEvent: {
+            [key: string]: unknown;
+        };
+        CreateInviteRequest: {
+            /**
+             * Format: email
+             * @description A work address. Free mail domains are refused.
+             */
+            email: string;
+        };
+        AcceptInviteRequest: {
+            /** @description "<tenantId>.<64 hex token>". */
+            code: string;
+        };
+        AcceptInviteResponse: {
+            /** Format: uuid */
+            orgId: string;
+            name: string;
+            role: components["schemas"]["Role"];
+            alreadyMember: boolean;
+            /** @description A fresh access token that carries the tenant. */
+            token: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        Me: {
+            /** Format: uuid */
+            id: string;
+            /** Format: email */
+            email: string;
+            name: string | null;
+            /**
+             * Format: uuid
+             * @description The tenant id, or null before the user has a tenant.
+             */
+            orgId: string | null;
+            role?: components["schemas"]["Role"] | null;
+        };
+        UpdateMeRequest: {
+            name?: string;
+        };
+        LogoutResponse: {
+            /** Format: uri */
+            endSessionUrl: string;
+        };
+        VerifyTokenRequest: {
+            token: string;
+        };
+        TokenClaims: {
+            /** Format: uuid */
+            userId: string;
+            /** @description The Zitadel user id, when the mirror has it. */
+            zitadelUserId?: string;
+            /** Format: uuid */
+            tenantId: string | null;
+            role: components["schemas"]["Role"] | null;
+            /** @description True when the plan has no seat for this member. */
+            seatLocked: boolean;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        Jwks: {
+            keys: ({
+                kty: string;
+                kid: string;
+                use?: string;
+                alg?: string;
+                n?: string;
+                e?: string;
+            } & {
+                [key: string]: unknown;
+            })[];
+        };
     };
-    responses: never;
-    parameters: never;
+    responses: {
+        /** @description The request body or a parameter is not valid. */
+        BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description No valid token. */
+        Unauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The plan or the credits do not allow this. */
+        PaymentRequired: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The caller may not do this. */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Not found. Also the answer when the id belongs to another tenant. */
+        NotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The current state does not allow this. */
+        Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The feature is not configured on this deployment (billing_unavailable). */
+        ServiceUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+    };
+    parameters: {
+        /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+        CsrfHeader: "e2e";
+        /** @description Page size. */
+        Limit: number;
+        /** @description The X-Next-Cursor value of the previous page. */
+        Cursor: string;
+    };
     requestBodies: never;
-    headers: never;
+    headers: {
+        /** @description Present when more rows remain. Send it as cursor to get the next page. */
+        NextCursor: string;
+    };
     pathItems: never;
 }
 export type $defs = Record<string, never>;
@@ -52,6 +541,440 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthResponse"];
+                };
+            };
+        };
+    };
+    getTenant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The tenant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantView"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createTenant: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTenantRequest"];
+            };
+        };
+        responses: {
+            /** @description The tenant exists. */
+            201: {
+                headers: {
+                    /** @description e2e_session, httpOnly, Secure, SameSite=Lax. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateTenantResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateTenant: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateTenantRequest"];
+            };
+        };
+        responses: {
+            /** @description Renamed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listMembers: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The X-Next-Cursor value of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The members, oldest first. */
+            200: {
+                headers: {
+                    "X-Next-Cursor": components["headers"]["NextCursor"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Member"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    transferOwnership: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ownership moved. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    removeMember: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createInvite: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description The invite is sent. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            402: components["responses"]["PaymentRequired"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    acceptInvite: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description The caller joined, or already was a member. */
+            200: {
+                headers: {
+                    /** @description e2e_session, httpOnly, Secure, SameSite=Lax. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcceptInviteResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Me"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    updateMe: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMeRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    authLogin: {
+        parameters: {
+            query?: {
+                /** @description A path in the web app to return to. Absolute URLs are refused. */
+                returnTo?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect to Zitadel. */
+            302: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+        };
+    };
+    authCallback: {
+        parameters: {
+            query: {
+                /** @description The authorization code from Zitadel. */
+                code: string;
+                /** @description The state the login step set. */
+                state: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed in. Redirect to the web app. */
+            302: {
+                headers: {
+                    Location?: string;
+                    /** @description e2e_session, httpOnly, Secure, SameSite=Lax. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+        };
+    };
+    authLogout: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed out here. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogoutResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    verifyToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifyTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description The token is valid. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenClaims"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    receiveZitadelEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ZitadelEvent"];
+            };
+        };
+        responses: {
+            /** @description Accepted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getJwks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The key set. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Jwks"];
                 };
             };
         };

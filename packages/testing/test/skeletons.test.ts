@@ -33,9 +33,10 @@ const tsSkeletons = skeletons.filter((s) => s.language === 'ts');
 const pySkeletons = skeletons.filter((s) => s.language === 'py');
 
 describe('service table', () => {
-  it('lists the 14 skeletons and the gateway', () => {
-    expect(skeletons).toHaveLength(14);
-    expect(tsSkeletons).toHaveLength(12);
+  // identity, ingest and intel stay skeleton false until their service PRs serve the routes in their OpenAPI files.
+  it('lists the 11 skeletons that are still skeletons', () => {
+    expect(skeletons).toHaveLength(11);
+    expect(tsSkeletons).toHaveLength(9);
     expect(pySkeletons.map((s) => s.id).sort()).toEqual(['portal', 'render']);
   });
 });
@@ -93,9 +94,9 @@ describe.each(pySkeletons.map((s) => [s.id] as const))('%s skeleton (Python)', (
 });
 
 describe('gateway (informational)', () => {
-  it('has only the public /healthz in its OpenAPI file; its PD routes are not in the contract yet', () => {
+  it('has /healthz as its only public endpoint; its /api routes are in the contract', () => {
     const endpoints = endpointsOf('gateway');
-    expect(endpoints.map((e) => `${e.method} ${e.path}`)).toEqual(['GET /healthz']);
-    expect(endpoints.filter((e) => !e.public)).toEqual([]);
+    expect(endpoints.filter((e) => e.public).map((e) => `${e.method} ${e.path}`)).toEqual(['GET /healthz']);
+    expect(endpoints.filter((e) => !e.public).length).toBeGreaterThan(40);
   });
 });

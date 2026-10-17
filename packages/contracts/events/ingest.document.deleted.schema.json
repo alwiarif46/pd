@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/ingest.document.deleted",
+  "title": "ingest.document.deleted",
+  "x-owner": "ingest",
+  "x-stream": "e2e.ingest.document.deleted",
+  "x-schema-version": "1.0",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "unevaluatedProperties": false,
+  "properties": {
+    "type": {
+      "const": "ingest.document.deleted"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of ingest.document.deleted. A document was deleted by a user or by the bid cascade. Intel drops the rows that came from it.",
+      "required": [
+        "document_id",
+        "bid_id",
+        "kind"
+      ],
+      "properties": {
+        "document_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "bid_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "type": "string",
+          "description": "The file kind. Known values: solicitation, amendment, attachment, resume, draft. A new value is not a break."
+        },
+        "reason": {
+          "enum": [
+            "user",
+            "bid_deleted",
+            "retention"
+          ]
+        }
+      }
+    }
+  }
+}

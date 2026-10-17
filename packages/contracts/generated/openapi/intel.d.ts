@@ -17,6 +17,506 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/bids": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the tenant's bids
+         * @description The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["listBids"];
+        put?: never;
+        /**
+         * Create a bid
+         * @description The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["createBid"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a bid
+         * @description The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["getBid"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a bid
+         * @description Removes the bid and its rows, then emits intel.bid.deleted. Ingest deletes the bid's documents when it gets the event. The tenant comes from the verified token. No tenant id is sent.
+         */
+        delete: operations["deleteBid"];
+        options?: never;
+        head?: never;
+        /**
+         * Change a bid
+         * @description A new solicitation number rechecks held amendments. 409 key_locked once the bid holds a credit for its number. Extending file retention is owner only (403 owner_only) and needs a paid plan (402 plan_required). The tenant comes from the verified token. No tenant id is sent.
+         */
+        patch: operations["updateBid"];
+        trace?: never;
+    };
+    "/bids/{id}/tabs/{tab}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a tab
+         * @description The rows of one tab. Every AI-extracted row carries sourcePage and sourceQuote. An unknown tab is 404. The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["getBidTab"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/tabs/{tab}/rows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add a row to a tab
+         * @description The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["createTabRow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/tabs/{tab}/seed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Seed a tab with its standard rows
+         * @description Overview, production, orals and lessons get their standard rows once. Schedule applies a template counted back from the due date (409 due_date_required, 409 schedule_template_exists). Seeding twice adds nothing. The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["seedTab"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/rows/{table}/{rowId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a row and its history
+         * @description The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["getRow"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a row
+         * @description The tenant comes from the verified token. No tenant id is sent.
+         */
+        delete: operations["deleteRow"];
+        options?: never;
+        head?: never;
+        /**
+         * Change fields of a row
+         * @description Typed fields reject values outside their lists with 400. Every change writes row history. The tenant comes from the verified token. No tenant id is sent.
+         */
+        patch: operations["updateRow"];
+        trace?: never;
+    };
+    "/bids/{id}/outline/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Move an outline item
+         * @description The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["moveOutlineItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/matrix": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the compliance matrix
+         * @description The compliance rows of the bid, the same rows as the compliance tab. Each row has sourcePage and sourceQuote. The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["getComplianceMatrix"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/compliance/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Merge compliance rows
+         * @description Keeps the first row and joins the text of the others. Open amendment proposals that name a merged row are rejected. The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["mergeComplianceRows"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/compliance/split": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Split a compliance row
+         * @description The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["splitComplianceRow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/amendments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a bid's amendments
+         * @description Each amendment with its number, status, key check and date change. The web joins these with ingest documents for the Documents tab. The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["listAmendments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/amendments/{documentId}/key-override": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept an amendment despite its solicitation number
+         * @description A reason is required (400). Each bid has a fixed number of overrides, never refunded. 409 codes: override_not_needed, override_limit, set_bid_number_first, solicitation_first, document_deleted, not_an_amendment. Owner only. The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["overrideAmendmentKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/amendments/{documentId}/amendment-no": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Set an amendment's number
+         * @description 400 invalid_amendment_no outside 1 to 999. 409 amendment_no_taken, document_deleted or not_an_amendment. The tenant comes from the verified token. No tenant id is sent.
+         */
+        patch: operations["setAmendmentNo"];
+        trace?: never;
+    };
+    "/bids/{id}/amendment-links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List an amendment's proposed row changes
+         * @description Each link names the old and new row and carries sourcePage and sourceQuote from the amendment text. The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["listAmendmentLinks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/amendment-links/{id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm a proposed change
+         * @description Decisions are final. The same decision again answers 200. 409 link_already_decided, row_already_closed or new_row_missing. The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["confirmAmendmentLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/amendment-links/{id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject a proposed change
+         * @description Decisions are final. The same decision again answers 200. 409 link_already_decided. The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["rejectAmendmentLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the schedule
+         * @description The same payload as the schedule tab: activities by start date, the workdays setting, amendment proposals and the pending date change. The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["getSchedule"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/schedule/adjust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Shift, scale or keep the schedule dates
+         * @description With amendmentId it answers that amendment's date change and sets the bid's due date. 400 invalid_date. 409 date_change_resolved or activity_locked. The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["adjustSchedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/check-these": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List sentences to check
+         * @description Open "check these" hits from documents the user has not deleted. The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["listCheckThese"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/check-these/{id}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Turn a hit into a compliance row
+         * @description 409 when the sentence is no longer on its page or was already decided. The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["promoteCheckThese"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/check-these/{id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss a hit
+         * @description The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["dismissCheckThese"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/fit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the bid/no-bid score
+         * @description The score and its factors. Every factor has a source. Before scoring, score is null. The decision itself (POST /bids/{id}/fit/decision) belongs to the orchestrator. The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["getBidFit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a bid's intel jobs
+         * @description Key check, shred, compliance matrix and amendment jobs. The gateway merges these with ingest jobs. The tenant comes from the verified token. No tenant id is sent.
+         */
+        get: operations["listIntelJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bids/{id}/jobs/{jobId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry a failed intel job
+         * @description Only a failed job retries. A matrix run needs a credit again (402 out_of_credits). 409 retry_superseded. The tenant comes from the verified token. No tenant id is sent.
+         */
+        post: operations["retryIntelJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -27,11 +527,768 @@ export interface components {
             /** @description Name of the last applied migration for this service's schema. */
             schemaMigration: string;
         };
+        Error: {
+            /** @description A sentence a person can read. */
+            error: string;
+            /** @description A stable machine code the client can branch on, such as out_of_credits. */
+            code?: string;
+        };
+        Ok: {
+            /** @constant */
+            ok: true;
+        };
+        /** @enum {string} */
+        TabName: "overview" | "schedule" | "compliance" | "outline" | "resumes" | "reviews" | "production" | "orals" | "lessons";
+        /** @enum {string} */
+        RowTable: "bid_facts" | "kickoff_items" | "schedule_activities" | "compliance_rows" | "outline_items" | "personnel_requirements" | "candidates" | "resume_matches" | "reviews" | "review_assignments" | "review_findings" | "production_items" | "orals_items" | "lessons";
+        Bid: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            agency?: string | null;
+            /** @enum {string} */
+            bidType: "federal" | "sled";
+            /** @description PENDING until the first solicitation sets it. */
+            solicitationNumber: string;
+            solicitationKey?: string;
+            /** @enum {string} */
+            status: "planning" | "writing" | "submitted" | "closed";
+            /** Format: date-time */
+            startDate?: string | null;
+            /** Format: date-time */
+            dueDate?: string | null;
+            dueTime?: string | null;
+            timeZone?: string | null;
+            oralsEnabled?: boolean;
+            /** Format: date-time */
+            retentionExtendedUntil?: string | null;
+            scheduleWorkdaysOnly?: boolean;
+            /** @enum {string|null} */
+            creditStatus?: "reserved" | "consumed" | "released" | null;
+            keyOverridesUsed?: number;
+            keyOverridesLeft?: number;
+            /** Format: date-time */
+            defaultLiveUntil?: string | null;
+            /** Format: date-time */
+            filesLiveUntil?: string | null;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        CreateBidRequest: {
+            name: string;
+            /** @enum {string} */
+            bidType: "federal" | "sled";
+            /** @description Optional. PENDING when absent. */
+            solicitationNumber?: string;
+        };
+        UpdateBidRequest: {
+            name?: string;
+            agency?: string | null;
+            /** @enum {string} */
+            bidType?: "federal" | "sled";
+            solicitationNumber?: string;
+            /** Format: date-time */
+            startDate?: string | null;
+            /** Format: date-time */
+            dueDate?: string | null;
+            dueTime?: string | null;
+            timeZone?: string | null;
+            oralsEnabled?: boolean;
+            /** Format: date-time */
+            retentionExtendedUntil?: string | null;
+            /** @enum {string} */
+            status?: "planning" | "writing" | "submitted" | "closed";
+            scheduleWorkdaysOnly?: boolean;
+        };
+        Row: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** @description The page the row came from. Null only on a row a user typed. */
+            sourcePage?: number | null;
+            /** @description The sentence the row came from. Null only on a row a user typed. */
+            sourceQuote?: string | null;
+            /** @description standard, ai or user. */
+            origin?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description Fields of the row. The tab decides which are allowed. */
+        RowFields: {
+            [key: string]: unknown;
+        };
+        PatchRowRequest: {
+            fields: {
+                [key: string]: unknown;
+            };
+        };
+        RowHistoryEntry: {
+            /** Format: uuid */
+            id: string;
+            rowTable?: string;
+            /** Format: uuid */
+            rowId?: string;
+            /** Format: uuid */
+            userId?: string | null;
+            userName?: string | null;
+            field?: string;
+            /** Format: date-time */
+            changedAt?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        RowDetail: {
+            row: components["schemas"]["Row"];
+            history: components["schemas"]["RowHistoryEntry"][];
+        };
+        SeedRequest: {
+            /**
+             * @description Schedule only.
+             * @enum {string}
+             */
+            template?: "federal-standard" | "federal-fast" | "task-order";
+        };
+        ScheduleSeedResponse: {
+            /** @constant */
+            ok: true;
+            template: string;
+            added: number;
+            replaced: number;
+            activities: components["schemas"]["ScheduleActivity"][];
+        };
+        OutlineItem: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** Format: uuid */
+            parentId?: string | null;
+            number?: string | null;
+            title: string;
+            pageLimit?: number | null;
+            sourceRef?: string | null;
+            sourcePage?: number | null;
+            sourceQuote?: string | null;
+            writer?: string | null;
+            /** @enum {string} */
+            status: "not_started" | "in_progress" | "review" | "done";
+            dueDate?: string | null;
+            /** @description Order among siblings, 0 to n-1. */
+            position: number;
+        } & {
+            [key: string]: unknown;
+        };
+        BidFact: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** @description The page the row came from. Null only on a row a user typed. */
+            sourcePage?: number | null;
+            /** @description The sentence the row came from. Null only on a row a user typed. */
+            sourceQuote?: string | null;
+            origin?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            field?: string;
+            value?: string;
+            confirmed?: boolean;
+        } & {
+            [key: string]: unknown;
+        };
+        KickoffItem: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** @description The page the row came from. Null only on a row a user typed. */
+            sourcePage?: number | null;
+            /** @description The sentence the row came from. Null only on a row a user typed. */
+            sourceQuote?: string | null;
+            origin?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            label?: string;
+            done?: boolean;
+            owner?: string | null;
+            note?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        ScheduleActivity: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** @description The page the row came from. Null only on a row a user typed. */
+            sourcePage?: number | null;
+            /** @description The sentence the row came from. Null only on a row a user typed. */
+            sourceQuote?: string | null;
+            origin?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            label?: string;
+            startDate?: string | null;
+            endDate?: string | null;
+            locked?: boolean;
+            owner?: string | null;
+            status?: string | null;
+            kind?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        ComplianceRow: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** @description The page the row came from. Null only on a row a user typed. */
+            sourcePage?: number | null;
+            /** @description The sentence the row came from. Null only on a row a user typed. */
+            sourceQuote?: string | null;
+            origin?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            reqId?: string;
+            sectionRef?: string | null;
+            requirementText?: string;
+            reqType?: string | null;
+            status?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        PersonnelRequirement: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** @description The page the row came from. Null only on a row a user typed. */
+            sourcePage?: number | null;
+            /** @description The sentence the row came from. Null only on a row a user typed. */
+            sourceQuote?: string | null;
+            origin?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            role?: string;
+            requirement?: string;
+            kind?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        Candidate: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** @description The page the row came from. Null only on a row a user typed. */
+            sourcePage?: number | null;
+            /** @description The sentence the row came from. Null only on a row a user typed. */
+            sourceQuote?: string | null;
+            origin?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            name?: string;
+            role?: string;
+            /** Format: uuid */
+            documentId?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        ResumeMatch: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** @description The page the row came from. Null only on a row a user typed. */
+            sourcePage?: number | null;
+            /** @description The sentence the row came from. Null only on a row a user typed. */
+            sourceQuote?: string | null;
+            origin?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            /** Format: uuid */
+            candidateId?: string;
+            /** @enum {string} */
+            result?: "meets" | "partial" | "gap" | "unknown";
+        } & {
+            [key: string]: unknown;
+        };
+        Review: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** @description The page the row came from. Null only on a row a user typed. */
+            sourcePage?: number | null;
+            /** @description The sentence the row came from. Null only on a row a user typed. */
+            sourceQuote?: string | null;
+            origin?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            name?: string;
+            /** @enum {string} */
+            status?: "planned" | "in_progress" | "done";
+        } & {
+            [key: string]: unknown;
+        };
+        ReviewAssignment: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** @description The page the row came from. Null only on a row a user typed. */
+            sourcePage?: number | null;
+            /** @description The sentence the row came from. Null only on a row a user typed. */
+            sourceQuote?: string | null;
+            origin?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            /** Format: uuid */
+            reviewId?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        ReviewFinding: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** @description The page the row came from. Null only on a row a user typed. */
+            sourcePage?: number | null;
+            /** @description The sentence the row came from. Null only on a row a user typed. */
+            sourceQuote?: string | null;
+            origin?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            /** Format: uuid */
+            reviewId?: string;
+            /** @enum {string} */
+            disposition?: "open" | "accepted" | "rejected" | "done";
+        } & {
+            [key: string]: unknown;
+        };
+        ProductionItem: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** @description The page the row came from. Null only on a row a user typed. */
+            sourcePage?: number | null;
+            /** @description The sentence the row came from. Null only on a row a user typed. */
+            sourceQuote?: string | null;
+            origin?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            /** @enum {string} */
+            category?: "format" | "files" | "submission" | "copies" | "other";
+            rule?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        OralsItem: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** @description The page the row came from. Null only on a row a user typed. */
+            sourcePage?: number | null;
+            /** @description The sentence the row came from. Null only on a row a user typed. */
+            sourceQuote?: string | null;
+            origin?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            /** @enum {string} */
+            category?: "rules" | "prep" | "session";
+            item?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        Lesson: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId: string;
+            /** @description The page the row came from. Null only on a row a user typed. */
+            sourcePage?: number | null;
+            /** @description The sentence the row came from. Null only on a row a user typed. */
+            sourceQuote?: string | null;
+            origin?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            question?: string;
+            answer?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        TabProposal: {
+            row?: components["schemas"]["Row"];
+            link?: components["schemas"]["AmendmentLink"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description The amendment date change that waits for the prompt: amendmentId, amendmentNo, previousDue, nextDue. */
+        PendingDateChange: {
+            [key: string]: unknown;
+        };
+        OverviewTab: {
+            facts: components["schemas"]["BidFact"][];
+            kickoff: components["schemas"]["KickoffItem"][];
+            proposals: components["schemas"]["TabProposal"][];
+        };
+        ComplianceTab: {
+            rows: components["schemas"]["ComplianceRow"][];
+        };
+        OutlineTab: {
+            items: components["schemas"]["OutlineItem"][];
+        };
+        ResumesTab: {
+            requirements: components["schemas"]["PersonnelRequirement"][];
+            candidates: components["schemas"]["Candidate"][];
+            matches: components["schemas"]["ResumeMatch"][];
+        };
+        ReviewsTab: {
+            reviews: components["schemas"]["Review"][];
+            assignments: components["schemas"]["ReviewAssignment"][];
+            findings: components["schemas"]["ReviewFinding"][];
+        };
+        ProductionTab: {
+            items: components["schemas"]["ProductionItem"][];
+        };
+        OralsTab: {
+            items: components["schemas"]["OralsItem"][];
+        };
+        LessonsTab: {
+            items: components["schemas"]["Lesson"][];
+        };
+        /** @description The body depends on the tab path parameter (PD's TabPayloadMap). The body has no tab field, so the discriminator is the path parameter. */
+        TabPayload: components["schemas"]["OverviewTab"] | components["schemas"]["ScheduleTab"] | components["schemas"]["ComplianceTab"] | components["schemas"]["OutlineTab"] | components["schemas"]["ResumesTab"] | components["schemas"]["ReviewsTab"] | components["schemas"]["ProductionTab"] | components["schemas"]["OralsTab"] | components["schemas"]["LessonsTab"];
+        ComplianceMatrix: {
+            rows: components["schemas"]["ComplianceRow"][];
+        };
+        OutlineMoveRequest: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            parentId?: string | null;
+            index: number;
+        };
+        MergeRowsRequest: {
+            ids: string[];
+        };
+        SplitRowRequest: {
+            /** Format: uuid */
+            rowId: string;
+            /** @description Character offset inside the requirement text. */
+            at: number;
+        };
+        Amendment: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            documentId: string;
+            amendmentNo?: number | null;
+            amendmentNoSource?: string | null;
+            amendmentNoFound?: number | null;
+            /** @enum {string} */
+            status?: "held" | "processing" | "needs_number" | "failed" | "needs_confirmation" | "applied";
+            /** @enum {string|null} */
+            tabsStatus?: "pending" | "applied" | "failed" | null;
+            /** @enum {string} */
+            keyCheck?: "not_applicable" | "ok" | "mismatch" | "overridden";
+            /** @enum {string|null} */
+            keyReason?: "mismatch" | "not_found" | "bid_key_pending" | null;
+            keyFound?: string | null;
+            solicitationKeyFound?: string | null;
+            keyOverride?: boolean;
+            datesChanged?: {
+                [key: string]: unknown;
+            } | null;
+            /** Format: date-time */
+            createdAt?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        LinkedRow: {
+            /** Format: uuid */
+            rowId: string;
+            label?: string | null;
+            text: string;
+            sourcePage?: number | null;
+        };
+        AmendmentLink: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            orgId?: string;
+            /** Format: uuid */
+            amendmentId: string;
+            amendmentNo?: number | null;
+            rowTable: string;
+            /** Format: uuid */
+            oldRowId?: string | null;
+            /** Format: uuid */
+            newRowId?: string | null;
+            /** @enum {string} */
+            action: "supersede" | "withdraw" | "add";
+            /** @description A decimal such as "0.85", as PD sends it. */
+            confidence?: string | null;
+            /** @enum {string} */
+            status: "proposed" | "auto" | "confirmed" | "rejected";
+            /** Format: uuid */
+            decidedBy?: string | null;
+            oldRow?: components["schemas"]["LinkedRow"] | null;
+            newRow?: components["schemas"]["LinkedRow"] | null;
+            sourcePage?: number | null;
+            sourceQuote?: string | null;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        AmendmentLinkDecision: {
+            /** @constant */
+            ok: true;
+            /** @enum {string} */
+            status: "confirmed" | "rejected";
+            /** @description applied once no proposal is left. */
+            amendmentStatus: string;
+        };
+        KeyOverrideRequest: {
+            reason: string;
+        };
+        KeyOverrideResponse: {
+            /** @constant */
+            ok: true;
+            /** Format: uuid */
+            amendmentId: string;
+            /** @description Overrides left on the bid. */
+            remaining: number;
+        };
+        AmendmentNoRequest: {
+            amendmentNo: number;
+        };
+        AmendmentNoResponse: {
+            /** @constant */
+            ok: true;
+            amendmentNo: number;
+        };
+        ScheduleTab: {
+            activities: components["schemas"]["ScheduleActivity"][];
+            workdaysOnly: boolean;
+            proposals?: components["schemas"]["TabProposal"][];
+            pendingDateChange?: components["schemas"]["PendingDateChange"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        AdjustRequest: {
+            /** @enum {string} */
+            mode: "shift" | "scale" | "keep";
+            /** Format: date */
+            previousDue?: string;
+            /** Format: date */
+            nextDue?: string;
+            workdaysOnly?: boolean;
+            /**
+             * Format: uuid
+             * @description Answers this amendment's date change. Then the dates come from the amendment.
+             */
+            amendmentId?: string;
+        };
+        AdjustResponse: {
+            ok: boolean;
+            /** Format: uuid */
+            amendmentId?: string;
+            /** Format: date */
+            dueDate?: string;
+            requestedMode?: string;
+            mode?: string;
+            workdaysOnly?: boolean;
+            unit?: string;
+            delta?: number;
+            moved?: number;
+            moves?: {
+                [key: string]: unknown;
+            }[];
+        } & {
+            [key: string]: unknown;
+        };
+        CheckThese: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            documentId: string;
+            sentence: string;
+            /** @description The source page of the sentence. */
+            page: number;
+        };
+        BidFit: {
+            /** Format: uuid */
+            bidId: string;
+            score: number | null;
+            /** @enum {string|null} */
+            recommendation?: "bid" | "no_bid" | "review" | null;
+            factors: ({
+                name: string;
+                score: number;
+                note?: string | null;
+                sourcePage?: number | null;
+                sourceQuote?: string | null;
+            } & {
+                [key: string]: unknown;
+            })[];
+            /** Format: date-time */
+            scoredAt?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        IntelJob: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            bidId?: string | null;
+            /** Format: uuid */
+            documentId?: string | null;
+            /** @description key_check, shred, matrix or amendment. */
+            type: string;
+            /** @enum {string} */
+            status: "pending" | "running" | "completed" | "failed";
+            progress?: number;
+            error?: string | null;
+            /** Format: date-time */
+            startedAt?: string | null;
+            /** Format: date-time */
+            finishedAt?: string | null;
+            stage?: string | null;
+            queuePosition?: number | null;
+            queueDepth?: number;
+            etaSeconds?: number | null;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        RetryJobResponse: {
+            /** Format: uuid */
+            id: string;
+        };
     };
-    responses: never;
-    parameters: never;
+    responses: {
+        /** @description The request body or a parameter is not valid. */
+        BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description No valid token. */
+        Unauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The plan or the credits do not allow this. */
+        PaymentRequired: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The caller may not do this. */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Not found. Also the answer when the id belongs to another tenant. */
+        NotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The current state does not allow this. */
+        Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The feature is not configured on this deployment (billing_unavailable). */
+        ServiceUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+    };
+    parameters: {
+        /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+        CsrfHeader: "e2e";
+        /** @description Page size. */
+        Limit: number;
+        /** @description The X-Next-Cursor value of the previous page. */
+        Cursor: string;
+    };
     requestBodies: never;
-    headers: never;
+    headers: {
+        /** @description Present when more rows remain. Send it as cursor to get the next page. */
+        NextCursor: string;
+    };
     pathItems: never;
 }
 export type $defs = Record<string, never>;
@@ -54,6 +1311,906 @@ export interface operations {
                     "application/json": components["schemas"]["HealthResponse"];
                 };
             };
+        };
+    };
+    listBids: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The X-Next-Cursor value of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The bids. */
+            200: {
+                headers: {
+                    "X-Next-Cursor": components["headers"]["NextCursor"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Bid"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createBid: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateBidRequest"];
+            };
+        };
+        responses: {
+            /** @description The bid. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Bid"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getBid: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The bid. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Bid"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteBid: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateBid: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateBidRequest"];
+            };
+        };
+        responses: {
+            /** @description The bid after the change. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Bid"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            402: components["responses"]["PaymentRequired"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getBidTab: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The bid id. */
+                id: string;
+                tab: components["schemas"]["TabName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The tab's rows. The shape depends on the tab. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TabPayload"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createTabRow: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                /** @description The bid id. */
+                id: string;
+                tab: components["schemas"]["TabName"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RowFields"];
+            };
+        };
+        responses: {
+            /** @description The new row. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Row"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    seedTab: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                /** @description The bid id. */
+                id: string;
+                tab: components["schemas"]["TabName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SeedRequest"];
+            };
+        };
+        responses: {
+            /** @description Seeded. The schedule answers with the template result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"] | components["schemas"]["ScheduleSeedResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getRow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The bid id. */
+                id: string;
+                table: components["schemas"]["RowTable"];
+                rowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The row. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RowDetail"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteRow: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                /** @description The bid id. */
+                id: string;
+                table: components["schemas"]["RowTable"];
+                rowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateRow: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                /** @description The bid id. */
+                id: string;
+                table: components["schemas"]["RowTable"];
+                rowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchRowRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    moveOutlineItem: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OutlineMoveRequest"];
+            };
+        };
+        responses: {
+            /** @description The whole outline in its new order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutlineItem"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getComplianceMatrix: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The matrix. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComplianceMatrix"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    mergeComplianceRows: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergeRowsRequest"];
+            };
+        };
+        responses: {
+            /** @description The kept row. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        id: string;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    splitComplianceRow: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SplitRowRequest"];
+            };
+        };
+        responses: {
+            /** @description The new second row. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComplianceRow"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listAmendments: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The X-Next-Cursor value of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The amendments. */
+            200: {
+                headers: {
+                    "X-Next-Cursor": components["headers"]["NextCursor"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Amendment"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    overrideAmendmentKey: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                /** @description The bid id. */
+                id: string;
+                /** @description The amendment's document id. */
+                documentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeyOverrideRequest"];
+            };
+        };
+        responses: {
+            /** @description The override is recorded and processing resumes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyOverrideResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    setAmendmentNo: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                /** @description The bid id. */
+                id: string;
+                /** @description The amendment's document id. */
+                documentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AmendmentNoRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AmendmentNoResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listAmendmentLinks: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The X-Next-Cursor value of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The links. */
+            200: {
+                headers: {
+                    "X-Next-Cursor": components["headers"]["NextCursor"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AmendmentLink"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    confirmAmendmentLink: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Confirmed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AmendmentLinkDecision"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    rejectAmendmentLink: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rejected. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AmendmentLinkDecision"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The schedule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleTab"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adjustSchedule: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdjustRequest"];
+            };
+        };
+        responses: {
+            /** @description What moved. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdjustResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listCheckThese: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The X-Next-Cursor value of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The hits. */
+            200: {
+                headers: {
+                    "X-Next-Cursor": components["headers"]["NextCursor"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckThese"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    promoteCheckThese: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new compliance row. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComplianceRow"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    dismissCheckThese: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dismissed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getBidFit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The score. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidFit"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listIntelJobs: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The X-Next-Cursor value of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /** @description The bid id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The jobs. */
+            200: {
+                headers: {
+                    "X-Next-Cursor": components["headers"]["NextCursor"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntelJob"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    retryIntelJob: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
+            path: {
+                /** @description The bid id. */
+                id: string;
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new job. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetryJobResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            402: components["responses"]["PaymentRequired"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
 }

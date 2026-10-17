@@ -1,25 +1,640 @@
 openapi: 3.1.0
 info:
   title: Ingest service
-  version: 0.1.0
+  version: 0.2.0
+  description: "Every secured route takes a bearer access token (Authorization header) or the e2e_session cookie. Either one works. CSRF: a request authenticated by the cookie must send the header X-Requested-With: e2e on POST, PATCH, PUT and DELETE, or it answers 403. Bearer requests may omit it. List routes accept limit and cursor and return X-Next-Cursor while more rows remain. The body stays a plain array."
 x-service: ingest
+security:
+  - bearerAuth: []
+  - sessionCookie: []
+tags:
+  - name: uploads
+    description: Chunked uploads under a bid.
+  - name: documents
+    description: Stored files, pages and retention.
+  - name: jobs
+    description: Scan, extract and classify jobs.
 paths:
   /healthz:
     get:
       operationId: healthz
       summary: Liveness and schema migration level
+      security: []
       responses:
-        '200':
+        "200":
           description: The service is up.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HealthResponse'
+                $ref: "#/components/schemas/HealthResponse"
+  /bids/{id}/uploads:
+    post:
+      operationId: createUpload
+      summary: Start a chunked upload on a bid
+      tags:
+        - uploads
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: "Checks the key, the bid size cap and the credit (through the billing bridge), then opens a session that lasts a day. An identical file already on the bid answers 200 with duplicate true and charges nothing. Errors: invalid_upload (400), out_of_credits (402), key_mismatch, key_required, solicitation_first, bid_cap_exceeded, amendment_no_taken (409). The bid must belong to the caller's tenant, else 404. The tenant comes from the verified token. No tenant id is sent."
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUploadRequest"
+      responses:
+        "200":
+          description: The file is already on the bid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DuplicateUpload"
+        "201":
+          description: The session is open.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadSession"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
+  /uploads/{id}:
+    delete:
+      operationId: cancelUpload
+      summary: Cancel an open upload
+      tags:
+        - uploads
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: Releases the credit the session reserved and removes the chunks. Only an open session can be cancelled. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: Cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelUploadResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
+  /uploads/{id}/chunks/{index}:
+    put:
+      operationId: putUploadChunk
+      summary: Send one chunk
+      tags:
+        - uploads
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: One chunk of 1 byte to 20 MB. Sending a chunk twice is safe. An index past chunkCount is 400. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: index
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+          description: Zero-based chunk number.
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
+  /uploads/{id}/complete:
+    post:
+      operationId: completeUpload
+      summary: Finish an upload
+      tags:
+        - uploads
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: Joins the chunks, checks the size and the sha256, creates the document and queues the scan job. A second call answers 409. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "201":
+          description: The document exists and the scan is queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompleteUploadResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
+  /bids/{id}/documents:
+    get:
+      operationId: listBidDocuments
+      summary: List a bid's documents
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: "Each document carries what the Documents tab shows from ingest: liveUntil, restoredUntil and markingPage. The key check and amendment status live in intel (GET /bids/{id}/amendments). The tenant comes from the verified token. No tenant id is sent."
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: The documents.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Document"
+          headers:
+            X-Next-Cursor:
+              $ref: "#/components/headers/NextCursor"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /documents/{id}/view-token:
+    get:
+      operationId: createViewToken
+      summary: Get a one-hour viewer token
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ViewToken"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /documents/view/{token}:
+    get:
+      operationId: resolveViewToken
+      summary: Resolve a viewer token
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: Returns the document the token names. An unknown or expired token is 404. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The document id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ViewTokenTarget"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /documents/{id}/pages:
+    get:
+      operationId: listDocumentPages
+      summary: Read page text
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: Page text stays after the file is deleted, so source quotes keep resolving. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Defaults to from.
+      responses:
+        "200":
+          description: The pages.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PagesResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /documents/{id}/file:
+    get:
+      operationId: getDocumentFile
+      summary: Download the viewer PDF
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: Streams the viewer copy. 410 when the file was deleted, 409 while it is archived or being restored. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The PDF.
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          description: The file was deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /documents/{id}/restore:
+    post:
+      operationId: restoreDocument
+      summary: Ask for an archived file back
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: Moves archived to restore_requested. A second call while a restore is pending answers with the current status. 402 plan_required when the plan does not allow restores. 409 no_archive_copy or not archived. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: The status after the request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
+  /documents/{id}/confirm-marking:
+    post:
+      operationId: confirmDocumentMarking
+      summary: Confirm a held file
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: A file the marking check blocked waits for this. It queues the classify job and writes an audit record. 409 when classified or not waiting. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: Confirmed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
+  /documents/{id}:
+    delete:
+      operationId: deleteDocument
+      summary: Delete a document
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: Removes the stored file and keeps page text. Emits ingest.document.deleted, which intel uses to drop rows and to settle the credit. Deleting twice is fine. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteDocumentResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
+  /bids/{id}/jobs:
+    get:
+      operationId: listIngestJobs
+      summary: List a bid's ingest jobs
+      tags:
+        - jobs
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: Scan, convert, extract and classify jobs, with queue position and a time estimate for unfinished ones. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: The jobs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/IngestJob"
+          headers:
+            X-Next-Cursor:
+              $ref: "#/components/headers/NextCursor"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /jobs/{id}/retry:
+    post:
+      operationId: retryIngestJob
+      summary: Retry a failed ingest job
+      tags:
+        - jobs
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: Only a failed job retries, and only the newest step of its file (409 retry_superseded). A solicitation that lost its credit reserves one again (402 out_of_credits). The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: The new job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetryJobResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: The access token the identity service issued (signed, verified with its JWKS). It carries user_id, tenant_id and role.
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: e2e_session
+      description: "Browser sign-in: an httpOnly cookie that holds the same access token."
+    serviceAuth:
+      type: http
+      scheme: bearer
+      description: A service token. Internal routes only, on the private network.
+  parameters:
+    CsrfHeader:
+      name: X-Requested-With
+      in: header
+      required: false
+      schema:
+        type: string
+        const: e2e
+      description: Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token.
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+      description: Page size.
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+      description: The X-Next-Cursor value of the previous page.
+  headers:
+    NextCursor:
+      description: Present when more rows remain. Send it as cursor to get the next page.
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: The request body or a parameter is not valid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: No valid token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PaymentRequired:
+      description: The plan or the credits do not allow this.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: The caller may not do this.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Not found. Also the answer when the id belongs to another tenant.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: The current state does not allow this.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ServiceUnavailable:
+      description: The feature is not configured on this deployment (billing_unavailable).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
   schemas:
     HealthResponse:
       type: object
-      required: [service, version, schemaMigration]
+      required:
+        - service
+        - version
+        - schemaMigration
       properties:
         service:
           type: string
@@ -28,3 +643,368 @@ components:
         schemaMigration:
           type: string
           description: Name of the last applied migration for this service's schema.
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: A sentence a person can read.
+        code:
+          type: string
+          description: A stable machine code the client can branch on, such as out_of_credits.
+    Ok:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+          const: true
+    FileKind:
+      type: string
+      enum:
+        - solicitation
+        - amendment
+        - attachment
+        - resume
+        - draft
+    CreateUploadRequest:
+      type: object
+      required:
+        - fileName
+        - kind
+        - declaredSize
+        - sha256
+        - chunkCount
+      properties:
+        fileName:
+          type: string
+          minLength: 1
+        kind:
+          $ref: "#/components/schemas/FileKind"
+        declaredSize:
+          type: integer
+          minimum: 1
+          description: Bytes. Must fit the plan's file cap.
+        sha256:
+          type: string
+          pattern: ^[0-9a-fA-F]{64}$
+        chunkCount:
+          type: integer
+          minimum: 1
+          description: Chunks of 1 byte to 20 MB each.
+        solicitationNumber:
+          type: string
+          description: The number printed on the file, when the client knows it.
+        amendmentNo:
+          type:
+            - integer
+            - "null"
+          minimum: 1
+          maximum: 999
+          description: "Amendments only: the number the user typed. It rides on the session and then on ingest.document.classified."
+    UploadSession:
+      type: object
+      required:
+        - id
+        - expiresAt
+        - creditReserved
+      properties:
+        id:
+          type: string
+          format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+        creditReserved:
+          type: boolean
+    DuplicateUpload:
+      type: object
+      required:
+        - duplicate
+        - documentId
+      properties:
+        duplicate:
+          type: boolean
+          const: true
+        documentId:
+          type: string
+          format: uuid
+    CancelUploadResponse:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+          const: true
+        creditReleased:
+          type: boolean
+    CompleteUploadResponse:
+      type: object
+      required:
+        - documentId
+        - jobId
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        jobId:
+          type: string
+          format: uuid
+    Document:
+      type: object
+      required:
+        - id
+        - bidId
+        - fileName
+        - kind
+        - liveStatus
+      properties:
+        id:
+          type: string
+          format: uuid
+        bidId:
+          type: string
+          format: uuid
+        fileName:
+          type: string
+        mime:
+          type: string
+        sizeBytes:
+          type: integer
+        sha256:
+          type: string
+        kind:
+          $ref: "#/components/schemas/FileKind"
+        amendmentNo:
+          type:
+            - integer
+            - "null"
+          description: Amendments only. The number typed on the upload session, or confirmed later.
+        amendmentNoSource:
+          type:
+            - string
+            - "null"
+          description: Where amendmentNo came from. "sequence" means assumed.
+        amendmentNoFound:
+          type:
+            - integer
+            - "null"
+          description: The number read from the file.
+        liveStatus:
+          type: string
+          enum:
+            - live
+            - archived
+            - restore_requested
+            - restoring
+            - restored
+            - deleted
+        liveUntil:
+          type:
+            - string
+            - "null"
+          format: date-time
+        restoredUntil:
+          type:
+            - string
+            - "null"
+          format: date-time
+        scanStatus:
+          type:
+            - string
+            - "null"
+        extractStatus:
+          type:
+            - string
+            - "null"
+        extractMethod:
+          type:
+            - string
+            - "null"
+        pageCount:
+          type:
+            - integer
+            - "null"
+        pagesEstimated:
+          type:
+            - integer
+            - "null"
+        markingStatus:
+          type:
+            - string
+            - "null"
+          enum:
+            - none
+            - blocked
+            - confirmed
+            - null
+        markingPage:
+          type:
+            - integer
+            - "null"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      additionalProperties: true
+    ViewToken:
+      type: object
+      required:
+        - token
+        - expiresInSeconds
+      properties:
+        token:
+          type: string
+        expiresInSeconds:
+          type: integer
+          const: 3600
+    ViewTokenTarget:
+      type: object
+      required:
+        - documentId
+      properties:
+        documentId:
+          type: string
+          format: uuid
+    Page:
+      type: object
+      required:
+        - pageNo
+        - text
+      properties:
+        pageNo:
+          type: integer
+          minimum: 1
+        text:
+          type: string
+      additionalProperties: true
+    PagesResponse:
+      type: object
+      required:
+        - fileName
+        - liveStatus
+        - pages
+      properties:
+        fileName:
+          type: string
+        liveStatus:
+          type: string
+        pagesEstimated:
+          type:
+            - integer
+            - "null"
+        extractMethod:
+          type:
+            - string
+            - "null"
+        pages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Page"
+    RestoreResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - restore_requested
+            - restoring
+            - restored
+            - archived
+            - live
+            - deleted
+    DeleteDocumentResponse:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+          const: true
+        creditReleased:
+          type: boolean
+    IngestJob:
+      type: object
+      required:
+        - id
+        - type
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+        bidId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        documentId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        type:
+          type: string
+          description: scan, convert, extract, ocr, marking, classify or chunk.
+        status:
+          type: string
+          enum:
+            - pending
+            - running
+            - completed
+            - failed
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        error:
+          type:
+            - string
+            - "null"
+        startedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        finishedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        stage:
+          type:
+            - string
+            - "null"
+        queuePosition:
+          type:
+            - integer
+            - "null"
+        queueDepth:
+          type: integer
+        etaSeconds:
+          type:
+            - integer
+            - "null"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      additionalProperties: true
+    RetryJobResponse:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          format: uuid

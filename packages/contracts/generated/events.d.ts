@@ -86,6 +86,42 @@ export interface IdentityRoleChangedEvent {
 }
 
 /**
+ * Event identity.audit.recorded.
+ */
+export interface IdentityAuditRecordedEvent {
+  event_id: string;
+  tenant_id: string;
+  schema_version: string;
+  occurred_at: string;
+  type: "identity.audit.recorded";
+  /**
+   * Payload of identity.audit.recorded. One audited action in the identity service. The notify service writes it to the audit log.
+   */
+  payload: {
+    /**
+     * The signed-in user who did it. Absent for a system action.
+     */
+    actor_user_id?: string;
+    /**
+     * A stable action name such as confirm_marking.
+     */
+    action: string;
+    target_type: string;
+    /**
+     * The id of the thing acted on. Usually a uuid; a string so any target fits.
+     */
+    target_id: string;
+    /**
+     * Small extra facts. Never a secret or file text.
+     */
+    detail?: {
+      [k: string]: unknown;
+    };
+    [k: string]: unknown;
+  };
+}
+
+/**
  * Event billing.credit.reserved.
  */
 export interface BillingCreditReservedEvent {
@@ -197,9 +233,80 @@ export interface IngestDocumentClassifiedEvent {
   occurred_at: string;
   type: "ingest.document.classified";
   /**
-   * Payload of ingest.document.classified. Open for now. The chat that builds the owning service (ingest) tightens it.
+   * Payload of ingest.document.classified. Intel reads it to start the shred and the amendment steps. amendment_no is the number typed on the upload session, or null when none was typed.
    */
   payload: {
+    document_id: string;
+    bid_id: string;
+    /**
+     * The file kind. Known values: solicitation, amendment, attachment, resume, draft. A new value is not a break.
+     */
+    kind: string;
+    amendment_no?: number | null;
+    /**
+     * The number printed on the file, when the client sent it.
+     */
+    solicitation_number?: string | null;
+    [k: string]: unknown;
+  };
+}
+
+/**
+ * Event ingest.document.deleted.
+ */
+export interface IngestDocumentDeletedEvent {
+  event_id: string;
+  tenant_id: string;
+  schema_version: string;
+  occurred_at: string;
+  type: "ingest.document.deleted";
+  /**
+   * Payload of ingest.document.deleted. A document was deleted by a user or by the bid cascade. Intel drops the rows that came from it.
+   */
+  payload: {
+    document_id: string;
+    bid_id: string;
+    /**
+     * The file kind. Known values: solicitation, amendment, attachment, resume, draft. A new value is not a break.
+     */
+    kind: string;
+    reason?: "user" | "bid_deleted" | "retention";
+    [k: string]: unknown;
+  };
+}
+
+/**
+ * Event ingest.audit.recorded.
+ */
+export interface IngestAuditRecordedEvent {
+  event_id: string;
+  tenant_id: string;
+  schema_version: string;
+  occurred_at: string;
+  type: "ingest.audit.recorded";
+  /**
+   * Payload of ingest.audit.recorded. One audited action in the ingest service. The notify service writes it to the audit log.
+   */
+  payload: {
+    /**
+     * The signed-in user who did it. Absent for a system action.
+     */
+    actor_user_id?: string;
+    /**
+     * A stable action name such as confirm_marking.
+     */
+    action: string;
+    target_type: string;
+    /**
+     * The id of the thing acted on. Usually a uuid; a string so any target fits.
+     */
+    target_id: string;
+    /**
+     * Small extra facts. Never a secret or file text.
+     */
+    detail?: {
+      [k: string]: unknown;
+    };
     [k: string]: unknown;
   };
 }
@@ -217,6 +324,64 @@ export interface IntelShredDoneEvent {
    * Payload of intel.shred.done. Open for now. The chat that builds the owning service (intel) tightens it.
    */
   payload: {
+    [k: string]: unknown;
+  };
+}
+
+/**
+ * Event intel.bid.deleted.
+ */
+export interface IntelBidDeletedEvent {
+  event_id: string;
+  tenant_id: string;
+  schema_version: string;
+  occurred_at: string;
+  type: "intel.bid.deleted";
+  /**
+   * Payload of intel.bid.deleted. A bid and its rows are gone. Ingest deletes the documents of this bid on receipt.
+   */
+  payload: {
+    bid_id: string;
+    /**
+     * The user who deleted the bid.
+     */
+    deleted_by?: string;
+    [k: string]: unknown;
+  };
+}
+
+/**
+ * Event intel.audit.recorded.
+ */
+export interface IntelAuditRecordedEvent {
+  event_id: string;
+  tenant_id: string;
+  schema_version: string;
+  occurred_at: string;
+  type: "intel.audit.recorded";
+  /**
+   * Payload of intel.audit.recorded. One audited action in the intel service. The notify service writes it to the audit log.
+   */
+  payload: {
+    /**
+     * The signed-in user who did it. Absent for a system action.
+     */
+    actor_user_id?: string;
+    /**
+     * A stable action name such as confirm_marking.
+     */
+    action: string;
+    target_type: string;
+    /**
+     * The id of the thing acted on. Usually a uuid; a string so any target fits.
+     */
+    target_id: string;
+    /**
+     * Small extra facts. Never a secret or file text.
+     */
+    detail?: {
+      [k: string]: unknown;
+    };
     [k: string]: unknown;
   };
 }

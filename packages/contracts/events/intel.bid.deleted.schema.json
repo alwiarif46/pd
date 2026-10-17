@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/intel.bid.deleted",
+  "title": "intel.bid.deleted",
+  "x-owner": "intel",
+  "x-stream": "e2e.intel.bid.deleted",
+  "x-schema-version": "1.0",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "unevaluatedProperties": false,
+  "properties": {
+    "type": {
+      "const": "intel.bid.deleted"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of intel.bid.deleted. A bid and its rows are gone. Ingest deletes the documents of this bid on receipt.",
+      "required": [
+        "bid_id"
+      ],
+      "properties": {
+        "bid_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "deleted_by": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The user who deleted the bid."
+        }
+      }
+    }
+  }
+}
