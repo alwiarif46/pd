@@ -4,7 +4,7 @@
   "title": "render.done",
   "x-owner": "render",
   "x-stream": "e2e.render.done",
-  "x-schema-version": "1.0",
+  "x-schema-version": "1.1",
   "type": "object",
   "allOf": [
     {
@@ -22,8 +22,61 @@
     },
     "payload": {
       "type": "object",
-      "additionalProperties": true,
-      "description": "Payload of render.done. Open for now. The chat that builds the owning service (render) tightens it."
+      "description": "Payload of render.done: one volume rendered and checked. Fires only when the render finished (status done).",
+      "additionalProperties": false,
+      "required": [
+        "render_id",
+        "run_id",
+        "volume_id",
+        "page_count",
+        "within_limit",
+        "pdf_key",
+        "docx_key",
+        "issue_count",
+        "vision_checked"
+      ],
+      "properties": {
+        "render_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "volume_id": {
+          "type": "string"
+        },
+        "page_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "page_limit": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "within_limit": {
+          "type": "boolean"
+        },
+        "pdf_key": {
+          "type": "string"
+        },
+        "docx_key": {
+          "type": "string"
+        },
+        "issue_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "vision_checked": {
+          "type": "boolean"
+        },
+        "word_only": {
+          "type": "boolean"
+        }
+      }
     }
   }
 }

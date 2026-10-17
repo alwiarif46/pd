@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { PACKAGE_ROOT, makeEvent, validateEvent } from '../src/index';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
-const NAME = 'render.done';
+const NAME = 'notification.created';
 type Api = typeof import('../src/index');
 
 // Copies live inside the package so node resolves its node_modules. The real files are never changed.
@@ -29,7 +29,7 @@ function writeSchema(dir: string, file: string, doc: Record<string, unknown>): v
   writeFileSync(join(dir, 'events', file), JSON.stringify(doc, null, 2) + '\n');
 }
 
-/** Move the copy's current version of render.done. Optionally keep the old schema as the .v<N> file. */
+/** Move the copy's current version of notification.created. Optionally keep the old schema as the .v<N> file. */
 function setCurrent(dir: string, version: string, keepOldAs?: number): void {
   const doc = readSchema(dir);
   if (keepOldAs !== undefined) {

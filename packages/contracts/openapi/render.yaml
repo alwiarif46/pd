@@ -1,8 +1,17 @@
 openapi: 3.1.0
 info:
   title: Render service
-  version: 0.1.0
+  version: 0.2.0
 x-service: render
+x-note: >
+  Internal routes (/tools, /render, /packages) are called by stage services on the private network
+  with an x-tenant-id header until the identity service issues service tokens (09 s2).
+  Public routes (/fonts, /fonts/requests, /format-specs, /packages/{id}/download) are reached through
+  the gateway. On public routes the gateway drops any client-sent x-tenant-id, x-user-id and
+  x-user-role header and sets its own from the session. The gateway checks the Admin role from
+  identity; render trusts x-user-role. GET /tools, GET /render/{renderId} and GET /packages/{id} go
+  beyond the 09 s4.10 API line and are internal additions. The font file is uploaded through the
+  gateway's upload route into object storage first; the request then names its key.
 paths:
   /healthz:
     get:
@@ -15,7 +24,288 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+  /tools:
+    get:
+      operationId: listTools
+      summary: Tools the toolrunner can run (01 s5.3)
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+      responses:
+        '200':
+          description: The registered tools.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tools]
+                properties:
+                  tools:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ToolInfo'
+  /tools/{name}:
+    post:
+      operationId: runTool
+      summary: Run one tool in a fresh job folder (01 s5.3)
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolRequest'
+      responses:
+        '200':
+          description: The tool ran. A tool that exits non-zero still answers 200 with ok false.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResult'
+        '404':
+          description: No such tool.
+        '422':
+          description: The arguments failed the tool's schema, a file key is not under the caller's tenant, or a named input file is missing.
+  /render:
+    post:
+      operationId: createRender
+      summary: Convert one assembled DOCX to PDF, check the pages and count them (01 s5.5)
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenderRequest'
+      responses:
+        '200':
+          description: The render finished.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RenderResult'
+        '422':
+          description: The request failed validation.
+  /render/{renderId}:
+    get:
+      operationId: getRender
+      summary: One render with its issues
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - name: renderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The render.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RenderResult'
+        '404':
+          description: No such render for this tenant.
+  /packages:
+    post:
+      operationId: createPackage
+      summary: Build the package from finished renders (04 s5.22)
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PackageRequest'
+      responses:
+        '201':
+          description: The package.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Package'
+        '404':
+          description: A render id is unknown for this tenant.
+        '422':
+          description: The request failed validation, or a render is not done.
+  /packages/{packageId}:
+    get:
+      operationId: getPackage
+      summary: One package with its files
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - name: packageId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The package.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Package'
+        '404':
+          description: No such package for this tenant.
+  /packages/{packageId}/download:
+    get:
+      operationId: downloadPackage
+      summary: Signed download link for a package
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - name: packageId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: A short-lived link.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, expiresAt]
+                properties:
+                  url:
+                    type: string
+                  expiresAt:
+                    type: string
+                    format: date-time
+        '404':
+          description: No such package for this tenant.
+  /format-specs:
+    get:
+      operationId: listFormatSpecs
+      summary: The tenant's format specs (05 s6 Format specs)
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+      responses:
+        '200':
+          description: The specs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [specs]
+                properties:
+                  specs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FormatSpec'
+  /format-specs/{specId}:
+    get:
+      operationId: getFormatSpec
+      summary: One format spec
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - name: specId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The spec.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FormatSpec'
+        '404':
+          description: No such spec for this tenant.
+  /fonts:
+    get:
+      operationId: listFonts
+      summary: Installed fonts and the substitute for each Microsoft font name (05 s6 Fonts)
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+      responses:
+        '200':
+          description: Base fonts, this tenant's fonts and the alias table.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FontList'
+  /fonts/requests:
+    get:
+      operationId: listFontRequests
+      summary: This tenant's font requests
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+      responses:
+        '200':
+          description: The requests, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requests]
+                properties:
+                  requests:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FontRequest'
+    post:
+      operationId: createFontRequest
+      summary: Request a font. Admin only. Records the fee owed; billing charges it (06 s6)
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRole'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FontRequestCreate'
+      responses:
+        '201':
+          description: The request with its fee record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FontRequest'
+        '403':
+          description: The caller is not an Admin.
+        '409':
+          description: The fee amount is not set, so no request can be taken.
+        '422':
+          description: The license is not confirmed, the font file is missing, not a font, or its key is not under the caller's tenant.
 components:
+  parameters:
+    UserId:
+      name: x-user-id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+    UserRole:
+      name: x-user-role
+      in: header
+      required: true
+      schema:
+        type: string
+        enum: [admin, member]
+    TenantId:
+      name: x-tenant-id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
   schemas:
     HealthResponse:
       type: object
@@ -28,3 +318,300 @@ components:
         schemaMigration:
           type: string
           description: Name of the last applied migration for this service's schema.
+    FileRef:
+      type: object
+      required: [name, key]
+      properties:
+        name:
+          type: string
+          description: File name inside the job folder.
+        key:
+          type: string
+          description: Object storage key. It starts with the tenant id, then the owning service (03 s11). Render rejects a key that does not start with the caller's tenant id.
+    ToolInfo:
+      type: object
+      required: [name, timeoutSeconds, hasSelftest]
+      properties:
+        name:
+          type: string
+        timeoutSeconds:
+          type: integer
+        hasSelftest:
+          type: boolean
+    ToolRequest:
+      type: object
+      required: [runId, args]
+      properties:
+        runId:
+          type: string
+          format: uuid
+        args:
+          type: object
+          additionalProperties: true
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileRef'
+    ToolResult:
+      type: object
+      required: [tool, ok, exitCode, output, files, cached, durationMs]
+      properties:
+        tool:
+          type: string
+        ok:
+          type: boolean
+        exitCode:
+          type: integer
+        output:
+          type: object
+          additionalProperties: true
+          description: The JSON the tool printed on stdout.
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileRef'
+        cached:
+          type: boolean
+        durationMs:
+          type: integer
+    RenderRequest:
+      type: object
+      required: [runId, volumeId, docx]
+      properties:
+        runId:
+          type: string
+          format: uuid
+        volumeId:
+          type: string
+        docx:
+          $ref: '#/components/schemas/FileRef'
+        pageLimit:
+          type: integer
+          minimum: 1
+        wordOnly:
+          type: boolean
+          description: True when the solicitation requires Word files (04 s6).
+    PageIssueKind:
+      type: string
+      enum: [overflow, broken_table, cut_off_graphic, orphan_heading, margin]
+    RenderIssue:
+      type: object
+      required: [issueId, status, page, kind, severity, detail, source]
+      properties:
+        issueId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [open, resolved]
+        page:
+          type: integer
+          minimum: 1
+        kind:
+          $ref: '#/components/schemas/PageIssueKind'
+        severity:
+          type: string
+          enum: [blocker, warning]
+        detail:
+          type: string
+        source:
+          type: string
+          enum: [geometry, vision]
+    FontUse:
+      type: object
+      required: [requested, embedded]
+      properties:
+        requested:
+          type: string
+        embedded:
+          type: string
+        substitute:
+          type: boolean
+    RenderResult:
+      type: object
+      required: [renderId, runId, volumeId, status, docx, pageCount, withinLimit, issues, fonts, visionChecked]
+      properties:
+        renderId:
+          type: string
+          format: uuid
+        runId:
+          type: string
+          format: uuid
+        volumeId:
+          type: string
+        status:
+          type: string
+          enum: [done, failed]
+        docx:
+          $ref: '#/components/schemas/FileRef'
+        pageCount:
+          type: integer
+          minimum: 0
+          description: Counted with pdfinfo on the exact PDF to submit (01 s5.5).
+        pageLimit:
+          type:
+            - integer
+            - 'null'
+        wordOnly:
+          type: boolean
+        withinLimit:
+          type: boolean
+        pdf:
+          $ref: '#/components/schemas/FileRef'
+          description: Present when status is done.
+        issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/RenderIssue'
+        fonts:
+          type: array
+          items:
+            $ref: '#/components/schemas/FontUse'
+        wordOnlyNote:
+          type: string
+          description: Present when wordOnly is true. Tells the user to check the page limit in Word.
+        visionChecked:
+          type: boolean
+          description: False when the vision check did not run, for example when the model gateway is down.
+    PackageRequest:
+      type: object
+      required: [runId, renderIds]
+      properties:
+        runId:
+          type: string
+          format: uuid
+        renderIds:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            format: uuid
+    Package:
+      type: object
+      required: [packageId, runId, files, wordOnlyNote]
+      properties:
+        packageId:
+          type: string
+          format: uuid
+        runId:
+          type: string
+          format: uuid
+        files:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/FileRef'
+        wordOnlyNote:
+          type:
+            - string
+            - 'null'
+    FormatSpec:
+      type: object
+      required: [specId, bidId, name, rules, volumes]
+      properties:
+        specId:
+          type: string
+          format: uuid
+        bidId:
+          type:
+            - string
+            - 'null'
+          description: Null for a tenant house style.
+        name:
+          type: string
+        rules:
+          type: object
+          additionalProperties: true
+          description: Page size, margins, fonts, spacing, heading styles, caption format. Every rule has a verify method.
+        volumes:
+          type: array
+          items:
+            type: object
+            required: [volumeId, title]
+            properties:
+              volumeId:
+                type: string
+              title:
+                type: string
+              pageLimit:
+                type: integer
+    FontEntry:
+      type: object
+      required: [family, source]
+      properties:
+        family:
+          type: string
+        source:
+          type: string
+          enum: [base, tenant]
+    FontAlias:
+      type: object
+      required: [requested, substitute, metricCompatible]
+      properties:
+        requested:
+          type: string
+          description: A Microsoft font name, such as Times New Roman.
+        substitute:
+          type: string
+          description: The open font the render service uses, such as Liberation Serif.
+        metricCompatible:
+          type: boolean
+    FontList:
+      type: object
+      required: [fonts, aliases, feeCents, currency]
+      properties:
+        fonts:
+          type: array
+          items:
+            $ref: '#/components/schemas/FontEntry'
+        aliases:
+          type: array
+          items:
+            $ref: '#/components/schemas/FontAlias'
+        feeCents:
+          type:
+            - integer
+            - 'null'
+          description: The one-time request fee. Null while the amount is not set (06 s6 is open on it).
+        currency:
+          type: string
+    FontRequestCreate:
+      type: object
+      required: [fontName, licenseConfirmed, file]
+      properties:
+        fontName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        licenseConfirmed:
+          const: true
+          description: The checkbox "We hold a license to use this font." It must be true.
+        file:
+          $ref: '#/components/schemas/FileRef'
+    FontRequest:
+      type: object
+      required: [requestId, fontName, status, licenseConfirmedAt, licenseConfirmedBy, feeCents, currency, feeRecordedAt, file]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        fontName:
+          type: string
+        status:
+          type: string
+          enum: [received, installed, rejected]
+        licenseConfirmedAt:
+          type: string
+          format: date-time
+        licenseConfirmedBy:
+          type: string
+          description: User id of the Admin who ticked the box.
+        feeCents:
+          type: integer
+        currency:
+          type: string
+        feeRecordedAt:
+          type: string
+          format: date-time
+        file:
+          $ref: '#/components/schemas/FileRef'
