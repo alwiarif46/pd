@@ -39,13 +39,8 @@
           "format": "uuid"
         },
         "kind": {
-          "enum": [
-            "solicitation",
-            "amendment",
-            "attachment",
-            "resume",
-            "draft"
-          ]
+          "type": "string",
+          "description": "The file kind. Known values: solicitation, amendment, attachment, resume, draft. A new value is not a break."
         },
         "amendment_no": {
           "type": [
