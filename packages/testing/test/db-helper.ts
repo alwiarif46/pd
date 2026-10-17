@@ -58,7 +58,7 @@ export function useSeededDatabase(): () => SeededDb {
     const database = `testing_${randomBytes(6).toString('hex')}`;
     await lock.query(`create database ${database}`);
     const adminUrl = urlFor(BASE_URL, null, null, database);
-    const firstRun = await seedAll(adminUrl);
+    const firstRun = await seedAll(adminUrl, undefined, { migrate: true });
 
     let appUrl: string | null = null;
     if (!roleExisted) {

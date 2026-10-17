@@ -1,11 +1,13 @@
+import { randomBytes } from 'node:crypto';
 import pg from 'pg';
-import { describe, expect, it, afterAll } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { closeDb, getPool, normalizeSolicitationKey, schema, withOrg } from '@pd/core';
 import { assertRlsIsolation, RlsLeakError } from '../src/cross-tenant';
 import { TENANT_A, TENANT_B } from '../src/fixtures';
 import { listSampleRfpFiles, sampleDocumentId } from '../src/sample-rfp';
 import { seedAll } from '../src/seed';
-import { APP_ROLE_SKIP, SKIP_DB, useSeededDatabase } from './db-helper';
+import { runSeedCli } from '../src/seed-cli';
+import { APP_ROLE_SKIP, BASE_URL, SKIP_DB, urlFor, useSeededDatabase } from './db-helper';
 
 describe('tenant fixture keys', () => {
   it('match what PD computes from the solicitation number', () => {
@@ -55,13 +57,72 @@ describe.skipIf(SKIP_DB)('pnpm seed against a scratch database', () => {
   });
 
   it('repairs a row that drifted', async () => {
+    const before = await digest();
     const admin = new pg.Client({ connectionString: db().adminUrl });
     await admin.connect();
     await admin.query("update organizations set name = 'renamed' where id = $1", [TENANT_B.id]);
     await admin.end();
+    expect(await digest()).not.toEqual(before);
     const r = await seedAll(db().adminUrl);
     expect(r.totals.updated).toBe(1);
     expect(r.totals.created).toBe(0);
+    // The name is back and the data is byte for byte what the first run wrote.
+    const check = new pg.Client({ connectionString: db().adminUrl });
+    await check.connect();
+    try {
+      expect((await check.query('select name from organizations where id = $1', [TENANT_B.id])).rows[0].name).toBe('Tenant B');
+    } finally {
+      await check.end();
+    }
+    expect(await digest()).toEqual(before);
+  });
+
+  it('migrates again, harmlessly, when --migrate is passed to a migrated database', async () => {
+    const before = await digest();
+    const r = await seedAll(db().adminUrl, undefined, { migrate: true });
+    expect(r.migrated).toBe(true);
+    expect(r.totals).toEqual({ created: 0, updated: 0, unchanged: 8 + listSampleRfpFiles().length });
+    expect(await digest()).toEqual(before);
+  });
+
+  describe('on an empty database', () => {
+    let empty = '';
+    let emptyUrl = '';
+    const base = () => new pg.Client({ connectionString: BASE_URL });
+    beforeAll(async () => {
+      empty = `testing_empty_${randomBytes(4).toString('hex')}`;
+      const c = base();
+      await c.connect();
+      await c.query(`create database ${empty}`);
+      await c.end();
+      emptyUrl = urlFor(BASE_URL!, null, null, empty);
+    });
+    afterAll(async () => {
+      const c = base();
+      await c.connect();
+      await c.query(`drop database if exists ${empty} with (force)`);
+      await c.end();
+    });
+
+    it('does not migrate by itself: it fails and says to pass --migrate', async () => {
+      await expect(seedAll(emptyUrl)).rejects.toThrow(/--migrate/);
+      const c = new pg.Client({ connectionString: emptyUrl });
+      await c.connect();
+      try {
+        expect((await c.query("select to_regclass('public.organizations') as t")).rows[0].t).toBeNull();
+      } finally {
+        await c.end();
+      }
+    });
+
+    it('the CLI fails the same way without --migrate and seeds with it', async () => {
+      const out: string[] = [];
+      expect(await runSeedCli([], { PD_ADMIN_DATABASE_URL: emptyUrl }, (l) => out.push(l))).toBe(1);
+      expect(out.join('\n')).toContain('--migrate');
+      out.length = 0;
+      expect(await runSeedCli(['--migrate'], { PD_ADMIN_DATABASE_URL: emptyUrl }, (l) => out.push(l))).toBe(0);
+      expect(out.join('\n')).toContain(`seed done: ${8 + listSampleRfpFiles().length} created`);
+    });
   });
 
   it('registers every sample file as tenant A document, unprocessed', async () => {

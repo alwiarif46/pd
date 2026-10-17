@@ -9,6 +9,7 @@ import pg from 'pg';
 import { closeDb, getPool, schema, withOrg } from '@pd/core';
 import { TENANT_A, TENANT_B, VERIFIED_AT, type TenantFixture } from './fixtures.js';
 import { listSampleRfpFiles, sampleDocumentId } from './sample-rfp.js';
+import { seedTargetDecision } from './seed-guard.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 /** PD's migrations, the same folder services/gateway/test/global-setup.ts applies. */
@@ -105,29 +106,55 @@ async function seedTenant(tenant: TenantFixture, report: SeedReport, withDocumen
   });
 }
 
-/** Apply PD's migrations when the `organizations` table is missing. Returns true when it did. */
-async function migrateIfMissing(adminUrl: string): Promise<boolean> {
+export interface SeedOptions {
+  /** Apply PD's migrations first. Drizzle's journal makes this safe to repeat. Without it the seed never migrates. */
+  migrate?: boolean;
+  /** The PD_SEED_ALLOW value: the exact database name to seed although it does not look like a test database. */
+  allow?: string | undefined;
+}
+
+/** Apply PD's migrations (drizzle skips the ones in its journal). */
+async function migrateDatabase(adminUrl: string): Promise<void> {
+  const client = new pg.Client({ connectionString: adminUrl });
+  await client.connect();
+  try {
+    await migrate(drizzle(client), { migrationsFolder: CORE_MIGRATIONS });
+  } finally {
+    await client.end();
+  }
+}
+
+async function requireTables(adminUrl: string): Promise<void> {
   const client = new pg.Client({ connectionString: adminUrl });
   await client.connect();
   try {
     const found = await client.query("select to_regclass('public.organizations') as t");
-    if (found.rows[0].t !== null) return false;
-    await migrate(drizzle(client), { migrationsFolder: CORE_MIGRATIONS });
-    return true;
+    if (found.rows[0].t === null) {
+      throw new Error('the database has no organizations table, so PD migrations have not run. Run the seed again with --migrate to apply them.');
+    }
   } finally {
     await client.end();
   }
 }
 
 /**
- * Seed both tenants into the database at `adminUrl`. Safe to run again. Every insert runs in `withOrg`,
- * so row-level security applies when `adminUrl` is a login that does not bypass it; as a superuser it
- * is bypassed and the seed still sets `app.org_id`.
+ * Seed both tenants into the database at `adminUrl`. Safe to run again. Refuses a database that does not
+ * look like a test database (see seed-guard.ts) unless `options.allow` is its exact name. Never migrates
+ * unless `options.migrate` is set; without it an unmigrated database is an error. Every insert runs in
+ * `withOrg`, so row-level security applies when `adminUrl` is a login that does not bypass it; as a
+ * superuser it is bypassed and the seed still sets `app.org_id`.
  */
-export async function seedAll(adminUrl: string, log: (line: string) => void = () => undefined): Promise<SeedReport> {
+export async function seedAll(adminUrl: string, log: (line: string) => void = () => undefined, options: SeedOptions = {}): Promise<SeedReport> {
+  const decision = seedTargetDecision(adminUrl, options.allow);
+  if (!decision.ok) throw new Error(decision.message);
   const report: SeedReport = { migrated: false, lines: [], totals: { created: 0, updated: 0, unchanged: 0 } };
-  report.migrated = await migrateIfMissing(adminUrl);
-  if (report.migrated) report.lines.push('applied PD migrations (organizations table was missing)');
+  if (options.migrate) {
+    await migrateDatabase(adminUrl);
+    report.migrated = true;
+    report.lines.push('applied PD migrations (--migrate; already applied ones are skipped)');
+  } else {
+    await requireTables(adminUrl);
+  }
   getPool(adminUrl);
   try {
     await seedTenant(TENANT_A, report, true);
