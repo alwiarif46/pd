@@ -29,6 +29,7 @@ One heading per chat. Each entry: question, options, choice made, why. Design ga
 - **LISTEN/NOTIFY channel names (PR 9 review).** When the outbox relay arrives, give channels a per-service prefix so one service cannot listen to another's. Chat 2 or 3, with the relay.
 - **Health queries cancel on the server (PR 9 review).** The brief said to create pools with `options: '-c statement_timeout=2000'`. That would cap every query of a real service at 2 s. Chose `set local statement_timeout = 2000` sent with the health query itself, so only `/healthz` is capped. Pools keep `connectionTimeoutMillis: 2000`. Python connections use the `options` form because they only serve `/healthz`.
 - **Service-kit tests refuse a cluster in use (PR 9 review).** They reset the `*_svc` passwords. They skip (fail under CI) when any of those roles has a login password, unless `SERVICE_KIT_TEST_RESETS_ROLES=1`.
+- **S3-compatible store: SeaweedFS instead of MinIO (PR 11).** MinIO's prebuilt images are no longer pullable from Docker Hub, and quay.io was unreachable from the session, so no MinIO tag could be verified. Options: SeaweedFS (`chrislusf/seaweedfs:4.48`), a MinIO image on quay.io (unverifiable), RustFS. Chose SeaweedFS: one container serves an S3 API on 8333, the tag is verified, and the project is long established. Variable names stay `S3_*` (09 s9.2), so services do not change. The plans' words "MinIO" in 09 s9.1 and 01 mean "the S3-compatible store". Unverified until CI runs it: the env-credential setup of the S3 gateway and the bucket init.
 
 ## Chat 2
 

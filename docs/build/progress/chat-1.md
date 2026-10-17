@@ -32,7 +32,7 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 | 8 Contracts | e2e/c1-08-contracts | merged (#56) | opus: 2 majors fixed and re-reviewed, minors fixed |
 | 9 Skeletons | e2e/c1-09-skeletons | merged (#57) | Fable: no majors; 11 minors fixed incl. a racy test guard found on a fresh cluster |
 | 10 Testing | e2e/c1-10-testing | in review | fable-reviewer: cross-tenant tests |
-| 11 Local stack | e2e/c1-11-stack | planned | |
+| 11 Local stack | e2e/c1-11-stack | built, stacked on #58 | Compose file, native stack with doubles, `pnpm migrate` test. Compose parts unverified (no Docker). fable-reviewer: infra |
 | 12 CI | e2e/c1-12-ci | planned | |
 | 13 Rename notice | - | planned | |
 
@@ -41,6 +41,8 @@ See `docs/build/questions.md`, Chat 1.
 
 ## Stubs
 - Stub skills in `packages/testing/skills/` (`stub-shred`, `stub-compliance-matrix`, `stub-bid-summary`). Waits on: the owner supplying real skills through `PD_SKILLS_DIR` (BUILD-PLAN decision log 17 Oct). Blocks: any "real skill" check, in chats 3 to 6.
+- Native stack doubles (`E2E_STACK=native`, `pnpm dev:stack start`; `packages/testing/src/doubles/`): `oidc.ts` stands in for Zitadel, `s3.ts` (in-memory S3) for the SeaweedFS store, `clamd.ts` (zINSTREAM, PING, VERSION, EICAR) for ClamAV. Waits on: a Docker daemon in the session. Blocks: nothing in the code; it means these Done-when checks are unverified in the session and run in CI (PR 12): the Compose boot (`docker compose up` of `infra/compose/local.yml`), Zitadel start-from-init and the machine key output, ClamAV signatures and a real EICAR scan, SeaweedFS with env credentials and the bucket init, the sandbox container build and its read-only no-network run, and pgvector. `docker compose config -q` on the file passes offline. The sandbox has no native stand-in.
+- S3 store is SeaweedFS, not MinIO (questions.md, Chat 1).
 - Local Postgres: real PG 16 run as user `pgrun` on port 54329 (no pgvector). pgvector checks wait for the CI Compose stack (PR 11/12).
 
 ## Local environment notes
