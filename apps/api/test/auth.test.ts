@@ -701,9 +701,11 @@ describe.skipIf(Boolean(unavailable))('auth routes', () => {
         expect(login.statusCode, login.body).toBe(200);
         const me = await skip.inject({ method: 'GET', url: '/api/me', headers: { authorization: `Bearer ${login.json<{ token: string }>().token}` } });
         expect(me.statusCode).toBe(200);
-        // The phone stays unverified in the data: the skip is decided per login from the list.
+        // The skip is decided per login from the list, and the unverified number is not stored.
         const [user] = await getDb().select().from(schema.users).where(eq(schema.users.email, email));
         expect(user.phoneVerifiedAt).toBeNull();
+        expect(user.phoneE164).toBeNull();
+        expect(me.json().phone).toBeNull();
         // The skip is logged with the user id and never the email or phone.
         const skipped = logs.filter((line) => line.includes('auth.phone_verify_skipped'));
         expect(skipped.some((line) => line.includes('"step":"signup"'))).toBe(true);
@@ -711,6 +713,53 @@ describe.skipIf(Boolean(unavailable))('auth routes', () => {
         expect(skipped.every((line) => line.includes(user.id))).toBe(true);
         expect(logs.join('\n')).not.toContain(email);
         expect(logs.join('\n')).not.toContain(phone);
+      } finally {
+        await skip.close();
+      }
+    });
+
+    it("does not let a tester's unverified number block its owner from signing up", async () => {
+      const phone = uniquePhone();
+      const tester = uniqueEmail('squatter');
+      const { app: skip, send } = await skipApp(tester);
+      try {
+        expect((await send('/api/auth/signup', { email: tester, phone, password: 'correct horse battery' })).statusCode).toBe(201);
+        await verifyEmailOf(tester, send);
+        // The owner of the number signs up normally and verifies it.
+        const owner = uniqueEmail('owner');
+        const signup = await send('/api/auth/signup', { email: owner, phone, password: 'correct horse battery' });
+        expect(signup.statusCode, signup.body).toBe(201);
+        expect((await send('/api/auth/verify-phone', { phone, code: lastSecret('sms', phone) })).statusCode).toBe(200);
+        // The tester still signs in.
+        expect((await send('/api/auth/login', { email: tester, password: 'correct horse battery' })).statusCode).toBe(200);
+      } finally {
+        await skip.close();
+      }
+    });
+
+    it('does not skip for a plus-address of a listed email', async () => {
+      const domain = 'acme-test.com';
+      const base = `pat-${randomUUID().slice(0, 8)}`;
+      const { app: skip, send } = await skipApp(`${base}@${domain}`);
+      try {
+        const email = `${base}+x@${domain}`;
+        const phone = uniquePhone();
+        expect((await send('/api/auth/signup', { email, phone, password: 'correct horse battery' })).statusCode).toBe(201);
+        expect(countTo('sms', phone)).toBe(1);
+        await verifyEmailOf(email, send);
+        expect((await send('/api/auth/login', { email, password: 'correct horse battery' })).statusCode).toBe(403);
+      } finally {
+        await skip.close();
+      }
+    });
+
+    it('does not let a Kelvin-sign look-alike sign up as a listed email', async () => {
+      const base = `kim-${randomUUID().slice(0, 8)}`;
+      const { app: skip, send } = await skipApp(`${base}@acme-test.com`);
+      try {
+        const response = await send('/api/auth/signup', { email: `K${base.slice(1)}@acme-test.com`, phone: uniquePhone(), password: 'correct horse battery' });
+        expect(response.statusCode).toBe(400);
+        expect(sent).toHaveLength(0);
       } finally {
         await skip.close();
       }
@@ -751,6 +800,12 @@ describe.skipIf(Boolean(unavailable))('auth routes', () => {
       expect(verified.statusCode).toBe(200);
       expect(verified.json()).toEqual({ ok: true, phoneRequired: true });
       expect((await call('POST', '/api/auth/login', { email: user.email, password: user.password })).statusCode).toBe(403);
+    });
+
+    it('sends no phoneRequired with a 400 for an invalid link', async () => {
+      const response = await call('POST', '/api/auth/verify-email', { token: 'f'.repeat(64) });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: 'That email link is not valid' });
     });
 
     it('answers phoneRequired: false when the phone was verified before the email', async () => {

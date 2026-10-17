@@ -165,7 +165,9 @@ export async function registerAuth(app: FastifyInstance, options: AuthOptions = 
     let userId: string;
     try {
       userId = await db.transaction(async (tx) => {
-        const [user] = await tx.insert(schema.users).values({ email, name, phoneE164: phone, passwordHash }).returning({ id: schema.users.id });
+        // A tester's number is never verified, so it is not stored: it must not hold the unique
+        // phone_e164 against the number's owner, or ever read as the account's phone.
+        const [user] = await tx.insert(schema.users).values({ email, name, phoneE164: skipPhone ? null : phone, passwordHash }).returning({ id: schema.users.id });
         await tx.insert(schema.authTokens).values({
           userId: user.id,
           purpose: 'verify_email',
