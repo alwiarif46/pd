@@ -549,6 +549,33 @@ describe.skipIf(Boolean(unavailable))('auth routes', () => {
     });
   });
 
+  describe('one bare email address at every entry point', () => {
+    const NOT_BARE = ['Work Co <me@gmail.com>', 'ceo@victim.com <me@evil.com>', 'a@acme-test.com,c@acme-test.com', 'Kim@acme-test.com'];
+
+    it.each(NOT_BARE)('signup refuses %j and sends nothing', async (email) => {
+      const response = await call('POST', '/api/auth/signup', { email, phone: uniquePhone(), password: 'correct horse battery' });
+      expect(response.statusCode).toBe(400);
+      expect(sent).toHaveLength(0);
+      const rows = await getDb().select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.email, email.trim().toLowerCase()));
+      expect(rows).toHaveLength(0);
+    });
+
+    it.each(NOT_BARE)('resend-email, resend-code and reset refuse %j and send nothing', async (email) => {
+      for (const url of ['/api/auth/resend-email', '/api/auth/resend-code', '/api/auth/reset']) {
+        const response = await call('POST', url, { email });
+        expect(response.statusCode, url).toBe(400);
+      }
+      expect(sent).toHaveLength(0);
+    });
+
+    it('refuses a display-name form of an existing account\'s address on reset', async () => {
+      const user = await signUp();
+      sent.length = 0;
+      expect((await call('POST', '/api/auth/reset', { email: `Pat <${user.email}>` })).statusCode).toBe(400);
+      expect(sent).toHaveLength(0);
+    });
+  });
+
   describe('PD_SKIP_PHONE_VERIFY_EMAILS (tester phone skip)', () => {
     type Send = (url: string, payload: Record<string, unknown>) => Promise<LightMyRequestResponse>;
 

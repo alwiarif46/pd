@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { getDb, schema } from '@pd/core';
 import { BODY_REQUIRED, readBody, text } from './body.js';
 import { requireUser } from './context.js';
+import { normalizeAddress } from './email-address.js';
 import { skipsPhone } from './phone-skip.js';
 import {
   hashesMatch,
@@ -118,11 +119,11 @@ export async function registerAuth(app: FastifyInstance, options: AuthOptions = 
     if (!body) {
       return reply.code(400).send(BODY_REQUIRED);
     }
-    const email = text(body, 'email').trim().toLowerCase();
+    const email = normalizeAddress(text(body, 'email')) ?? '';
     const phone = text(body, 'phone').trim();
     const password = text(body, 'password');
     const name = text(body, 'name').trim() || null;
-    if (!email.includes('@') || !isWorkEmail(email)) {
+    if (!email || !isWorkEmail(email)) {
       return reply.code(400).send({ error: 'Use a work email address' });
     }
     const weak = passwordProblem(password);
@@ -301,8 +302,8 @@ export async function registerAuth(app: FastifyInstance, options: AuthOptions = 
     if (!body) {
       return reply.code(400).send(BODY_REQUIRED);
     }
-    const email = text(body, 'email').trim().toLowerCase();
-    if (!email.includes('@')) {
+    const email = normalizeAddress(text(body, 'email'));
+    if (!email) {
       return reply.code(400).send({ error: 'Enter your email address' });
     }
     const outcome = await atLeast(RESEND_MIN_MS, async () => {
@@ -363,8 +364,8 @@ export async function registerAuth(app: FastifyInstance, options: AuthOptions = 
     if (!body) {
       return reply.code(400).send(BODY_REQUIRED);
     }
-    const email = text(body, 'email').trim().toLowerCase();
-    if (!email.includes('@')) {
+    const email = normalizeAddress(text(body, 'email'));
+    if (!email) {
       return reply.code(400).send({ error: 'Enter your email address' });
     }
     const outcome = await atLeast(RESEND_MIN_MS, async () => {
@@ -506,7 +507,10 @@ export async function registerAuth(app: FastifyInstance, options: AuthOptions = 
       return { ok: true };
     }
     // Requesting a link answers the same, in about the same time, whether or not the account exists.
-    const email = text(body, 'email').trim().toLowerCase();
+    const email = normalizeAddress(text(body, 'email'));
+    if (!email) {
+      return reply.code(400).send({ error: 'Enter your email address' });
+    }
     await atLeast(RESEND_MIN_MS, async () => {
       const [user] = await db.select().from(schema.users).where(eq(schema.users.email, email));
       if (!user) {

@@ -100,6 +100,13 @@ describe.skipIf(Boolean(unavailable))('invite accept', () => {
     return row;
   });
 
+  it.each(['Work Co <me@gmail.com>', 'ceo@victim.com <me@evil.com>', 'a@acme-test.com,c@acme-test.com'])('refuses to invite %j, which is not one bare address', async (email) => {
+    const { owner } = await newOrg('bare', 'starter');
+    const response = await as(app, owner.token)('POST', '/api/org/invites', { email });
+    expect(response.statusCode).toBe(400);
+    expect(sent.filter((item) => item.purpose === 'invite')).toHaveLength(0);
+  });
+
   it('issues the code as <orgId>.<token>', async () => {
     const { orgId, owner } = await newOrg('inv-format', 'starter');
     const invitee = await createUser('inv-format-x');

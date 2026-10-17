@@ -10,6 +10,7 @@
  *   catches and logs it, and the route still answers as it would on success; the user can
  *   ask for a resend.
  */
+import { normalizeAddress } from './email-address.js';
 import { DeliveryError, deliverWithoutSender, type OutOfBandMessage, type OutOfBandSink, setOutOfBandSink } from './security.js';
 
 const RESEND_URL = 'https://api.resend.com/emails';
@@ -128,6 +129,10 @@ export function resendEmailSender(config: EmailConfig, options: SenderOptions = 
   return async (message) => {
     if (message.channel !== 'email' || message.purpose === 'verify_phone') {
       throw new DeliveryError(`resend cannot send ${message.purpose}`);
+    }
+    // One bare address only: Resend would read "Name <addr>" or a comma list as recipients.
+    if (normalizeAddress(message.to) === null) {
+      throw new DeliveryError('resend refused a recipient that is not one bare address');
     }
     const content = EMAILS[message.purpose];
     const link = emailLink(config.appUrl, content.path, message.secret);

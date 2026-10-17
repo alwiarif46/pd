@@ -142,6 +142,20 @@ describe('Resend email sender', () => {
     await expect(send(verifyEmail)).rejects.toThrow();
   });
 
+  it.each([
+    'Work Co <me@gmail.com>',
+    'ceo@victim.com <me@evil.com>',
+    'a@acme-test.com,c@acme-test.com',
+    'Kim@acme-test.com',
+  ])('refuses a recipient that is not one bare address (%j), without calling Resend', async (to) => {
+    const { fetch, calls } = fakeFetch();
+    const error = await resendEmailSender(emailConfig, { fetch })({ ...verifyEmail, to }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).name).toBe('DeliveryError');
+    expect((error as Error).message).not.toContain(to);
+    expect(calls).toHaveLength(0);
+  });
+
   it('refuses an SMS purpose', async () => {
     const { fetch, calls } = fakeFetch();
     await expect(resendEmailSender(emailConfig, { fetch })({ ...phoneCode, channel: 'email' })).rejects.toThrow();
