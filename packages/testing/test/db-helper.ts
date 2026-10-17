@@ -1,12 +1,19 @@
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
-import { afterAll, beforeAll } from 'vitest';
+import { afterAll, beforeAll, inject } from 'vitest';
 import { seedAll, type SeedReport } from '../src/seed';
 
 export const BASE_URL = process.env.TEST_DATABASE_URL;
 export const IN_CI = process.env.CI === 'true';
 /** True when DB tests must be skipped: no database and not in CI. In CI a missing URL fails. */
 export const SKIP_DB = !BASE_URL && !IN_CI;
+
+/**
+ * Decided once in test/global-setup.ts. Empty: the row-level security tests can log in as pd_app.
+ * Otherwise the reason they are skipped (outside CI; under CI the run already failed). Use it as
+ * `it.skipIf(APP_ROLE_SKIP !== '')`, never as an early return, so the skip shows in the report.
+ */
+export const APP_ROLE_SKIP: string = inject('appRoleSkipReason');
 
 if (SKIP_DB) {
   console.warn('[testing] TEST_DATABASE_URL is not set: database tests are skipped (they fail under CI=true)');
@@ -27,7 +34,7 @@ export function urlFor(base: string, user: string | null, password: string | nul
 export interface SeededDb {
   database: string;
   adminUrl: string;
-  /** Login as pd_app (row-level security applies). Null when pd_app already existed and TEST_PD_APP_PASSWORD is unset. */
+  /** Login as pd_app (row-level security applies). Null only when APP_ROLE_SKIP is set. */
   appUrl: string | null;
   firstRun: SeedReport;
 }
@@ -60,8 +67,9 @@ export function useSeededDatabase(): () => SeededDb {
       appUrl = urlFor(BASE_URL, 'pd_app', password, database);
     } else if (process.env.TEST_PD_APP_PASSWORD) {
       appUrl = urlFor(BASE_URL, 'pd_app', process.env.TEST_PD_APP_PASSWORD, database);
-    } else {
-      console.warn('[testing] role pd_app already exists and TEST_PD_APP_PASSWORD is unset: the row-level security tests are skipped');
+    } else if (APP_ROLE_SKIP === '') {
+      // The global setup saw no pd_app and expected this file to create it, but one appeared since.
+      throw new Error('[testing] role pd_app appeared on the cluster during the run and TEST_PD_APP_PASSWORD is unset');
     }
     state = { database, adminUrl, appUrl, firstRun };
   });

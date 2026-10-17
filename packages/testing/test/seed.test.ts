@@ -5,7 +5,7 @@ import { assertRlsIsolation, RlsLeakError } from '../src/cross-tenant';
 import { TENANT_A, TENANT_B } from '../src/fixtures';
 import { listSampleRfpFiles, sampleDocumentId } from '../src/sample-rfp';
 import { seedAll } from '../src/seed';
-import { SKIP_DB, useSeededDatabase } from './db-helper';
+import { APP_ROLE_SKIP, SKIP_DB, useSeededDatabase } from './db-helper';
 
 describe('tenant fixture keys', () => {
   it('match what PD computes from the solicitation number', () => {
@@ -97,8 +97,7 @@ describe.skipIf(SKIP_DB)('pnpm seed against a scratch database', () => {
   describe('as the app role', () => {
     const appUrl = () => db().appUrl;
 
-    it('tenant B sees none of tenant A through withOrg', async () => {
-      if (!appUrl()) return; // pd_app existed and no password was given
+    it.skipIf(APP_ROLE_SKIP !== '')('tenant B sees none of tenant A through withOrg', async () => {
       await closeDb();
       getPool(appUrl()!);
       const seen = await withOrg(TENANT_B.id, async (tx) => ({
@@ -117,8 +116,7 @@ describe.skipIf(SKIP_DB)('pnpm seed against a scratch database', () => {
       await closeDb();
     });
 
-    it('assertRlsIsolation passes for pd_app and fails for the owner', async () => {
-      if (!appUrl()) return; // pd_app existed and no password was given
+    it.skipIf(APP_ROLE_SKIP !== '')('assertRlsIsolation passes for pd_app and fails for the owner', async () => {
       const idsA = listSampleRfpFiles().map((f) => sampleDocumentId(TENANT_A.id, f.relPath));
       const app = new pg.Pool({ connectionString: appUrl()! });
       const admin = new pg.Pool({ connectionString: db().adminUrl });
@@ -130,11 +128,11 @@ describe.skipIf(SKIP_DB)('pnpm seed against a scratch database', () => {
         await assertRlsIsolation({ pool: app, table: 'organizations', tenantColumn: 'id', idsA: [TENANT_A.id], tenantA: TENANT_A.id, tenantB: TENANT_B.id });
         // The superuser skips row-level security: the helper must notice, and must not change data.
         await expect(
-          assertRlsIsolation({ pool: admin, table: 'documents', tenantColumn: 'org_id', idsA, tenantB: TENANT_B.id }),
+          assertRlsIsolation({ pool: admin, table: 'documents', tenantColumn: 'org_id', idsA, tenantA: TENANT_A.id, tenantB: TENANT_B.id }),
         ).rejects.toBeInstanceOf(RlsLeakError);
         const left = await admin.query('select count(*)::int as n from documents');
         expect(left.rows[0].n).toBe(idsA.length);
-        // Ids that do not exist prove nothing, so tenantA makes that an error.
+        // Ids that do not exist prove nothing, so that is an error.
         await expect(
           assertRlsIsolation({ pool: app, table: 'bids', tenantColumn: 'org_id', idsA: ['cccccccc-cccc-4ccc-8ccc-cccccccccccc'], tenantA: TENANT_A.id, tenantB: TENANT_B.id }),
         ).rejects.toThrow(/prove nothing/);
