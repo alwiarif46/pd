@@ -1,12 +1,12 @@
 import pg from 'pg';
-import { migrationServices, roleName } from '../src/migrate';
+import { RELAY_ROLE, migrationServices, roleName } from '../src/migrate';
 
 /** Service roles that already have a login password: the tests would reset them. */
 export async function serviceRolesInUse(baseUrl: string): Promise<string[]> {
   const client = new pg.Client({ connectionString: baseUrl });
   await client.connect();
   try {
-    const names = migrationServices().map((s) => roleName(s.schema));
+    const names = [...migrationServices().map((s) => roleName(s.schema)), RELAY_ROLE];
     const r = await client.query<{ rolname: string }>(
       'select rolname from pg_authid where rolname = any($1::text[]) and rolcanlogin and rolpassword is not null order by 1',
       [names],

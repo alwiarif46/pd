@@ -44,6 +44,8 @@ export interface ApplyMigrationsOptions {
   only?: ReadonlyArray<string>;
   /** Service id to role password. Falls back to env `<SERVICE>_DB_PASSWORD`. No password: NOLOGIN. */
   passwords?: Readonly<Record<string, string>>;
+  /** Password of the outbox relay role. Falls back to env `OUTBOX_RELAY_DB_PASSWORD`. None: NOLOGIN. */
+  relayPassword?: string;
   env?: NodeJS.ProcessEnv;
   repoRoot?: string;
   log?: (line: string) => void;
@@ -66,6 +68,13 @@ function ident(name: string): string {
 export function roleName(schema: string): string {
   return `${schema}_svc`;
 }
+
+/**
+ * The one cluster-wide role that reads every tenant's unpublished outbox rows (the rule 4
+ * exception in CLAUDE.md). LOGIN NOINHERIT NOSUPERUSER; it holds CONNECT, USAGE on each service
+ * schema, SELECT on each `<schema>.outbox` and UPDATE (published_at) on it, and nothing else.
+ */
+export const RELAY_ROLE = 'outbox_relay';
 
 /** The services of services.json that have a schema (every service except the gateway). */
 export function migrationServices(): MigrationService[] {
@@ -147,6 +156,66 @@ async function bootstrapRole(client: pg.Client, svc: MigrationService, password:
 }
 
 /**
+ * Creates the relay role if missing. Postgres lets only a role with BYPASSRLS create one, so the
+ * role gets BYPASSRLS when the migrator has it. Either way the two relay policies in `relayGrants`
+ * open the unpublished rows to it, so the role works without BYPASSRLS too.
+ */
+async function bootstrapRelayRole(client: pg.Client, password: string | undefined): Promise<void> {
+  const me = await client.query<{ can: boolean }>(
+    'select rolsuper or rolbypassrls as can from pg_roles where rolname = current_user',
+  );
+  const attrs = me.rows[0]?.can ? 'bypassrls' : 'nobypassrls';
+  await client.query(
+    `do $$ begin
+       create role ${ident(RELAY_ROLE)} nologin noinherit nosuperuser ${attrs} nocreatedb nocreaterole;
+     exception when duplicate_object then null;
+     end $$`,
+  );
+  if (password) {
+    // Same as the service roles: a SCRAM-SHA-256 verifier, never the plain password.
+    const stmt = await client.query<{ sql: string }>(
+      "select format('alter role %I login password %L', $1::text, $2::text) as sql",
+      [RELAY_ROLE, scramVerifier(password)],
+    );
+    await client.query(stmt.rows[0]!.sql);
+  }
+  await client.query(`revoke all on schema public from ${ident(RELAY_ROLE)}`);
+  const grant = await client.query<{ sql: string }>(
+    "select format('grant connect on database %I to %I', current_database(), $1::text) as sql",
+    [RELAY_ROLE],
+  );
+  await client.query(grant.rows[0]!.sql);
+}
+
+/** Runs after the service migrations, because it grants on the tables they create. */
+async function relayGrants(client: pg.Client, services: ReadonlyArray<MigrationService>): Promise<void> {
+  const role = ident(RELAY_ROLE);
+  for (const svc of services) {
+    const s = ident(svc.schema);
+    // A schema without an outbox (a test fixture) has nothing to grant.
+    const has = await client.query<{ ok: boolean }>('select to_regclass($1) is not null as ok', [`${s}.outbox`]);
+    if (!has.rows[0]?.ok) continue;
+    await client.query(`grant usage on schema ${s} to ${role}`);
+    await client.query(`revoke all on ${s}.outbox from ${role}`);
+    await client.query(`grant select on ${s}.outbox to ${role}`);
+    await client.query(`grant update (published_at) on ${s}.outbox to ${role}`);
+    // Permissive policies add up per row. The tenant policy stays closed to this role; these two
+    // open every tenant's rows to it. They test current_user, not role membership, so the
+    // migrator (a member of this role) still obeys the tenant policy. Postgres checks the new row
+    // of an UPDATE against the SELECT policy too, so the read policy cannot hide published rows.
+    // The relay can mark a row sent, never un-send it.
+    const me = `current_user = '${RELAY_ROLE}'`;
+    await client.query(`drop policy if exists relay_read on ${s}.outbox`);
+    await client.query(`create policy relay_read on ${s}.outbox for select using (${me})`);
+    await client.query(`drop policy if exists relay_publish on ${s}.outbox`);
+    await client.query(
+      `create policy relay_publish on ${s}.outbox for update
+         using (${me} and published_at is null) with check (${me} and published_at is not null)`,
+    );
+  }
+}
+
+/**
  * The `app` step. Roles first, then the shared schema, then one read-only `app_settings` view in
  * each service schema. Service roles get no access to `app` itself: the view runs with its
  * owner's rights.
@@ -155,6 +224,7 @@ async function appStep(
   client: pg.Client,
   services: ReadonlyArray<MigrationService>,
   passwords: (id: string) => string | undefined,
+  relayPassword: string | undefined,
   repoRoot: string,
   log: (line: string) => void,
 ): Promise<StepResult> {
@@ -174,6 +244,8 @@ async function appStep(
     await client.query(grant.rows[0]!.sql);
     log(`role ${roleName(svc.schema)}: ready`);
   }
+  await bootstrapRelayRole(client, relayPassword);
+  log(`role ${RELAY_ROLE}: ready`);
   await client.query('create schema if not exists app');
   await client.query('revoke all on schema app from public');
   const appDir = repoRoot === REPO_ROOT ? APP_MIGRATIONS_DIR : join(repoRoot, 'infra', 'db', 'app');
@@ -209,6 +281,8 @@ export async function applyMigrations(options: ApplyMigrationsOptions): Promise<
   const passwords = (id: string): string | undefined =>
     options.passwords?.[id] ?? (env[`${id.toUpperCase()}_DB_PASSWORD`] || undefined);
 
+  const relayPassword = options.relayPassword ?? (env.OUTBOX_RELAY_DB_PASSWORD || undefined);
+
   const client = new pg.Client({ connectionString: options.adminUrl });
   await client.connect();
   const results: StepResult[] = [];
@@ -216,7 +290,7 @@ export async function applyMigrations(options: ApplyMigrationsOptions): Promise<
     // One migrator at a time per database.
     await client.query('select pg_advisory_lock($1)', [LOCK_KEY]);
     try {
-      const app = await appStep(client, selected, passwords, repoRoot, log);
+      const app = await appStep(client, selected, passwords, relayPassword, repoRoot, log);
       results.push(app);
       log(`app: applied ${app.applied.length}, skipped ${app.skipped.length}`);
       for (const svc of selected) {
@@ -225,6 +299,8 @@ export async function applyMigrations(options: ApplyMigrationsOptions): Promise<
         results.push(r);
         log(`${svc.id}: applied ${r.applied.length}, skipped ${r.skipped.length}`);
       }
+      await relayGrants(client, selected);
+      log(`${RELAY_ROLE}: granted on ${selected.length} outbox tables`);
     } finally {
       await client.query('select pg_advisory_unlock($1)', [LOCK_KEY]);
     }
