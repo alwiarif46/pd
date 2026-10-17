@@ -11,6 +11,8 @@ import { AppRoot } from './AppRoot';
 import { ShellContext, type ShellContextValue } from './bid-context';
 import type { ShellApi } from './controller';
 import { LegacyFrame } from './LegacyFrame';
+import { collectRoutes, type TabScreenProps } from './registry';
+import { useDetailPortal } from '@/features/row-detail/use-detail-portal';
 import { ShellContainer } from './ShellContainer';
 import { savePendingInvite } from '@/features/membership/pending-invite';
 
@@ -370,6 +372,7 @@ describe('TabFrameContainer', () => {
       links: [linkDto()],
       bidLoaded: true,
       selectedRowId: null,
+      detailHost: null,
       refresh: vi.fn(),
       openRow: vi.fn(),
       openUpgrade: vi.fn(),
@@ -531,5 +534,79 @@ describe('ShellContainer seat-locked on a bid', () => {
     });
     expect(getBid.mock.calls.length).toBe(bidCalls);
     expect(listJobs.mock.calls.length).toBe(jobCalls);
+  });
+});
+
+describe('ShellContainer row detail host', () => {
+  /** A tab that opted in: it portals its detail into the shell's host. */
+  function DetailTab({ tab, selectedRowId }: TabScreenProps) {
+    const detail = useDetailPortal(<p>Detail for {selectedRowId}</p>);
+    return (
+      <>
+        <p>{tab} body</p>
+        {selectedRowId && detail}
+      </>
+    );
+  }
+  /** A registered tab that did not opt in: it gets no host, so its portal renders nothing. */
+  function PlainTab({ tab, selectedRowId }: TabScreenProps) {
+    const detail = useDetailPortal(<p>Plain detail</p>);
+    return (
+      <>
+        <p>{tab} body</p>
+        {selectedRowId && detail}
+      </>
+    );
+  }
+  const registry = collectRoutes({
+    '../a/route.tsx': {
+      routes: [
+        { tab: 'compliance', Component: DetailTab, rowDetail: true },
+        { tab: 'overview', Component: PlainTab },
+      ],
+    },
+  });
+  const detailAsides = () => screen.queryAllByRole('complementary', { name: 'Row detail' });
+  const at = (tab: 'compliance' | 'overview' | 'documents', rowId: string | null) => ({ kind: 'tab', bidId: 'bid-1', tab, rowId }) as const;
+
+  it('renders one host for an opted-in tab with a row selected, and the detail lands in it, outside .app-shell', async () => {
+    const api = mockApi();
+    const { rerender } = render(<ShellContainer route={at('compliance', 'req-1')} api={api} registry={registry} />);
+    const detail = await screen.findByText('Detail for req-1');
+    expect(detailAsides()).toHaveLength(1);
+    expect(detailAsides()[0]!.contains(detail)).toBe(true);
+    expect(detail.closest('.app-shell')).toBeNull();
+    expect(document.querySelector('.app-shell')).toBeNull();
+    // Another row keeps the one host.
+    rerender(<ShellContainer route={at('compliance', 'req-2')} api={api} registry={registry} />);
+    expect(await screen.findByText('Detail for req-2')).toBeTruthy();
+    expect(detailAsides()).toHaveLength(1);
+    expect(screen.queryByText('Detail for req-1')).toBeNull();
+    // No row: no host.
+    rerender(<ShellContainer route={at('compliance', null)} api={api} registry={registry} />);
+    await waitFor(() => expect(detailAsides()).toHaveLength(0));
+    expect(screen.getByText('compliance body')).toBeTruthy();
+  });
+
+  it('gives no host to a registered tab that did not opt in', async () => {
+    render(<ShellContainer route={at('overview', 'fact-1')} api={mockApi()} registry={registry} />);
+    expect(await screen.findByText('overview body')).toBeTruthy();
+    expect(detailAsides()).toHaveLength(0);
+    expect(screen.queryByText('Plain detail')).toBeNull();
+  });
+
+  it('leaves legacy tabs (Workspace) without a host', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, [])));
+    render(<ShellContainer route={at('documents', 'doc-1')} api={mockApi()} registry={registry} />);
+    await waitFor(() => expect(document.querySelector('.app-shell')).toBeTruthy());
+    expect(detailAsides()).toHaveLength(0);
+    vi.unstubAllGlobals();
+  });
+
+  it('draws no host while the bid could not be loaded', async () => {
+    const api = mockApi({ getBid: vi.fn(async () => Promise.reject(new ApiError('Bid not found.', 404))) });
+    render(<ShellContainer route={at('compliance', 'req-1')} api={api} registry={registry} />);
+    expect(await screen.findByText('Bid not found.')).toBeTruthy();
+    expect(detailAsides()).toHaveLength(0);
   });
 });

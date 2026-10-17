@@ -9,6 +9,7 @@ import { bidDto, docDto, jobDto, meDto, orgPayload, organizationDto, scheduleAct
 import { NEW_ROW_MISSING_MESSAGE, ROW_ALREADY_CLOSED_MESSAGE } from '@/features/proposals/controller';
 import { FALLBACK_MESSAGE } from '@/features/shared/messages';
 import { ShellContext, type ShellContextValue } from '@/features/shell/bid-context';
+import type { RowDetailApi } from '@/features/row-detail/controller';
 import type { ScheduleExporter } from '@/schedule/export';
 import { AMENDMENT_GONE_MESSAGE, DATE_CHANGE_BUSY_MESSAGE, type ScheduleApi } from './controller';
 import { dateChangeHolder, lockedDateChangeBids } from './date-change-lock';
@@ -19,6 +20,14 @@ vi.mock('sonner', async (orig) => ({
   ...(await orig<typeof import('sonner')>()),
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn() }),
 }));
+
+/** v0's SourceViewer: a Radix dialog (portalled to the body, never inside `.app-shell`) described by its page. */
+const sourceViewer = () => screen.queryByRole('dialog', { description: /^Pages? \d/ });
+async function findSourceViewer() {
+  const viewer = await screen.findByRole('dialog', { description: /^Pages? \d/ });
+  expect(viewer.closest('.app-shell')).toBeNull();
+  return viewer;
+}
 
 // The date-change lock is module state: a test that leaves one held fails here, not in a later test.
 afterEach(async () => {
@@ -62,6 +71,7 @@ function shellValue(over: Partial<ShellContextValue> = {}): ShellContextValue {
     links: [],
     bidLoaded: true,
     selectedRowId: null,
+    detailHost: null,
     refresh: vi.fn(),
     openRow: vi.fn(),
     openUpgrade: vi.fn(),
@@ -91,7 +101,14 @@ function mockExporter(): ScheduleExporter {
 }
 
 function renderContainer(
-  opts: { api?: ScheduleApi; shell?: Partial<ShellContextValue>; exporter?: ScheduleExporter; now?: () => Date } = {},
+  opts: {
+    api?: ScheduleApi;
+    shell?: Partial<ShellContextValue>;
+    exporter?: ScheduleExporter;
+    now?: () => Date;
+    selectedRowId?: string | null;
+    rowApi?: RowDetailApi;
+  } = {},
 ) {
   const api = opts.api ?? mockApi();
   const exporter = opts.exporter ?? mockExporter();
@@ -100,7 +117,15 @@ function renderContainer(
   const user = userEvent.setup();
   const tree = (bidId: string, value: ShellContextValue) => (
     <ShellContext.Provider value={value}>
-      <ScheduleContainer bidId={bidId} tab="schedule" selectedRowId={null} api={api} exporter={exporter} now={now} />
+      <ScheduleContainer
+        bidId={bidId}
+        tab="schedule"
+        selectedRowId={opts.selectedRowId ?? null}
+        api={api}
+        exporter={exporter}
+        now={now}
+        rowApi={opts.rowApi}
+      />
     </ShellContext.Provider>
   );
   const view = render(tree('bid-1', shell));
@@ -644,13 +669,12 @@ describe('ScheduleContainer: amendment date change', () => {
     await user.click(within(await prompt()).getByRole('button', { name: 'Open source for Amendment 3, page 4' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: TITLE })).toBeNull());
     expect(screen.getByText('Amendment 3 moves the due date to Wed, Dec 2, 2026.')).toBeTruthy();
-    const viewer = document.querySelector('.app-shell [aria-label="Source viewer"]') as HTMLElement;
-    expect(viewer).toBeTruthy();
+    const viewer = await findSourceViewer();
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/documents/doc-amd/view-token'))).toBe(true));
     await user.click(within(viewer).getByRole('button', { name: 'Close' }));
     const dialog = await prompt();
     await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
-    expect(document.querySelector('[aria-label="Source viewer"]')).toBeNull();
+    expect(sourceViewer()).toBeNull();
   });
 
   it('opens the source from the notice, and the notice stays when the viewer closes', async () => {
@@ -660,7 +684,7 @@ describe('ScheduleContainer: amendment date change', () => {
     await user.click(button(await prompt(), 'Cancel'));
     const notice = screen.getByRole('region', { name: 'Amendment date change' });
     await user.click(within(notice).getByRole('button', { name: 'Open source for Amendment 3, page 4' }));
-    const viewer = document.querySelector('.app-shell [aria-label="Source viewer"]') as HTMLElement;
+    const viewer = await findSourceViewer();
     await user.click(within(viewer).getByRole('button', { name: 'Close' }));
     expect(screen.queryByRole('dialog', { name: TITLE })).toBeNull();
     expect(screen.getByRole('region', { name: 'Amendment date change' })).toBeTruthy();
@@ -781,7 +805,7 @@ describe('ScheduleContainer: amendment proposals', () => {
     const fetchMock = mockFetch();
     const { user } = renderContainer({ api: proposalApi() });
     await user.click(within(await card()).getByRole('button', { name: 'Open source for Proposal due, page 4' }));
-    expect(document.querySelector('.app-shell [aria-label="Source viewer"]')).toBeTruthy();
+    await findSourceViewer();
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/documents/doc-amd/view-token'))).toBe(true));
   });
 
@@ -790,7 +814,7 @@ describe('ScheduleContainer: amendment proposals', () => {
     const { user } = renderContainer({ api });
     await user.click(within(await card()).getByRole('button', { name: 'Open source for Proposal due, page 4' }));
     expect(toast.info).toHaveBeenCalledWith('No source page for this row.');
-    expect(document.querySelector('[aria-label="Source viewer"]')).toBeNull();
+    expect(sourceViewer()).toBeNull();
   });
 
 });
@@ -885,9 +909,9 @@ describe('ScheduleContainer: amendment date change, guards and sources', () => {
     const { user, switchTo } = renderContainer({ api: mockApi([{ ...aiRow, documentId: 'doc-1' }]) });
     await ready();
     await user.click(screen.getByRole('button', { name: 'Open source for Proposal due, page 12' }));
-    expect(document.querySelector('[aria-label="Source viewer"]')).toBeTruthy();
+    await findSourceViewer();
     switchTo('bid-2', { bid: bidDto({ id: 'bid-2', dueDate: ts('2026-12-15') }) });
-    expect(document.querySelector('[aria-label="Source viewer"]')).toBeNull();
+    expect(sourceViewer()).toBeNull();
   });
 });
 
@@ -1094,5 +1118,53 @@ describe('ScheduleContainer: the date-change lock shared with other screens (Set
       await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
       expect(shell.refresh).toHaveBeenCalled();
     });
+  });
+});
+
+describe('ScheduleContainer: row detail', () => {
+  const sourced = { ...aiRow, documentId: 'doc-1', owner: 'Sam' };
+
+  function rowApi(): RowDetailApi {
+    return {
+      getRow: vi.fn(async () => ({ row: sourced, history: [] })) as unknown as RowDetailApi['getRow'],
+      updateRow: vi.fn(async () => ({ ok: true as const })) as unknown as RowDetailApi['updateRow'],
+    };
+  }
+
+  function withHost() {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    return host;
+  }
+
+  it("renders the v0 row detail in the shell's host, edits no dates, and closes through the shell", async () => {
+    const host = withHost();
+    const rows = rowApi();
+    const { shell, user } = renderContainer({ api: mockApi([userRow, sourced]), selectedRowId: 'act-ai', rowApi: rows, shell: { detailHost: host } });
+    const heading = await within(host).findByRole('heading', { name: 'Proposal due', level: 2 });
+    expect(heading.closest('.app-shell')).toBeNull();
+    expect(document.querySelector('.slider')).toBeNull();
+    expect(rows.getRow).toHaveBeenCalledWith('bid-1', 'schedule_activities', 'act-ai', expect.anything());
+    await user.click(within(host).getByRole('button', { name: 'Edit' }));
+    expect(within(host).getByLabelText('Label')).toBeTruthy();
+    expect(within(host).queryByLabelText(/start|end|date/i)).toBeNull();
+    await user.clear(within(host).getByLabelText('Owner'));
+    await user.click(within(host).getByRole('button', { name: 'Save changes' }));
+    expect(rows.updateRow).toHaveBeenCalledWith('bid-1', 'schedule_activities', 'act-ai', { owner: null });
+    await waitFor(() => expect(shell.refresh).toHaveBeenCalled());
+    await user.click(within(host).getByRole('button', { name: 'Close row detail' }));
+    expect(shell.openRow).toHaveBeenCalledWith(null);
+    host.remove();
+  });
+
+  it('opens the row source in the v0 source viewer', async () => {
+    mockFetch();
+    const host = withHost();
+    const { user } = renderContainer({ api: mockApi([userRow, sourced]), selectedRowId: 'act-ai', rowApi: rowApi(), shell: { detailHost: host } });
+    await within(host).findByRole('heading', { name: 'Proposal due', level: 2 });
+    await user.click(within(host).getByRole('button', { name: 'Open source' }));
+    const viewer = await findSourceViewer();
+    expect(within(viewer).getByText('Page 12')).toBeTruthy();
+    host.remove();
   });
 });

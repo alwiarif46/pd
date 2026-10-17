@@ -29,6 +29,12 @@ export interface ShellContextValue {
   bidLoaded: boolean;
   /** The row named by `?row=`, or null. */
   selectedRowId: string | null;
+  /**
+   * The element in AppShell's `detail` slot that a tab with `rowDetail` (registry.ts) portals its RowDetail
+   * into: set while such a tab has a row selected, null otherwise (and outside the shell). See
+   * features/row-detail/use-detail-portal.tsx.
+   */
+  detailHost: HTMLElement | null;
   /** Reloads the organization, the bid list and the open bid. Call after every mutation. */
   refresh: () => void;
   /** Selects a row of the open tab (sets `?row=`), or clears it with null. */

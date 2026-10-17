@@ -2,12 +2,14 @@ import type {
   AmendmentLinkDto,
   BidDto,
   BidFactDto,
+  ComplianceRowDto,
   DocumentDto,
   JobDto,
   MeDto,
   OrganizationDto,
   OrgPayloadDto,
   RfpCreditDto,
+  RowHistoryDto,
   ScheduleActivityDto,
   TabProposalDto,
 } from '@/api';
@@ -243,6 +245,52 @@ export function bidFactDto(over: Partial<BidFactDto> = {}): BidFactDto {
     origin: 'user',
     confidence: null,
     flags: null,
+    ...over,
+  };
+}
+
+export function complianceRowDto(over: Partial<ComplianceRowDto> = {}): ComplianceRowDto {
+  return {
+    ...base,
+    bidId: 'bid-1',
+    id: 'req-1',
+    reqId: 'L.4.2',
+    sectionRef: 'Section L.4.2',
+    requirementText: 'The offeror shall describe its staffing approach.',
+    reqType: 'shall',
+    instrRef: 'L.4.2',
+    evalRef: 'M.2',
+    responseSection: null,
+    owner: null,
+    status: 'open',
+    documentId: 'doc-1',
+    sourcePage: 12,
+    sourcePageEnd: null,
+    sourceQuote: 'The offeror shall describe its staffing approach.',
+    quoteVerified: true,
+    amendmentNo: 0,
+    supersedeStatus: 'active',
+    supersededByRowId: null,
+    changedByAmendment: null,
+    origin: 'ai',
+    confidence: '0.92',
+    flags: null,
+    ...over,
+  };
+}
+
+export function rowHistoryDto(over: Partial<RowHistoryDto> = {}): RowHistoryDto {
+  return {
+    ...base,
+    id: 'hist-1',
+    rowTable: 'compliance_rows',
+    rowId: 'req-1',
+    userId: 'user-1',
+    field: 'owner',
+    oldValue: null,
+    newValue: 'Dana',
+    changedAt: '2026-10-02T15:30:00.000Z',
+    userName: 'Dana Reyes',
     ...over,
   };
 }

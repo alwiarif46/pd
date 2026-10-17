@@ -51,6 +51,7 @@ function shellValue(over: Partial<ShellContextValue> = {}): ShellContextValue {
     links: [],
     bidLoaded: true,
     selectedRowId: null,
+    detailHost: null,
     refresh: vi.fn(),
     openRow: vi.fn(),
     openUpgrade: vi.fn(),

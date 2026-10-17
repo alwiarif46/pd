@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { isAbortError, type PendingDateChangeDto, type ScheduleActivityDto, type TabProposalDto } from '@/api';
-import { RowDetail } from '@/components/RowDetail';
-import { SourceViewer } from '@/components/SourceViewer';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { ActivityDraft, DateChangeMode, DueMove, ScheduleDateChange, ScheduleExportFormat, ScheduleTemplateId } from '@/types';
 import { messageOf } from '@/features/shared/messages';
 import { useRequiredShell } from '@/features/shell/bid-context';
 import { jobsKey } from '@/features/shell/controller';
-import { LegacyFrame } from '@/features/shell/LegacyFrame';
 import type { TabScreenProps } from '@/features/shell/registry';
+import type { RowDetailApi } from '@/features/row-detail/controller';
+import { RowDetailContainer } from '@/features/row-detail/RowDetailContainer';
+import type { SourceApi, SourceRef } from '@/features/source-viewer/controller';
+import { SourceViewerContainer } from '@/features/source-viewer/SourceViewerContainer';
 import { TabFrameContainer } from '@/features/tab-frame/TabFrameContainer';
 import { activityProposals, proposalSource } from '@/features/proposals/derive';
 import type { ProposalDecision } from '@/features/proposals/controller';
@@ -61,6 +62,8 @@ interface Props extends TabScreenProps {
   api?: ScheduleApi;
   exporter?: ScheduleExporter;
   now?: () => Date;
+  rowApi?: RowDetailApi;
+  sourceApi?: SourceApi;
 }
 
 type LoadState =
@@ -78,12 +81,7 @@ type LoadState =
 /** What happened here to an amendment date change, by amendmentChangeKey. */
 type ClosedChange = 'cancelled' | 'answered';
 
-interface Source {
-  documentId: string;
-  page: number;
-  pageEnd: number | null;
-  quote: string | null;
-}
+type Source = SourceRef;
 
 /** A row's move being saved, and the latest target asked for while it was. */
 interface MoveQueue {
@@ -99,7 +97,15 @@ const asTimestamp = (day: string) => `${day}T00:00:00.000Z`;
 const rowKey = (bidId: string, id: string) => `${bidId}/${id}`;
 
 /** The Schedule tab (05 s3.2): loads the bid's activities, renders the src/schedule port, and wires its actions. */
-export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exporter = scheduleExporter, now = defaultNow }: Props) {
+export function ScheduleContainer({
+  bidId,
+  selectedRowId,
+  api = scheduleApi,
+  exporter = scheduleExporter,
+  now = defaultNow,
+  rowApi,
+  sourceApi,
+}: Props) {
   const shell = useRequiredShell();
   const [today, setToday] = useState(() => localToday(now()));
   const [load, setLoad] = useState<{ bidId: string; state: LoadState } | null>(null);
@@ -201,10 +207,8 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
   const dueDate = dayOf(bid?.dueDate ?? null);
   const dueLabel = dueLabelOf(bid);
 
-  const activities = useMemo(() => {
-    const ids = new Set(dtos.map((d) => d.id));
-    return sortActivities(dtos.map((d) => toScheduleActivity(d, ids)));
-  }, [dtos]);
+  const rowIds = useMemo(() => new Set(dtos.map((d) => d.id)), [dtos]);
+  const activities = useMemo(() => sortActivities(dtos.map((d) => toScheduleActivity(d, rowIds))), [dtos, rowIds]);
   // From the stored origin, as the server's replace counts: a row with no origin shows as added by
   // hand but is not removed.
   const replaceCounts = useMemo(() => {
@@ -448,9 +452,9 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
     else putOffAmendment();
   };
 
-  // Radix's modal dialog blocks the SourceViewer (a LegacyFrame outside it), so opening the source puts
-  // the change off first, and only when the viewer will open: the prompt closes, and closing the viewer
-  // brings the prompt back (focus returns into it). From the notice, the notice simply stays.
+  // Never two Radix modals at once: opening the source (v0's SourceViewer, a dialog) puts the change off
+  // first, and only when the viewer will open: the prompt closes, and closing the viewer brings the prompt
+  // back (focus returns into it). From the notice, the notice simply stays.
   const openDateChangeSource = (from: 'prompt' | 'notice') => {
     if (!amendmentDto || dateChangeHolder(bidId) === userChange.owner) return;
     if (!amendmentDoc || amendmentSourcePage === null) {
@@ -605,39 +609,23 @@ export function ScheduleContainer({ bidId, selectedRowId, api = scheduleApi, exp
         {body}
       </TabFrameContainer>
       {selectedRowId && (
-        <LegacyFrame>
-          <RowDetail
-            bidId={bidId}
-            table="schedule_activities"
-            rowId={selectedRowId}
-            federal={bid?.bidType === 'federal'}
-            documents={shell.docs}
-            onClose={() => shell.openRow(null)}
-            onOpenSource={(row) => {
-              if (row.documentId) {
-                setSource({
-                  documentId: row.documentId,
-                  page: row.sourcePage ?? 1,
-                  pageEnd: row.sourcePageEnd ?? null,
-                  quote: row.sourceQuote ?? null,
-                });
-              }
-            }}
-            onSaved={afterSave}
-          />
-        </LegacyFrame>
+        // Portalled into the shell's row detail slot (route flag `rowDetail`), outside `.app-shell`. No date
+        // fields: dates move only through the calendar's per-row queue (plan Open question 8).
+        <RowDetailContainer
+          bidId={bidId}
+          table="schedule_activities"
+          rowId={selectedRowId}
+          federal={bid?.bidType === 'federal'}
+          docs={shell.docs}
+          rowIds={rowIds}
+          onOpenSource={(ref) => setSource(ref)}
+          onSaved={afterSave}
+          onJumpToRow={(id) => shell.openRow(id)}
+          onClose={() => shell.openRow(null)}
+          api={rowApi}
+        />
       )}
-      {source && (
-        <LegacyFrame>
-          <SourceViewer
-            documentId={source.documentId}
-            page={source.page}
-            pageEnd={source.pageEnd}
-            quote={source.quote}
-            onClose={closeSource}
-          />
-        </LegacyFrame>
-      )}
+      <SourceViewerContainer source={source} docs={shell.docs} onClose={closeSource} api={sourceApi} />
     </>
   );
 }

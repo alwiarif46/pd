@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import * as client from '@/api';
 import type { BidFactDto, TabProposalDto } from '@/api';
-import { SourceViewer } from '@/components/SourceViewer';
 import { Workspace } from '@/screens/Workspace';
 import type { ProposalApi, ProposalDecision } from '@/features/proposals/controller';
 import { factProposals, proposalSource, type ProposalSourceRef } from '@/features/proposals/derive';
@@ -12,6 +11,8 @@ import { useRequiredShell } from '@/features/shell/bid-context';
 import { jobsKey } from '@/features/shell/controller';
 import { LegacyFrame } from '@/features/shell/LegacyFrame';
 import type { TabScreenProps } from '@/features/shell/registry';
+import type { SourceApi } from '@/features/source-viewer/controller';
+import { SourceViewerContainer } from '@/features/source-viewer/SourceViewerContainer';
 import { tabHref } from '@/features/shell/routes';
 
 /** The calls the Overview container makes; tests pass fakes. */
@@ -22,9 +23,10 @@ export interface OverviewApi extends ProposalApi {
 const overviewApi: OverviewApi = client;
 
 interface Props extends TabScreenProps {
-  /** Test seams: the typed client, and the legacy Overview screen. */
+  /** Test seams: the typed client, the legacy Overview screen, and the source viewer's client. */
   api?: OverviewApi;
   Legacy?: typeof Workspace;
+  sourceApi?: SourceApi;
 }
 
 interface Loaded {
@@ -42,7 +44,7 @@ function go(hash: string) {
  * `.app-shell`) above the legacy Overview in a LegacyFrame. Not wrapped in TabFrameContainer: the legacy
  * screen draws its own processing, marking, failed and amendment banners.
  */
-export function OverviewContainer({ bidId, api = overviewApi, Legacy = Workspace }: Props) {
+export function OverviewContainer({ bidId, api = overviewApi, Legacy = Workspace, sourceApi }: Props) {
   const shell = useRequiredShell();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [version, setVersion] = useState(0);
@@ -140,17 +142,9 @@ export function OverviewContainer({ bidId, api = overviewApi, Legacy = Workspace
           refreshKey={refreshKey}
         />
       </LegacyFrame>
-      {source && (
-        <LegacyFrame>
-          <SourceViewer
-            documentId={source.documentId}
-            page={source.page}
-            pageEnd={source.pageEnd}
-            quote={source.quote}
-            onClose={() => setSourceState(null)}
-          />
-        </LegacyFrame>
-      )}
+      {/* v0's SourceViewer is a Radix Dialog (it portals to the body): no LegacyFrame. The legacy Overview
+          below keeps the legacy RowDetail and SourceViewer of its own (Workspace). */}
+      <SourceViewerContainer source={source} docs={shell.docs} onClose={() => setSourceState(null)} api={sourceApi} />
     </>
   );
 }

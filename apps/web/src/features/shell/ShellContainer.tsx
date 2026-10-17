@@ -33,7 +33,7 @@ import {
   type ShellData,
 } from './controller';
 import { LegacyFrame } from './LegacyFrame';
-import type { PageKey } from './registry';
+import type { PageKey, ScreenRegistry } from './registry';
 import { activePageOf, isPaidTab, pageHref, TAB_TITLES, tabHref, type AppRoute } from './routes';
 import { screens } from './screens';
 
@@ -47,6 +47,8 @@ interface Props {
   api?: ShellApi;
   /** Test seam: leaves the app for Stripe. Defaults to `window.location.assign`. */
   leaveTo?: (url: string) => void;
+  /** Test seam: the screen registry. Defaults to the route modules (screens.ts). */
+  registry?: ScreenRegistry;
 }
 
 function go(hash: string) {
@@ -77,7 +79,7 @@ function PageFrame({ children }: { children: ReactNode }) {
  * dialog, the confirm dialog and the session. Polls every 3 s while anything on the bid is queued or
  * running, never when idle; reloads on window focus and after every change (`refresh`).
  */
-export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Props) {
+export function ShellContainer({ route, api = shellApi, leaveTo = assign, registry = screens }: Props) {
   const [shell, setShell] = useState<ShellState>({ kind: 'loading' });
   const [shellVersion, setShellVersion] = useState(0);
   const [checking, setChecking] = useState(false);
@@ -93,6 +95,11 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
     key: 0,
   });
   const resolveConfirm = useRef<((ok: boolean) => void) | null>(null);
+  /**
+   * The row detail host (09 s5.17): the element AppShell's `detail` slot holds while a `rowDetail` tab has a
+   * row selected. Set by a ref callback when the host mounts and cleared when it unmounts, never by an effect.
+   */
+  const [detailHost, setDetailHost] = useState<HTMLElement | null>(null);
 
   const bidId = route.kind === 'tab' ? route.bidId : null;
   const tab: Tab | null = route.kind === 'tab' ? route.tab : null;
@@ -268,12 +275,13 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
       links: bidData?.links ?? [],
       bidLoaded: bidData !== null,
       selectedRowId: rowId,
+      detailHost,
       refresh,
       openRow,
       openUpgrade,
       confirm,
     };
-  }, [ready, summary, bidId, tab, bidData, rowId, refresh, openRow, openUpgrade, confirm]);
+  }, [ready, summary, bidId, tab, bidData, rowId, detailHost, refresh, openRow, openUpgrade, confirm]);
 
   const dialogs = (
     <ConfirmDialog
@@ -378,11 +386,25 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
   const bidDto = bidData?.bid ?? listed;
   const signals = bidData ? tabSignals(bidData.docs, bidData.jobs, bidData.links) : [];
   const oralsEnabled = bidDto?.oralsEnabled ?? false;
+  // The registered tab screen is drawn (content() below), not an error, the locked state or Orals turned off.
+  const tabScreenShown =
+    route.kind === 'tab' &&
+    registry.tabs.has(route.tab) &&
+    !bidError &&
+    !(org.plan === 'free' && isPaidTab(route.tab)) &&
+    !(route.tab === 'orals' && bidDto !== null && !bidDto.oralsEnabled);
+  // One host, only while a `rowDetail` tab is drawn with a row selected: the tab portals its RowDetail into
+  // it, so the slider sits in AppShell's aside, outside `.app-shell`, while staying in the tab's React tree.
+  // Legacy tabs (Workspace) and tabs that did not opt in get no slot: they draw their own detail.
+  const detail =
+    route.kind === 'tab' && route.rowId !== null && tabScreenShown && registry.detailTabs.has(route.tab) ? (
+      <div ref={setDetailHost} className="contents" />
+    ) : null;
 
   function content(): ReactNode {
     if (route.kind !== 'tab') {
       const key: PageKey = route.kind === 'new_bid' ? 'new_bid' : route.page;
-      const Registered = screens.pages.get(key);
+      const Registered = registry.pages.get(key);
       if (Registered) {
         return (
           <PageFrame>
@@ -425,7 +447,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
         </PageFrame>
       );
     }
-    const Registered = screens.tabs.get(route.tab);
+    const Registered = registry.tabs.get(route.tab);
     if (Registered) return <Registered bidId={route.bidId} tab={route.tab} selectedRowId={route.rowId} />;
     return (
       <LegacyFrame>
@@ -463,7 +485,7 @@ export function ShellContainer({ route, api = shellApi, leaveTo = assign }: Prop
         oralsEnabled={oralsEnabled}
         tabSignals={signals}
         user={userOf(current.me)}
-        detail={null}
+        detail={detail}
         onSelectTab={(next) => {
           if (bidId) go(tabHref(bidId, next));
         }}
