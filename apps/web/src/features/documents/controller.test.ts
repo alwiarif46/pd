@@ -41,6 +41,8 @@ describe('toDoc: status', () => {
     expect(doc({ liveStatus: 'restore_requested' }).status).toEqual({ state: 'restore_requested' });
     expect(doc({ liveStatus: 'restoring' }).status).toEqual({ state: 'restoring' });
     expect(doc({ liveStatus: 'restored', restoredUntil: '2026-11-20T00:00:00.000Z' }).status).toEqual({ state: 'restored', until: '2026-11-20' });
+    // A restored file with no restored-until date has no date to show: it is simply live (Open stays available).
+    expect(doc({ liveStatus: 'restored', restoredUntil: null }).status).toEqual({ state: 'live' });
   });
 
   it('is processing while the scan or extraction is pending, with no queue position', () => {

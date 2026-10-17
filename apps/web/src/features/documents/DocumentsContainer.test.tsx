@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
@@ -285,10 +285,68 @@ describe('DocumentsContainer: upload', () => {
     expect(screen.getAllByRole('alert')).toHaveLength(3);
   });
 
-  it('never calls upload with an empty list', async () => {
-    const { api, user } = renderContainer();
-    await user.upload(picker(), []);
+  it('never calls upload with an empty list (a real change event with an empty FileList)', () => {
+    const { api } = renderContainer();
+    fireEvent.change(picker(), { target: { files: [] } });
     expect(api.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('sends the typed amendment number with the first file only', async () => {
+    const { api, user } = renderContainer();
+    await user.type(numberField(), '3');
+    await user.click(screen.getByRole('button', { name: 'Add amendment' }));
+    await user.upload(picker(), [pdf('a1.pdf'), pdf('a2.pdf')]);
+    await waitFor(() => expect(api.uploadFile).toHaveBeenCalledTimes(2));
+    const calls = vi.mocked(api.uploadFile).mock.calls;
+    expect(calls[0][3]).toMatchObject({ amendmentNo: 3 });
+    expect(calls[1][3]).not.toHaveProperty('amendmentNo');
+  });
+
+  it('does not move the number on to the second file when the first is refused', async () => {
+    const uploadFile = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError('Amendment number must be 1 to 999', 400))
+      .mockResolvedValue({ duplicate: false, sessionId: 's', documentId: 'd', jobId: 'j' });
+    const { user } = renderContainer({ api: mockApi({ uploadFile: uploadFile as unknown as DocumentsApi['uploadFile'] }) });
+    await user.type(numberField(), '0');
+    await user.click(screen.getByRole('button', { name: 'Add amendment' }));
+    await user.upload(picker(), [pdf('a1.pdf'), pdf('a2.pdf')]);
+    await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(2));
+    expect(uploadFile.mock.calls[0][3]).toMatchObject({ amendmentNo: 0 });
+    expect(uploadFile.mock.calls[1][3]).not.toHaveProperty('amendmentNo');
+  });
+
+  it('keeps uploading after the tab unmounts, and reports each outcome by toast', async () => {
+    let finishFirst: () => void = () => undefined;
+    const uploadFile = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = () => resolve({ duplicate: true }); }))
+      .mockRejectedValueOnce(new ApiError('Upload an unlocked copy.', 422));
+    const { user, unmount, shell } = renderContainer({
+      api: mockApi({ uploadFile: uploadFile as unknown as DocumentsApi['uploadFile'] }),
+      shell: { bid: bidDto({ name: 'Alpha bid', keyOverridesLeft: 2 }) },
+    });
+    await user.upload(picker(), [pdf('one.pdf'), pdf('two.pdf')]);
+    await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(1));
+    unmount();
+    await act(async () => finishFirst());
+    await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(2));
+    expect(uploadFile.mock.calls[0][3]).not.toHaveProperty('signal');
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('Alpha bid')));
+    expect(toast.error).toHaveBeenCalledWith('one.pdf: Already uploaded.');
+    expect(toast.error).toHaveBeenCalledWith('two.pdf: Upload an unlocked copy.');
+    expect(shell.refresh).toHaveBeenCalled();
+  });
+
+  it('toasts instead of adding a notice when another bid is shown', async () => {
+    let finish: () => void = () => undefined;
+    const uploadFile = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ duplicate: true }); }));
+    const { user, update } = renderContainer({ api: mockApi({ uploadFile: uploadFile as unknown as DocumentsApi['uploadFile'] }) });
+    await user.upload(picker(), pdf('one.pdf'));
+    update({ bidId: 'bid-2', bid: bidDto({ id: 'bid-2' }), docs: [] });
+    await act(async () => finish());
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('one.pdf: Already uploaded.'));
+    expect(screen.queryByText('Already uploaded.')).toBeNull();
   });
 });
 
@@ -311,7 +369,36 @@ describe('DocumentsContainer: notices', () => {
   });
 });
 
+describe('DocumentsContainer: notices per bid', () => {
+  it('keeps each bid’s stashed notices and dismissals apart', async () => {
+    stashUploadNotices('bid-1', [{ id: 'n1', fileName: 'a.pdf', tone: 'error', message: 'Notice for one.' }]);
+    stashUploadNotices('bid-2', [{ id: 'n2', fileName: 'b.pdf', tone: 'error', message: 'Notice for two.' }]);
+    const { user, update } = renderContainer();
+    expect(await screen.findByText('Notice for one.')).toBeTruthy();
+    const two = { bidId: 'bid-2', bid: bidDto({ id: 'bid-2' }), docs: [] };
+    const one = { bidId: 'bid-1', bid: bidDto(), docs: [RFP] };
+    update(two);
+    expect(await screen.findByText('Notice for two.')).toBeTruthy();
+    expect(screen.queryByText('Notice for one.')).toBeNull();
+    update(one);
+    expect(screen.getByText('Notice for one.')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    update(two);
+    expect(screen.getByText('Notice for two.')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    update(one);
+    expect(screen.queryByText('Notice for one.')).toBeNull();
+    update(two);
+    expect(screen.queryByText('Notice for two.')).toBeNull();
+  });
+});
+
 describe('DocumentsContainer: amendment tabs status', () => {
+  it('shows no tabs notice for a deleted amendment', () => {
+    renderContainer({ shell: { docs: [RFP, amendment({ amendmentTabsStatus: 'failed', liveStatus: 'deleted' })] } });
+    expect(screen.queryByText(/did not update from this amendment/)).toBeNull();
+  });
+
   const noticeFor = (status: DocumentDto['amendmentTabsStatus']) => [RFP, amendment({ amendmentTabsStatus: status })];
 
   it('shows pending as an info notice, and the file’s status stays Live', () => {

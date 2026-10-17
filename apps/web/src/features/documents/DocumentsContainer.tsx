@@ -28,16 +28,10 @@ interface Props extends TabScreenProps {
 /** The Documents tab has no compliance rows of its own, so the slider offers no "Superseded by" jump. */
 const NO_ROW_IDS: ReadonlySet<string> = new Set();
 
-/** A bid's notices or progress: kept per bid, so an upload that ends after a bid switch shows on its own bid. */
+/** A bid's progress: kept per bid, so an upload that ends after a bid switch shows on its own bid. */
 interface PerBid<T> {
   bidId: string;
   items: T[];
-}
-
-/** The id of a notice the user dismissed, per bid. */
-interface Dismissed {
-  bidId: string;
-  ids: string[];
 }
 
 /**
@@ -48,11 +42,20 @@ interface Dismissed {
  */
 export function DocumentsContainer({ bidId, selectedRowId, api = documentsApi, rowApi, sourceApi }: Props) {
   const shell = useRequiredShell();
-  const [own, setOwn] = useState<PerBid<UploadNotice> | null>(null);
+  /** Notices and dismissed ids, each keyed by bid: one bid's never touch another's. */
+  const [own, setOwn] = useState<Record<string, UploadNotice[]>>({});
   const [progress, setProgress] = useState<PerBid<UploadProgress> | null>(null);
-  const [dismissed, setDismissed] = useState<Dismissed | null>(null);
+  const [dismissed, setDismissed] = useState<Record<string, string[]>>({});
   const [sourceState, setSourceState] = useState<{ bidId: string; ref: SourceRef } | null>(null);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
+  /** Whether this container is mounted and which bid it shows, for uploads that finish later. */
+  const liveRef = useRef<{ mounted: boolean; bidId: string }>({ mounted: false, bidId });
+  useEffect(() => {
+    liveRef.current = { mounted: true, bidId };
+    return () => {
+      liveRef.current = { mounted: false, bidId };
+    };
+  }, [bidId]);
   const seqRef = useRef(0);
   /** Files and documents with a call in flight: a second click on the same action is ignored. */
   const busyRef = useRef(new Set<string>());
@@ -63,11 +66,11 @@ export function DocumentsContainer({ bidId, selectedRowId, api = documentsApi, r
   useEffect(() => {
     const taken = takeUploadNotices(bidId);
     if (taken.length === 0) return;
-    queueMicrotask(() => setOwn((prev) => ({ bidId, items: [...(prev?.bidId === bidId ? prev.items : []), ...taken] })));
+    queueMicrotask(() => setOwn((prev) => ({ ...prev, [bidId]: [...(prev[bidId] ?? []), ...taken] })));
   }, [bidId]);
 
   const addNotice = (forBid: string, notice: UploadNotice) =>
-    setOwn((prev) => ({ bidId: forBid, items: [...(prev?.bidId === forBid ? prev.items : []), notice] }));
+    setOwn((prev) => ({ ...prev, [forBid]: [...(prev[forBid] ?? []), notice] }));
 
   const setPercent = (forBid: string, fileName: string, percent: number | null) =>
     setProgress((prev) => {
@@ -75,29 +78,47 @@ export function DocumentsContainer({ bidId, selectedRowId, api = documentsApi, r
       return { bidId: forBid, items: percent === null ? rest : [...rest, { fileName, percent }] };
     });
 
-  const runUpload = async (forBid: string, files: File[], kind: FileKind, amendmentNo: number | undefined) => {
+  /**
+   * Uploads the files one at a time. The typed amendment number goes with the first file only (the server
+   * numbers the rest); it is spent whether or not that file is accepted. Uploads are never aborted: a
+   * batch that ends after the tab closed or the bid changed reports each outcome by toast instead.
+   */
+  const runUpload = async (forBid: string, bidName: string, files: File[], kind: FileKind, amendmentNo: number | undefined) => {
+    let number = amendmentNo;
     for (const file of files) {
       seqRef.current += 1;
       const id = `${forBid}:upload:${seqRef.current}`;
+      const options = {
+        ...(number !== undefined ? { amendmentNo: number } : {}),
+        onProgress: (p: { chunksSent: number; chunkCount: number }) => setPercent(forBid, file.name, percentOf(p)),
+      };
+      number = undefined;
       setPercent(forBid, file.name, 0);
+      let notice: UploadNotice | null = null;
       try {
-        const result = await api.uploadFile(forBid, file, kind, {
-          ...(amendmentNo !== undefined ? { amendmentNo } : {}),
-          onProgress: (p) => setPercent(forBid, file.name, percentOf(p)),
-        });
-        if (result.duplicate) addNotice(forBid, noticeFor('duplicate', file, id));
+        const result = await api.uploadFile(forBid, file, kind, options);
+        if (result.duplicate) notice = noticeFor('duplicate', file, id);
       } catch (error) {
-        addNotice(forBid, uploadFailureNotice(error, file, id));
+        notice = uploadFailureNotice(error, file, id);
       } finally {
         setPercent(forBid, file.name, null);
       }
+      if (notice) {
+        const shown = liveRef.current.mounted && liveRef.current.bidId === forBid;
+        if (shown) addNotice(forBid, notice);
+        else toast.error(`${notice.fileName}: ${notice.message}`);
+      }
     }
+    if (!(liveRef.current.mounted && liveRef.current.bidId === forBid)) toast.success(`Finished uploading to ${bidName}.`);
     shell.refresh();
   };
 
   const onUpload = (files: File[], kind: FileKind, amendmentNo?: number) => {
     if (files.length === 0) return;
-    queueRef.current = queueRef.current.then(() => runUpload(bidId, files, kind, amendmentNo));
+    const bidName = shell.bid?.name ?? 'the bid';
+    queueRef.current = queueRef.current
+      .then(() => runUpload(bidId, bidName, files, kind, amendmentNo))
+      .catch(() => undefined);
   };
 
   /** Runs one call per key at a time; success reloads the shell, failure shows the API's message. */
@@ -161,11 +182,11 @@ export function DocumentsContainer({ bidId, selectedRowId, api = documentsApi, r
 
   const docs = useMemo(() => shell.docs.map((dto) => toDoc(dto, shell.jobs, shell.docs)), [shell.docs, shell.jobs]);
   const tabsNotices = useMemo(
-    () => shell.docs.flatMap((dto) => amendmentTabsNotice(dto) ?? []),
+    () => shell.docs.filter((dto) => dto.liveStatus !== 'deleted').flatMap((dto) => amendmentTabsNotice(dto) ?? []),
     [shell.docs],
   );
-  const hidden = dismissed?.bidId === bidId ? dismissed.ids : [];
-  const notices = [...(own?.bidId === bidId ? own.items : []), ...tabsNotices].filter((n) => !hidden.includes(n.id));
+  const hidden = dismissed[bidId] ?? [];
+  const notices = [...(own[bidId] ?? []), ...tabsNotices].filter((n) => !hidden.includes(n.id));
   const uploads = progress?.bidId === bidId ? progress.items : [];
   const source = sourceState?.bidId === bidId ? sourceState.ref : null;
   const bid = shell.bid;
@@ -197,7 +218,7 @@ export function DocumentsContainer({ bidId, selectedRowId, api = documentsApi, r
       uploads={uploads}
       onUpload={onUpload}
       onSetAmendmentNo={onSetAmendmentNo}
-      onDismissNotice={(id) => setDismissed((prev) => ({ bidId, ids: [...(prev?.bidId === bidId ? prev.ids : []), id] }))}
+      onDismissNotice={(id) => setDismissed((prev) => ({ ...prev, [bidId]: [...(prev[bidId] ?? []), id] }))}
       onOpen={(id) => setSourceState({ bidId, ref: { documentId: id, page: 1, pageEnd: null, quote: null } })}
       onDelete={(id) => act(`delete:${id}`, () => api.deleteDocument(id), () => shell.refresh())}
       onRestore={onRestore}

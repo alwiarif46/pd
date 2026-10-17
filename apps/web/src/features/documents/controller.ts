@@ -40,8 +40,11 @@ function toStatus(dto: DocumentDto, jobs: readonly JobDto[], docs: readonly Docu
       return { state: 'restore_requested' };
     case 'restoring':
       return { state: 'restoring' };
-    case 'restored':
-      return { state: 'restored', until: dayOf(dto.restoredUntil) ?? '' };
+    case 'restored': {
+      // `restored.until` is a date; with none to show the file is simply available.
+      const until = dayOf(dto.restoredUntil);
+      return until ? { state: 'restored', until } : { state: 'live' };
+    }
     default:
       return { state: 'live' };
   }
