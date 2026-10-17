@@ -52,3 +52,9 @@ One heading per chat. Each entry: question, options, choice made, why. Design ga
 ## Chat 8
 
 ## Chat 9
+
+## Chat 4
+
+- **Bid-autopilot scripts are not in the repo.** 09 s4.10 says "PD source: None" and the 29 scripts and 7 prose scripts are not on master. Options: stop, or write the scripts Phase 3 needs. Chose to write the Phase 3 tools (format lock, shell, audit, caption fields, visual gate, page count) and register them with the toolrunner. The remaining scripts wait for their source. Owner to say where the originals live.
+- **Model gateway stub.** Chat 3 has not run. The vision check calls a client interface with a recorded-response double, switched by `RENDER_MODELGW_MODE`. The double lives in `python/render/tests/`. The vision check against a real model is unverified: waits on chat 3.
+- **Font request fee amount.** 06 s6 leaves it open. Chose a configuration value (`FONT_REQUEST_FEE_CENTS`, default 0 means unset and blocks the request) so no number is invented. Owner to give the amount.
