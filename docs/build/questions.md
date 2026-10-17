@@ -16,6 +16,7 @@ One heading per chat. Each entry: question, options, choice made, why. Design ga
 - **Product name in Atrium.** Atrium's page title says "Bidwright" (INVENTORY G13). Chose "E2E Proposal" in app text; no Atrium file is edited.
 - **Repository browser and Data and AI settings had no owning chat.** INVENTORY assigns them to chat 3 and chat 8.
 - **No version bump enforcement in contracts:check.** contracts:check does not enforce a version bump; PR 12 adds a CI step comparing against the merge base. Chose: defer to PR 12 because it needs git history in CI.
+- **Major bump needs the previous-major file.** Options: enforce it in contracts:check now, or in PR 12. Chose PR 12: its version-bump check must also require the previous-major file `<event>.v<old>.schema.json` on a major bump.
 
 ## Chat 2
 
