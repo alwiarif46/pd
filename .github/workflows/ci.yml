@@ -308,8 +308,8 @@ jobs:
       - name: pytest (render and portal-agent)
         run: uv run --frozen pytest
       - name: mypy
-        # mypy is not a dependency of the workspace; --with adds it for this command only.
-        run: uv run --frozen --with mypy mypy python/render/src python/portal-agent/src
+        # mypy is not a dependency of the workspace; --with adds it for this command only (pinned to the version that passed when this job was written).
+        run: uv run --frozen --with mypy==2.4.0 mypy python/render/src python/portal-agent/src
 
   e2e-web:
     # Playwright smoke test of the built web app (services/gateway/web/e2e), served by vite preview.

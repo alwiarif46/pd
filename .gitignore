@@ -67,6 +67,6 @@ __pycache__/
 infra/compose/local.env
 
 # Playwright output (services/gateway/web)
-test-results/
-playwright-report/
-blob-report/
+/services/gateway/web/test-results/
+/services/gateway/web/playwright-report/
+/services/gateway/web/blob-report/
