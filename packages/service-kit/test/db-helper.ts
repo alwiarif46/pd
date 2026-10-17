@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
-import { afterAll, beforeAll } from 'vitest';
+import { afterAll, beforeAll, inject } from 'vitest';
 import { applyMigrations, migrationServices, roleName, type MigrationService } from '../src/migrate';
 
 export const BASE_URL = process.env.TEST_DATABASE_URL;
@@ -20,31 +20,8 @@ if (SKIP_DB_NO_URL) {
  */
 export const RESETS_ROLES_OK = process.env.SERVICE_KIT_TEST_RESETS_ROLES === '1';
 
-async function realServiceRoles(): Promise<string[]> {
-  if (!BASE_URL) return [];
-  const client = new pg.Client({ connectionString: BASE_URL });
-  await client.connect();
-  try {
-    const names = migrationServices().map((s) => roleName(s.schema));
-    const r = await client.query<{ rolname: string }>(
-      'select rolname from pg_authid where rolname = any($1::text[]) and rolcanlogin and rolpassword is not null order by 1',
-      [names],
-    );
-    return r.rows.map((x) => x.rolname);
-  } finally {
-    await client.end();
-  }
-}
-
-const inUse = RESETS_ROLES_OK ? [] : await realServiceRoles();
-if (inUse.length > 0) {
-  const msg =
-    `[service-kit] REFUSING to run database tests: ${inUse.length} service role(s) already have a login password ` +
-    `(${inUse.slice(0, 3).join(', ')}${inUse.length > 3 ? ', ...' : ''}). The tests reset those passwords. ` +
-    'Point TEST_DATABASE_URL at a disposable cluster, or set SERVICE_KIT_TEST_RESETS_ROLES=1 if resetting them is fine.';
-  if (IN_CI) throw new Error(msg);
-  console.warn(`\n!!!!!!!! ${msg} !!!!!!!!\n`);
-}
+/** Decided once in test/global-setup.ts, before any file runs (a per-file check would trip on roles an earlier file made). */
+const inUse = inject('serviceRolesInUse');
 export const SKIP_ROLE_RESET = inUse.length > 0;
 /** True when database tests are skipped: no URL (outside CI), or a cluster whose service roles are in use. */
 export const SKIP_DB = SKIP_DB_NO_URL || SKIP_ROLE_RESET;
