@@ -33,7 +33,8 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 | 9 Skeletons | e2e/c1-09-skeletons | merged (#57) | Fable: no majors; 11 minors fixed incl. a racy test guard found on a fresh cluster |
 | 10 Testing | e2e/c1-10-testing | merged (#58) | Fable: 4 majors fixed over 3 rounds (positive control, CI-vacuous RLS tests, seed guard x2); follow-ups logged |
 | 11 Local stack | e2e/c1-11-stack | merged (#59) | Fable: no majors; 4 minors fixed (JWKS host, clamd double O(n), native chown scope, TCP healthcheck) |
-| 12 CI | e2e/c1-12-ci | in review (#60). Three CI fix rounds used; `compose-stack` split out to workflow `compose-stack.yml` (manual) and PR 12b | Pushed and run on GitHub: the nine new jobs (contracts, test-services, test-python, e2e-web and the rest of the CI matrix) and 19 Docker builds are green on 34f819e. `compose-stack` is manual and not yet green as a PR check (PR 12b). Fable review: no majors; review fixes (envelope version, bump check hardening, mypy pin, .gitignore anchors) follow. fable-reviewer: CI |
+| 12 CI | e2e/c1-12-ci | merged (#60). Fable: no majors; compose-stack split into a manual workflow after three CI fix rounds |
+| 12b Compose job | e2e/c1-12b-compose-ci | in progress | compose-stack back in ci.yml as a PR check; fresh CI fix budget; the schemas query bug is already fixed |
 | 13 Rename notice | - | planned | |
 
 ## PR 12 CI: which Done-when check which job verifies
