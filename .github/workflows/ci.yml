@@ -18,8 +18,19 @@ on:
         default: ''
         type: string
 
+# Least privilege: every job reads the repository and nothing else. push-images adds packages: write for itself.
+permissions:
+  contents: read
+
+# A new push to a pull request cancels the run it replaces. Runs on master and manual dispatches are never cancelled:
+# their group is the unique run id.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   typecheck:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +45,7 @@ jobs:
       - run: pnpm typecheck
 
   lint:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,8 +59,19 @@ jobs:
       - run: pnpm install
       - run: pnpm lint
       - run: pnpm --filter @pd/web v0:check
+      - name: Secret scan (the same scanner as the pre-commit hook; test-infra runs it too)
+        run: python3 .githooks/secret_scan.py --all
+      - name: Skills stay out of git (only the two PD skills are tracked)
+        run: |
+          extra="$(git ls-files skills | grep -v -e '^skills/bid-summary/' -e '^skills/compliance-matrix/' || true)"
+          if [ -n "$extra" ]; then
+            echo "::error::tracked files under skills/ other than skills/bid-summary and skills/compliance-matrix:"
+            echo "$extra"
+            exit 1
+          fi
 
   build:
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,6 +86,7 @@ jobs:
       - run: pnpm build
 
   test-web:
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,6 +104,7 @@ jobs:
     # Tenant-isolation tests against a real Postgres. With the superuser below, the tests
     # create a non-superuser owner role, migrate a fresh database as that owner, then connect
     # as pd_app so row-level security is exercised.
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -110,6 +135,7 @@ jobs:
 
   test-infra:
     # Offline tests of the infrastructure scripts (fakes only: no provider, Cloudflare, Backblaze or GHCR call).
+    timeout-minutes: 20
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -126,6 +152,7 @@ jobs:
     # migrations, take a real pg_dump -Fc, check restore.sh's validation (a truncated dump must be refused), then run
     # restore.sh's SQL path from ops/lib/backup-common.sh into a second, fresh Postgres twice and compare. No network
     # beyond these two service containers (no Borg, no B2: the archive layer is covered by ops/tests with fakes).
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     services:
       pgsrc:
@@ -169,11 +196,218 @@ jobs:
       - name: restore drill
         run: bash ops/ci/restore-drill-ci.sh --src "${{ job.services.pgsrc.id }}" --dst "${{ job.services.pgdst.id }}" --workdir "$RUNNER_TEMP" --seed
 
-  build-docker:
-    # Build only, no push (pull requests, every push). The build context is the repo root; each Dockerfile installs the
-    # workspace with the frozen lockfile, builds its app, and ships production deps only.
+  contracts:
+    # Contract drift (pnpm contracts:check), the contract and stage-interface tests, and the version-bump check against the
+    # base branch (packages/contracts/scripts/bump.ts). The contracts tests take about 3 minutes. Full history, so the merge base exists.
     runs-on: ubuntu-latest
-    needs: [typecheck, lint, build, test-web, test-api, test-infra, restore-drill]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install
+      - name: Contract drift (OpenAPI, event schemas, generated types, skeleton routes)
+        run: pnpm contracts:check
+      - name: Version bump against the base branch (pull requests only)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: pnpm contracts:check:bump -- --base "origin/$BASE_REF"
+      - name: Contracts and stage-interface tests
+        timeout-minutes: 15
+        run: pnpm --filter @pd/contracts --filter @pd/stage-interface test
+
+  test-services:
+    # Everything that needs a real Postgres and is not the gateway: @pd/service-kit, @pd/testing and the twelve TypeScript
+    # service skeletons. A FRESH cluster: the service-kit tests reset the passwords of the cluster-wide <schema>_svc roles,
+    # so they refuse a cluster where those roles already have a login password (packages/service-kit/test/guard.ts), and
+    # under CI=true that refusal is a failure. This job does not set SERVICE_KIT_TEST_RESETS_ROLES for the job. The gateway
+    # (@pd/api) and its tests stay in test-api: both create the cluster-wide pd_app and pd_system roles, so they must not share a cluster.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI: 'true'
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres  # secret-scan: allow (throwaway CI database)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install
+      # First, on the untouched cluster, so the guard sees no service role with a password.
+      - name: 'Schema isolation: a service role cannot read another service schema'
+        run: pnpm --filter @pd/service-kit exec vitest run test/isolation.test.ts test/owner-rls.test.ts
+      - name: '@pd/service-kit tests (all of them, the isolation tests again)'
+        # The step above left passwords on the roles, so the guard would now refuse. This step, and only this step, says
+        # resetting them is fine: the cluster is a throwaway service container of this job.
+        env:
+          SERVICE_KIT_TEST_RESETS_ROLES: '1'
+        run: pnpm --filter @pd/service-kit test
+      - name: '@pd/testing tests (tenant fixtures, seed, doubles, pnpm migrate end to end)'
+        run: pnpm --filter @pd/testing test
+      - name: The twelve TypeScript service skeletons
+        # One package at a time: they share the cluster.
+        run: >-
+          pnpm --workspace-concurrency=1
+          --filter @pd/identity --filter @pd/billing --filter @pd/ingest --filter @pd/intel
+          --filter @pd/orchestrator --filter @pd/modelgw --filter @pd/drafting --filter @pd/review
+          --filter @pd/evidence --filter @pd/comms --filter @pd/drive --filter @pd/notify
+          test
+
+  test-python:
+    # The two Python services (render, portal-agent): uv workspace at the repo root, pytest against a fresh Postgres, mypy on both src folders.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres  # secret-scan: allow (throwaway CI database)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5.4.2
+        with:
+          version: '0.11.32'
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-packages --frozen
+      - name: pytest (render and portal-agent)
+        run: uv run --frozen pytest
+      - name: mypy
+        # mypy is not a dependency of the workspace; --with adds it for this command only.
+        run: uv run --frozen --with mypy mypy python/render/src python/portal-agent/src
+
+  compose-stack:
+    # The Compose local stack (infra/compose/local.yml) for real: Postgres with pgvector, Redis, Zitadel, SeaweedFS, ClamAV,
+    # and the sandbox image. The first run of this stack was in CI, so every step prints what it needs to be debugged.
+    # local.env is made from the example (dev-only placeholders, not secrets) and is deleted with the stack.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      COMPOSE: docker compose -f infra/compose/local.yml --env-file infra/compose/local.env
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install
+      - name: Create local.env from the example
+        run: cp infra/compose/local.env.example infra/compose/local.env
+      - name: Validate the Compose file
+        run: $COMPOSE config --quiet
+      - name: Boot the stack (build the sandbox, wait for every healthcheck)
+        # 600 s: the ClamAV healthcheck allows a 180 s start period plus 10 tries of 30 s while freshclam downloads signatures.
+        run: $COMPOSE up -d --build --wait --wait-timeout 600
+      - name: Container state
+        if: always()
+        run: $COMPOSE ps -a
+      - name: pgvector and the databases
+        run: python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env postgres
+      - name: pnpm migrate applies the 15 schemas in order (twice, the second run must change nothing)
+        run: |
+          set -euo pipefail
+          # Read single values: the env file is for Compose, not for sourcing (a value such as PD Local has a space).
+          envval() { sed -n "s/^$1=\([^ ]*\).*/\1/p" infra/compose/local.env; }
+          export PD_ADMIN_DATABASE_URL="postgres://$(envval POSTGRES_USER):$(envval POSTGRES_PASSWORD)@127.0.0.1:$(envval POSTGRES_PORT)/$(envval E2E_DB_NAME)"
+          pnpm migrate
+          pnpm migrate
+          python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env schemas
+      - name: 'Schema isolation against the Compose cluster (a service role cannot read another service schema)'
+        # The cluster is fresh and the migrate step above gave no service role a login password, so the guard passes without the opt-in.
+        run: |
+          set -euo pipefail
+          envval() { sed -n "s/^$1=\([^ ]*\).*/\1/p" infra/compose/local.env; }
+          export CI=true TEST_DATABASE_URL="postgres://$(envval POSTGRES_USER):$(envval POSTGRES_PASSWORD)@127.0.0.1:$(envval POSTGRES_PORT)/postgres"
+          pnpm --filter @pd/service-kit exec vitest run test/isolation.test.ts test/owner-rls.test.ts
+      - name: ClamAV scans the EICAR test string as infected
+        run: python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env clamav
+      - name: SeaweedFS S3 put and get roundtrip (signed request, path-style)
+        run: python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env s3
+      - name: Zitadel is ready and wrote the machine key
+        run: python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env zitadel
+      - name: The sandbox runs hardened and has no network
+        run: python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env sandbox
+      - name: Compose logs (on failure)
+        if: failure()
+        run: $COMPOSE logs --no-color --tail 200
+      - name: Stop the stack and delete its volumes
+        if: always()
+        run: |
+          $COMPOSE down -v --remove-orphans
+          rm -f infra/compose/local.env
+
+  e2e-web:
+    # Playwright smoke test of the built web app (services/gateway/web/e2e), served by vite preview.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm --filter @pd/web build
+      - run: pnpm --filter @pd/web exec playwright test
+      - name: Upload the Playwright report (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            services/gateway/web/playwright-report
+            services/gateway/web/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  build-docker:
+    # Build only, no push (pull requests, every push). The matrix has the five deployed images plus the 12 TypeScript and 2 Python service skeletons. The build context is the repo root; each Dockerfile installs the
+    # workspace with the frozen lockfile, builds its app, and ships production deps only.
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    needs: [typecheck, lint, build, test-web, test-api, test-infra, restore-drill, contracts, test-services, test-python]
     strategy:
       fail-fast: false
       matrix:
@@ -183,6 +417,21 @@ jobs:
           - { app: migrate, file: services/gateway/Dockerfile, target: migrate }
           - { app: worker, file: services/worker/Dockerfile, target: '' }
           - { app: sandbox, file: services/ingest/sandbox/Dockerfile, target: '' }
+          # Skeleton services (built to prove the Dockerfiles work; push-images below does not push them).
+          - { app: svc-identity, file: services/identity/Dockerfile, target: '' }
+          - { app: svc-billing, file: services/billing/Dockerfile, target: '' }
+          - { app: svc-ingest, file: services/ingest/Dockerfile, target: '' }
+          - { app: svc-intel, file: services/intel/Dockerfile, target: '' }
+          - { app: svc-orchestrator, file: services/orchestrator/Dockerfile, target: '' }
+          - { app: svc-modelgw, file: services/modelgw/Dockerfile, target: '' }
+          - { app: svc-drafting, file: services/drafting/Dockerfile, target: '' }
+          - { app: svc-review, file: services/review/Dockerfile, target: '' }
+          - { app: svc-evidence, file: services/evidence/Dockerfile, target: '' }
+          - { app: svc-comms, file: services/comms/Dockerfile, target: '' }
+          - { app: svc-drive, file: services/drive/Dockerfile, target: '' }
+          - { app: svc-notify, file: services/notify/Dockerfile, target: '' }
+          - { app: py-render, file: python/render/Dockerfile, target: '' }
+          - { app: py-portal-agent, file: python/portal-agent/Dockerfile, target: '' }
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -202,6 +451,7 @@ jobs:
     # run is on refs/heads/master (a manual run on another branch must not move :master).
     # *verify* the owner is lowercase in GHCR and check the package visibility (HUMAN-TODO H-07).
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && vars.PD_PUSH_IMAGES == 'true')
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     needs: [build-docker]
     permissions:
@@ -247,9 +497,11 @@ jobs:
       always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
       && needs.typecheck.result == 'success' && needs.lint.result == 'success' && needs.build.result == 'success'
       && needs.test-web.result == 'success' && needs.test-api.result == 'success' && needs.test-infra.result == 'success'
-      && needs.restore-drill.result == 'success'
+      && needs.restore-drill.result == 'success' && needs.contracts.result == 'success' && needs.test-services.result == 'success'
+      && needs.test-python.result == 'success' && needs.compose-stack.result == 'success' && needs.e2e-web.result == 'success'
       && needs.push-images.result == 'success'
-    needs: [typecheck, lint, build, test-web, test-api, test-infra, restore-drill, push-images]
+    needs: [typecheck, lint, build, test-web, test-api, test-infra, restore-drill, contracts, test-services, test-python, compose-stack, e2e-web, push-images]
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     environment: production
     concurrency: deploy-production
