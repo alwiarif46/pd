@@ -3,9 +3,9 @@
   --navy-2: #16324d;
   --slate: #334155;
   --ink: #0f172a;
-  --muted: #475569;
+  --legacy-muted: #475569;
   --paper: #f4f6f8;
-  --card: #ffffff;
+  --legacy-card: #ffffff;
   --line: #d5dde6;
   --focus: #8a6a12;
   --gold: #8a6a12;
@@ -62,7 +62,7 @@ button, a, input, select, textarea { }
 
 .grow { flex: 1; }
 
-.muted { color: var(--muted); }
+.muted { color: var(--legacy-muted); }
 
 .small { font-size: 0.875rem; }
 
@@ -73,7 +73,7 @@ button, a, input, select, textarea { }
 .page { max-width: 72rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
 
 .card {
-  background: var(--card);
+  background: var(--legacy-card);
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 1rem;
@@ -150,7 +150,7 @@ table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { background: #eef2f6; font-size: 0.8rem; color: var(--slate); }
 
-tr.struck td { color: var(--muted); }
+tr.struck td { color: var(--legacy-muted); }
 .tag {
   display: inline-block;
   border-radius: 999px;

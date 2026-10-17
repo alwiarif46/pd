@@ -2,7 +2,8 @@
    Light values sit on :root; dark values apply under a .dark class (see src/lib/theme.ts).
    The @theme block maps them to Tailwind utilities. "inline" makes utilities read the variable at the element, so a
    .dark class on any ancestor works; "static" keeps every --color-* variable emitted for sonner.tsx. */
-/* In the base layer so these values beat the legacy layer, which also declares --muted and --card on :root. */
+/* The legacy stylesheet (src/index.css) used --muted and --card for its own colors. It now uses --legacy-muted and
+   --legacy-card, so these Atrium variables cannot change legacy text. */
 @layer base {
   :root,
   .theme-atrium {
