@@ -610,7 +610,7 @@ export function ScheduleContainer({
       </TabFrameContainer>
       {selectedRowId && (
         // Portalled into the shell's row detail slot (route flag `rowDetail`), outside `.app-shell`. No date
-        // fields: dates move only through the calendar's per-row queue (plan Open question 8).
+        // fields: dates move only through the calendar's per-row queue (09-ui-workflow.md decision log, 17 Oct 2026: no date fields in the Schedule slider).
         <RowDetailContainer
           bidId={bidId}
           table="schedule_activities"
@@ -622,6 +622,7 @@ export function ScheduleContainer({
           onSaved={afterSave}
           onJumpToRow={(id) => shell.openRow(id)}
           onClose={() => shell.openRow(null)}
+          reloadKey={`${version}/${jobKey}`}
           api={rowApi}
         />
       )}

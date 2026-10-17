@@ -40,6 +40,8 @@ export interface RowDetailContainerProps<T extends DetailTable> {
    * `data-row-id` or `data-activity`. Used when the opener is gone (the tab reloaded) or the slider jumped rows.
    */
   findRowElement?: (rowId: string) => HTMLElement | null;
+  /** When the tab reloads its rows (an inline edit, a job): a new value reloads the open row too. */
+  reloadKey?: string;
   /** Test seam; defaults to the typed client. */
   api?: RowDetailApi;
 }
@@ -68,6 +70,7 @@ export function RowDetailContainer<T extends DetailTable>({
   onJumpToRow,
   onClose,
   findRowElement,
+  reloadKey,
   api = rowDetailApi,
 }: RowDetailContainerProps<T>) {
   const key = keyOf(bidId, table, rowId);
@@ -116,7 +119,7 @@ export function RowDetailContainer<T extends DetailTable>({
       },
     );
     return () => abort.abort();
-  }, [api, bidId, table, rowId, version]);
+  }, [api, bidId, table, rowId, version, reloadKey]);
 
   const current = loaded?.key === key ? loaded : null;
   const row = useMemo(() => (current ? toRowDetailData(table, current.dto, docs, rowIds) : null), [current, table, docs, rowIds]);

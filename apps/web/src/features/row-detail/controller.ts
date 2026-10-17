@@ -55,6 +55,8 @@ export function toRowDetailData<T extends DetailTable>(
 ): RowDetailData {
   const row: AnyDetailRow = dto;
   const origin = originOf(row.origin);
+  // A compliance row with no origin is the AI's, as in the matrix; other tables keep a null origin (a template row).
+  const rowOrigin = table === 'compliance_rows' ? (origin ?? 'ai') : origin;
   const common = {
     id: row.id,
     sourceQuote: row.sourceQuote,
@@ -63,9 +65,9 @@ export function toRowDetailData<T extends DetailTable>(
     sourcePageEnd: row.sourcePageEnd,
     amendment: amendmentMark(row, rowIds),
     confidence: toConfidence(row.confidence),
-    flags: toFlags({ flags: row.flags, origin, quoteVerified: row.quoteVerified }),
+    flags: toFlags({ flags: row.flags, origin: rowOrigin, quoteVerified: row.quoteVerified }),
     quoteVerified: row.sourceQuote ? row.quoteVerified : null,
-    origin,
+    origin: rowOrigin,
   };
   if (table === 'compliance_rows') {
     const c = row as ComplianceRowDto;
@@ -113,7 +115,7 @@ export function toRowDetailData<T extends DetailTable>(
 }
 
 /**
- * The fields the slider's Edit form offers. Schedule rows edit no dates (plan Open question 8): dates move
+ * The fields the slider's Edit form offers. Schedule rows edit no dates (09-ui-workflow.md decision log, 17 Oct 2026: no date fields in the Schedule slider): dates move
  * through the calendar's per-row queue, and a second writer could interleave with a queued move.
  */
 export function editFieldsFor<T extends DetailTable>(table: T, dto: DetailRowMap[T]): RowEditField[] {
