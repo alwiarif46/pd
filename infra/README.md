@@ -74,3 +74,7 @@ sudo bash infra/tests/test-root-container.sh   # root + Linux only: container fi
 The runners put fakes (`ops/tests/fakes`, `infra/tests/fakes`) first on `PATH`. A fake without the executable bit would let the real
 `curl`, `ssh` or `docker` run, so every runner aborts if one is not mode 100755 (Drive D-150): run `ops/ci/set-exec-bits.sh`
 after adding files. Cases that need root, `nft`, `losetup` or `shellcheck` print `SKIP` on a machine without them; CI runs them.
+
+## CI
+
+`.github/workflows/ci.yml` runs on pull requests to master and on pushes to master. Besides the infrastructure jobs (`test-infra`, `restore-drill`, `build-docker`, `push-images`, `deploy`) the separate workflow `compose-stack.yml` (manual dispatch until it passes, then a pull-request check; chat-1 PR 12b) boots `infra/compose/local.yml` with `local.env` made from `local.env.example`, runs `pnpm migrate`, and then `infra/compose/ci/stack-smoke.py` (pgvector, 15 schemas, ClamAV EICAR, an S3 put and get with a signed request, Zitadel readiness and machine key, the sandbox's hardening and missing network). On a failure it prints `docker compose logs --tail 200`; it always runs `down -v`. The workflow has `permissions: contents: read`; only `push-images` gets `packages: write`. Third-party actions are pinned to a version tag, which is a mutable ref; pinning to commit SHAs is a follow-up (docs/build/questions.md, Chat 1).

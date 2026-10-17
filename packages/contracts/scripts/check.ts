@@ -6,13 +6,16 @@ import { validate } from '@readme/openapi-parser';
 import { parse as parseYaml } from 'yaml';
 import { ENVELOPE_FIELDS, ENVELOPE_ID, PACKAGE_ROOT, SERVICES, VERSION_PATTERN, createAjv, eventNames, eventSchemaPath, loadEnvelopeSchema, loadEventSchema, type ServiceInfo } from '../src/index';
 import { buildGenerated, listFiles, openapiPath } from './lib';
+import { checkBump } from './bump';
+import { printBump, readBase } from './bump-args';
 
 const REPO_ROOT = process.env.CONTRACTS_REPO_ROOT ?? resolve(PACKAGE_ROOT, '..', '..');
 const failures: string[] = [];
 const fail = (msg: string): void => {
   failures.push(msg);
 };
-const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+// Plain x.y.z only: a pre-release or build suffix is never a version bump (scripts/bump.ts), so contracts do not use one.
+const SEMVER = /^\d+\.\d+\.\d+$/;
 const METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
 const serviceIds = SERVICES.map((s) => s.id);
 
@@ -80,6 +83,10 @@ function checkEnvelope(): void {
     return;
   }
   if (env.$id !== ENVELOPE_ID) fail(`${label}: $id is ${JSON.stringify(env.$id)}, expected ${ENVELOPE_ID}`);
+  const envVersion = env['x-schema-version'];
+  if (typeof envVersion !== 'string' || !VERSION_RE.test(envVersion)) {
+    fail(`${label}: x-schema-version must be present and match ${VERSION_PATTERN} (for example "1.0"), got ${JSON.stringify(envVersion)}`);
+  }
   if (!sameList(env.required, ENVELOPE_FIELDS)) {
     fail(`${label}: envelope required must be exactly ${ENVELOPE_FIELDS.join(', ')}, got ${JSON.stringify(env.required)}`);
   }
@@ -279,6 +286,16 @@ try {
   fail(`generated types: cannot build: ${(err as Error).message}`);
 }
 await checkSkeletons(operations);
+
+// Optional: pnpm contracts:check -- --base origin/master also runs the version-bump check (scripts/bump.ts).
+const bumpArgs = readBase(process.argv.slice(2));
+if (bumpArgs) {
+  const bump = checkBump({ repoRoot: bumpArgs.repo ?? REPO_ROOT, base: bumpArgs.ref, ci: process.env.CI === 'true' });
+  if (bump.status === 'failed') {
+    for (const w of bump.warnings) console.warn(`warning: ${w}`);
+    for (const m of bump.messages) fail(`version bump: ${m}`);
+  } else printBump(bump);
+}
 
 if (failures.length > 0) {
   console.error(`contracts:check failed with ${failures.length} problem(s):`);

@@ -22,7 +22,7 @@ No Docker (a cloud session, for example)? Use the native stack: `pnpm dev:stack 
 | `zitadel` | `ghcr.io/zitadel/zitadel:v4.19.5` | 8080 | OIDC issuer. `start-from-init`, external domain `localhost`, plain HTTP. |
 | `s3` | `chrislusf/seaweedfs:4.48` | 8333 | S3 API (path-style). |
 | `s3-init` | same | none | One-shot: creates `S3_BUCKET`, then exits. |
-| `clamav` | `clamav/clamav:1.5.4` | 3310 | clamd with PD's `infra/clamav/clamd.conf`. |
+| `clamav` | `clamav/clamav:1.5.4` | 3310 | clamd with the image's own config (TCP 3310 and its unix socket). Production's `infra/clamav/clamd.conf` is not mounted; see questions.md. |
 | `sandbox` | built from `services/ingest/sandbox/Dockerfile` | none | PD's file sandbox image. Idles so the image, its tools and its hardening are checked. |
 
 All ports bind to 127.0.0.1. Every service has a healthcheck, and `depends_on` waits on `service_healthy`. Data lives in named volumes (`postgres_data`, `redis_data`, `s3_data`, `clamav_data`, `zitadel_bootstrap`), not on the host.
@@ -71,7 +71,7 @@ Secrets have no defaults in `local.yml` (`${VAR:?}`); only ports, names and othe
 
 ## What only CI can check
 
-No Docker daemon runs in the build session, so these have not run anywhere yet. CI (PR 12) runs them:
+No Docker daemon runs in the build session, so these have not run anywhere yet. CI (PR 12, job `compose-stack`, checks in `infra/compose/ci/stack-smoke.py`) runs them. You can run the same script by hand after `up --wait`: `python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env all` (after `pnpm migrate`).
 
 - `docker compose up` itself: the boot, every healthcheck, the `depends_on` order, volume permissions.
 - Zitadel: start-from-init against the `zitadel` database, the machine key file, and `/app/zitadel ready` (it calls `/debug/ready`). The variable names (`ZITADEL_EXTERNALDOMAIN`, `EXTERNALPORT`, `EXTERNALSECURE`, `TLS_ENABLED`, `DATABASE_POSTGRES_*`, `FIRSTINSTANCE_*`, `DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED`) were confirmed against the v4.19.5 source. Still unverified: the actual boot. Zitadel resolves the instance by Host, so clients use `localhost:8080`, not `127.0.0.1:8080`.

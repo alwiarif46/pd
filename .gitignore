@@ -65,3 +65,8 @@ __pycache__/
 
 # Local Compose stack env (infra/compose/local.env.example is the template)
 infra/compose/local.env
+
+# Playwright output (services/gateway/web)
+/services/gateway/web/test-results/
+/services/gateway/web/playwright-report/
+/services/gateway/web/blob-report/

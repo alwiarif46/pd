@@ -15,6 +15,9 @@ One monorepo (renamed from PD). TypeScript services under `services/` (pnpm and 
 10. **Secrets.** None in git. Keys live only in the model gateway's environment.
 11. **UI.** Every screen uses Atrium's shell, tokens and components (`design/e2e/`, BUILD-PLAN s10). Log each enhancement in `design/e2e/ENHANCEMENTS.md`.
 
+## CI (`.github/workflows/ci.yml`)
+Jobs: `typecheck`, `lint` (also the secret scan and the skills check), `build`, `test-web`, `test-api` (gateway, own Postgres), `test-services` (service-kit, testing, 12 skeletons, own Postgres), `contracts` (drift, tests, version bump against the base branch), `test-python` (pytest, mypy), (`compose-stack` is its own workflow, `.github/workflows/compose-stack.yml`, manual until it passes; checks in `infra/compose/ci/stack-smoke.py`), `e2e-web` (Playwright), `test-infra`, `restore-drill`, `build-docker`, `push-images`, `deploy`. Do not rename jobs: branch protection may name them. A changed contract file needs a version bump in the same diff (`pnpm contracts:check:bump -- --base origin/master`). Never rerun CI more than twice to turn a check green (BUILD-PLAN s2).
+
 ## Layout today
 PD's code moved in place (chat 1 PR 7); the package names stayed `@pd/*`. Chat 2 splits it by service.
 

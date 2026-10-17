@@ -26,7 +26,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "contracts:check": "pnpm --filter @pd/contracts check"
+    "contracts:check": "pnpm --filter @pd/contracts check",
+    "contracts:check:bump": "pnpm --filter @pd/contracts check:bump"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

@@ -131,6 +131,28 @@ describe('contracts:check', () => {
     expect(r.out).toContain('no GET /healthz');
   });
 
+  it('rejects a pre-release OpenAPI version', () => {
+    const dir = copyPackage();
+    const file = join(dir, 'openapi', 'billing.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('version: 0.1.0', 'version: 0.1.0-rc1'));
+    const r = runCheck(dir);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('info.version must be semver');
+  });
+
+  it('requires the envelope to carry x-schema-version in the right format', () => {
+    for (const bad of [undefined, '01.0', '1', '1.0.0']) {
+      const dir = copyPackage();
+      editJson(join(dir, 'events', '_envelope.schema.json'), (d) => {
+        if (bad === undefined) delete d['x-schema-version'];
+        else d['x-schema-version'] = bad;
+      });
+      const r = runCheck(dir);
+      expect(r.code, String(bad)).not.toBe(0);
+      expect(r.out).toContain('_envelope.schema.json: x-schema-version must be present');
+    }
+  });
+
   it('compares skeleton routes with the OpenAPI paths', () => {
     const dir = copyPackage();
     const svcFile = join(dir, 'services.json');

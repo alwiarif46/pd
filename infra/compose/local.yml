@@ -164,8 +164,9 @@ services:
     restart: unless-stopped
     volumes:
       - clamav_data:/var/lib/clamav
-      # The same daemon settings as production (infra/clamav/clamd.conf, 01 s2.2).
-      - ../clamav/clamd.conf:/etc/clamav/clamd.conf:ro
+      # No clamd.conf mount on purpose. The image ships a config with TCP 3310 and the unix socket that its own startup
+      # and healthcheck wait for. Production's infra/clamav/clamd.conf has no LocalSocket: with it, clamd never became
+      # healthy in CI. See docs/build/questions.md (Chat 1) for the production follow-up.
     ports:
       - "127.0.0.1:${CLAMAV_PORT:-3310}:3310"
     healthcheck:
@@ -179,8 +180,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 2G
+          # clamd compiles about 3.6 million signatures on the first start while freshclam tests the same set in the
+          # same cgroup. One CPU and 2G stalled it in CI (no clamd line after config parsing for 7 minutes).
+          cpus: "2.0"
+          memory: 4G
 
   sandbox:
     # PD's file sandbox image, built from the ingest service. In production the host runner starts one container per file
