@@ -37,6 +37,16 @@ services:
       # Named in the privacy statement (GET /api/about/processing). deploy.sh sets both from the tenant file.
       - PD_HOSTING_SUBPROCESSOR=${PD_HOSTING_SUBPROCESSOR:-}
       - PD_BACKUP_SUBPROCESSOR=${PD_BACKUP_SUBPROCESSOR:-}
+      # Email (Resend) and SMS (Telnyx) for sign-up, reset and invite messages, from /opt/pd/.env.
+      # With NODE_ENV=production (the image default) the api refuses to start unless both are set.
+      - APP_URL=${APP_URL:-}
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - PD_EMAIL_FROM=${PD_EMAIL_FROM:-}
+      - TELNYX_API_KEY=${TELNYX_API_KEY:-}
+      - TELNYX_FROM=${TELNYX_FROM:-}
+      - TELNYX_MESSAGING_PROFILE_ID=${TELNYX_MESSAGING_PROFILE_ID:-}
+      # Testers whose phone step is skipped (exact emails, comma-separated). Empty: off.
+      - PD_SKIP_PHONE_VERIFY_EMAILS=${PD_SKIP_PHONE_VERIFY_EMAILS:-}
     volumes:
       - ${PD_DATA_ROOT:-/mnt/pddata}/files:/data/files
     deploy:
