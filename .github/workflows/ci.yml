@@ -335,7 +335,11 @@ jobs:
         run: $COMPOSE config --quiet
       - name: Boot the stack (build the sandbox, wait for every healthcheck)
         # 600 s: the ClamAV healthcheck allows a 180 s start period plus 10 tries of 30 s while freshclam downloads signatures.
-        run: $COMPOSE up -d --build --wait --wait-timeout 600
+        # s3-init is a one-shot that exits 0 by design. `up --wait` counts any exited container as a failure, so it is
+        # left out of the wait set and run in the next step, where a non-zero exit fails the job.
+        run: $COMPOSE up -d --build --wait --wait-timeout 600 postgres redis s3 clamav zitadel sandbox
+      - name: Create the S3 bucket (one-shot)
+        run: $COMPOSE run --rm --no-deps s3-init
       - name: Container state
         if: always()
         run: $COMPOSE ps -a
