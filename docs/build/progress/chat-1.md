@@ -31,7 +31,7 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 | 7b Review fixes | e2e/c1-07b-restructure-fixes | merged (#55) | |
 | 8 Contracts | e2e/c1-08-contracts | merged (#56) | opus: 2 majors fixed and re-reviewed, minors fixed |
 | 9 Skeletons | e2e/c1-09-skeletons | merged (#57) | Fable: no majors; 11 minors fixed incl. a racy test guard found on a fresh cluster |
-| 10 Testing | e2e/c1-10-testing | in review | fable-reviewer: cross-tenant tests |
+| 10 Testing | e2e/c1-10-testing | merged (#58) | Fable: 4 majors fixed over 3 rounds (positive control, CI-vacuous RLS tests, seed guard x2); follow-ups logged |
 | 11 Local stack | e2e/c1-11-stack | built, stacked on #58 | Compose file, native stack with doubles, `pnpm migrate` test. Compose parts unverified (no Docker). fable-reviewer: infra |
 | 12 CI | e2e/c1-12-ci | planned | |
 | 13 Rename notice | - | planned | |
