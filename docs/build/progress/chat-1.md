@@ -24,7 +24,7 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 
 | # | Branch | Status | Next step |
 |---|---|---|---|
-| 1 Tooling | e2e/c1-01-tooling | building | Agents, hook script, .mcp.json, Playwright dep, CLAUDE.md done. Hook entry in settings.json denied by classifier (owner step). Next: commit, push, PR, fable-reviewer |
+| 1 Tooling | e2e/c1-01-tooling | building | Agents, hook script, .mcp.json, Playwright dep, CLAUDE.md done. Hook entry in settings.json denied by classifier (owner step). PR #49 open; Fable review done (no majors); minors fixed |
 | 2 Design source | e2e/c1-02-design | planned | |
 | 3 to 6 | - | already merged | none |
 | 7 Restructure | e2e/c1-07-restructure | planned | |

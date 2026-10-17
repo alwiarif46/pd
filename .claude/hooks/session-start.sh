@@ -16,18 +16,16 @@ else
   status+=("rtk=missing")
 fi
 
-# Playwright browser: use the preinstalled Chromium when present.
-if [ -d "${PLAYWRIGHT_BROWSERS_PATH:-/opt/pw-browsers}" ]; then
-  status+=("playwright-browser=preinstalled")
-elif have pnpm && [ -d node_modules/@playwright/test ]; then
-  timeout 40 pnpm exec playwright install chromium >/dev/null 2>&1 && status+=("playwright-browser=installed") || status+=("playwright-browser=missing")
-else
-  status+=("playwright-browser=missing")
-fi
-
 # Node dependencies.
 if have pnpm && [ ! -d node_modules ]; then
-  timeout 45 pnpm install --frozen-lockfile >/dev/null 2>&1 && status+=("deps=installed") || status+=("deps=missing")
+  timeout 45 pnpm install --frozen-lockfile >/tmp/pd-session-start-pnpm.log 2>&1 && status+=("deps=installed") || status+=("deps=missing(see /tmp/pd-session-start-pnpm.log)")
+fi
+
+# Playwright browser: the cloud image presets PLAYWRIGHT_BROWSERS_PATH. CI installs it elsewhere.
+if [ -d "${PLAYWRIGHT_BROWSERS_PATH:-/opt/pw-browsers}" ]; then
+  status+=("playwright-browser=preinstalled")
+else
+  status+=("playwright-browser=missing")
 fi
 
 for t in node pnpm uv docker redis-server; do
