@@ -15,7 +15,7 @@
     "folder": "services/identity",
     "schema": "identity",
     "stream_prefix": "e2e.identity",
-    "skeleton": true
+    "skeleton": false
   },
   {
     "id": "billing",
@@ -33,7 +33,7 @@
     "folder": "services/ingest",
     "schema": "ingest",
     "stream_prefix": "e2e.ingest",
-    "skeleton": true
+    "skeleton": false
   },
   {
     "id": "intel",
@@ -42,7 +42,7 @@
     "folder": "services/intel",
     "schema": "intel",
     "stream_prefix": "e2e.intel",
-    "skeleton": true
+    "skeleton": false
   },
   {
     "id": "orchestrator",

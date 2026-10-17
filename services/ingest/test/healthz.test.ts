@@ -11,9 +11,7 @@ describe('ingest skeleton', () => {
     await app.close();
   });
 
-  it('lists /healthz and every route once (the handlers come in the service PRs)', () => {
-    expect(routes).toContainEqual({ method: 'GET', path: '/healthz' });
-    const keys = routes.map((r) => `${r.method} ${r.path}`);
-    expect(new Set(keys).size).toBe(keys.length);
+  it('lists only /healthz', () => {
+    expect(routes).toEqual([{ method: 'GET', path: '/healthz' }]);
   });
 });
