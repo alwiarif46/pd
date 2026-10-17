@@ -33,11 +33,11 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 | 9 Skeletons | e2e/c1-09-skeletons | merged (#57) | Fable: no majors; 11 minors fixed incl. a racy test guard found on a fresh cluster |
 | 10 Testing | e2e/c1-10-testing | merged (#58) | Fable: 4 majors fixed over 3 rounds (positive control, CI-vacuous RLS tests, seed guard x2); follow-ups logged |
 | 11 Local stack | e2e/c1-11-stack | merged (#59) | Fable: no majors; 4 minors fixed (JWKS host, clamd double O(n), native chown scope, TCP healthcheck) |
-| 12 CI | e2e/c1-12-ci | in review (#60). Three CI fix rounds used; `compose-stack` split out to workflow `compose-stack.yml` (manual) and PR 12b | Orchestrator pushes and iterates on CI. Never run on GitHub yet: the new jobs (contracts, test-services, test-python, compose-stack, e2e-web) and the 14 new build-docker entries are unverified until the first run. fable-reviewer: CI |
+| 12 CI | e2e/c1-12-ci | in review (#60). Three CI fix rounds used; `compose-stack` split out to workflow `compose-stack.yml` (manual) and PR 12b | Pushed and run on GitHub: the nine new jobs (contracts, test-services, test-python, e2e-web and the rest of the CI matrix) and 19 Docker builds are green on 34f819e. `compose-stack` is manual and not yet green as a PR check (PR 12b). Fable review: no majors; review fixes (envelope version, bump check hardening, mypy pin, .gitignore anchors) follow. fable-reviewer: CI |
 | 13 Rename notice | - | planned | |
 
 ## PR 12 CI: which Done-when check which job verifies
-All of these are first verified by the first GitHub run of `.github/workflows/ci.yml`. Locally only the pieces marked "local" ran.
+Verified by GitHub runs of `.github/workflows/ci.yml`, except the Compose rows, which belong to the manual `compose-stack.yml` workflow and stay unverified until it passes. "Local" marks what also ran in the session.
 
 | Done-when / check | CI job and step | Local evidence |
 |---|---|---|
@@ -45,7 +45,7 @@ All of these are first verified by the first GitHub run of `.github/workflows/ci
 | PD's tests pass in the new layout; CI and the secret scan are green | `typecheck`, `lint` (also runs the secret scan), `build`, `test-web`, `test-api`, `test-infra` (secret scan again) | local: typecheck, lint, web tests |
 | A service role that queries another service's schema gets a permission error | `test-services` step "Schema isolation: a service role cannot read another service schema" (fresh Postgres service) and `compose-stack` step "Schema isolation against the Compose cluster" | local: both test files on a native Postgres |
 | `docker compose up` boots the whole local stack; `pnpm migrate` applies every schema in order | `compose-stack`: `up --wait`, `pnpm migrate` twice, schema list, pgvector, ClamAV EICAR, S3 roundtrip, Zitadel ready and machine key, sandbox hardening and no network | local: `stack-smoke.py` clamav and s3 against the test doubles; SigV4 signer checked against botocore |
-| Contract drift, and a changed contract carries a version bump (deferred from PR 8) | `contracts` ("Contract drift", "Version bump against the base branch", tests) | local: `contracts:check`, 15 bump tests on temp git repos |
+| Contract drift, and a changed contract carries a version bump (deferred from PR 8) | `contracts` ("Contract drift", "Version bump against the base branch", tests) | local: `contracts:check`, bump tests on temp git repos |
 | Python services: tests and types | `test-python` (pytest with `TEST_DATABASE_URL`, mypy on both src folders) | local: pytest 18 passed, mypy clean |
 | Playwright browser install and a real-browser smoke | `e2e-web` (`playwright install --with-deps chromium`, build, run) | local: the spec passes on the preinstalled Chromium |
 | Skills stay out of git | `lint` step "Skills stay out of git" | local: same command |
