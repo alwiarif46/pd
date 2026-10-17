@@ -34,8 +34,8 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 | 10 Testing | e2e/c1-10-testing | merged (#58) | Fable: 4 majors fixed over 3 rounds (positive control, CI-vacuous RLS tests, seed guard x2); follow-ups logged |
 | 11 Local stack | e2e/c1-11-stack | merged (#59) | Fable: no majors; 4 minors fixed (JWKS host, clamd double O(n), native chown scope, TCP healthcheck) |
 | 12 CI | e2e/c1-12-ci | merged (#60). Fable: no majors; compose-stack split into a manual workflow after three CI fix rounds |
-| 12b Compose job | e2e/c1-12b-compose-ci | in progress | compose-stack back in ci.yml as a PR check; fresh CI fix budget; the schemas query bug is already fixed |
-| 13 Rename notice | - | planned | |
+| 12b Compose job | e2e/c1-12b-compose-ci | merged (#61) | compose-stack passed first time: boot, bucket, pgvector, migrate x2, isolation, ClamAV EICAR, S3 round trip, Zitadel, sandbox |
+| 13 Rename notice | e2e/c1-13-notices | in progress | HUMAN-TODO H-13 posted; repo still named pd |
 
 ## PR 12 CI: which Done-when check which job verifies
 Verified by GitHub runs of `.github/workflows/ci.yml`, except the Compose rows, which belong to the manual `compose-stack.yml` workflow and stay unverified until it passes. "Local" marks what also ran in the session.
