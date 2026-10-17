@@ -23,7 +23,7 @@ def schema_migration(database_url: str | None, schema: str = SCHEMA) -> str:
     try:
         if not _IDENT.match(schema):
             return "unavailable"
-        with psycopg.connect(database_url, connect_timeout=2) as conn:
+        with psycopg.connect(database_url, connect_timeout=2, options="-c statement_timeout=2000") as conn:
             row = conn.execute(
                 f'select id from "{schema}".schema_migrations order by id desc limit 1'
             ).fetchone()
