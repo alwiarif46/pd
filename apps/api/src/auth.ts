@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { getDb, schema } from '@pd/core';
 import { BODY_REQUIRED, readBody, text } from './body.js';
 import { requireUser } from './context.js';
+import { skipsPhone } from './phone-skip.js';
 import {
   hashesMatch,
   hashPassword,
@@ -97,7 +98,21 @@ async function atLeast<T>(ms: number, work: () => Promise<T>): Promise<T> {
   return result;
 }
 
-export async function registerAuth(app: FastifyInstance): Promise<void> {
+/** Logged (never with the email or phone) each time PD_SKIP_PHONE_VERIFY_EMAILS is used. */
+const PHONE_SKIP_EVENT = 'auth.phone_verify_skipped';
+
+export interface AuthOptions {
+  /**
+   * PD_SKIP_PHONE_VERIFY_EMAILS (phone-skip.ts): for these exact, lowercased emails phone
+   * verification counts as done (decided at each login, so removing an email restores the
+   * requirement) and no SMS is sent. Email verification is still required. Empty by default.
+   */
+  phoneSkip?: ReadonlySet<string>;
+}
+
+export async function registerAuth(app: FastifyInstance, options: AuthOptions = {}): Promise<void> {
+  const phoneSkip: ReadonlySet<string> = options.phoneSkip ?? new Set();
+
   app.post('/api/auth/signup', async (request, reply) => {
     const body = readBody(request);
     if (!body) {
@@ -142,6 +157,8 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
     const passwordHash = await hashPassword(password);
     const emailToken = newToken();
     const code = newPhoneCode();
+    // A tester on PD_SKIP_PHONE_VERIFY_EMAILS gets no phone code and no SMS.
+    const skipPhone = skipsPhone(phoneSkip, email);
     let userId: string;
     try {
       userId = await db.transaction(async (tx) => {
@@ -152,12 +169,14 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
           tokenHash: hashToken(emailToken),
           expiresAt: new Date(Date.now() + DAY),
         });
-        await tx.insert(schema.phoneCodes).values({
-          userId: user.id,
-          phoneE164: phone,
-          codeHash: hashToken(code),
-          expiresAt: new Date(Date.now() + CODE_TTL),
-        });
+        if (!skipPhone) {
+          await tx.insert(schema.phoneCodes).values({
+            userId: user.id,
+            phoneE164: phone,
+            codeHash: hashToken(code),
+            expiresAt: new Date(Date.now() + CODE_TTL),
+          });
+        }
         return user.id;
       });
     } catch (error) {
@@ -169,7 +188,11 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
       return reply.code(409).send(constraint.includes('phone') ? PHONE_TAKEN : EMAIL_TAKEN);
     }
     void sendOutOfBand({ channel: 'email', purpose: 'verify_email', to: email, secret: emailToken });
-    void sendOutOfBand({ channel: 'sms', purpose: 'verify_phone', to: phone, secret: code });
+    if (skipPhone) {
+      request.log.warn({ event: PHONE_SKIP_EVENT, step: 'signup', userId }, 'Phone verification skipped (PD_SKIP_PHONE_VERIFY_EMAILS): no SMS sent');
+    } else {
+      void sendOutOfBand({ channel: 'sms', purpose: 'verify_phone', to: phone, secret: code });
+    }
     return reply.code(201).send({ userId });
   });
 
@@ -346,7 +369,8 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
       const db = getDb();
       const [user] = await db.select().from(schema.users).where(eq(schema.users.email, email));
       const phone = user?.phoneE164;
-      if (!user || !phone || user.phoneVerifiedAt) {
+      // An allow-listed tester needs no code; the answer is the same as for any other account.
+      if (!user || !phone || user.phoneVerifiedAt || skipsPhone(phoneSkip, user.email)) {
         return { code: 200, body: { ok: true } } as const;
       }
       const code = newPhoneCode();
@@ -387,7 +411,9 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
     if (!user || password.length > PASSWORD_MAX || !(await passwordMatches(password, user.passwordHash))) {
       return reply.code(401).send(WRONG_CREDENTIALS);
     }
-    if (!user.emailVerifiedAt || !user.phoneVerifiedAt) {
+    // Email is always required. The phone step counts as done for an allow-listed tester.
+    const phoneSkipped = !user.phoneVerifiedAt && skipsPhone(phoneSkip, user.email);
+    if (!user.emailVerifiedAt || (!user.phoneVerifiedAt && !phoneSkipped)) {
       return reply.code(403).send({ error: 'Verify email and phone before signing in' });
     }
     const token = newToken();
@@ -415,6 +441,9 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
     });
     if (!created) {
       return reply.code(401).send(WRONG_CREDENTIALS);
+    }
+    if (phoneSkipped) {
+      request.log.warn({ event: PHONE_SKIP_EVENT, step: 'login', userId: user.id }, 'Signed in without phone verification (PD_SKIP_PHONE_VERIFY_EMAILS)');
     }
     return { token };
   });

@@ -1,6 +1,6 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, it, vi } from 'vitest';
 import { closeDb, getDb, getPool, schema } from '@pd/core';
@@ -546,6 +546,156 @@ describe.skipIf(Boolean(unavailable))('auth routes', () => {
       expect((await call('POST', '/api/org', { name: 'Acme' }, user.token)).statusCode).toBe(201);
       expect((await call('PATCH', '/api/org', undefined, user.token)).statusCode).toBe(400);
       expect((await call('POST', '/api/org/invites', undefined, user.token)).statusCode).toBe(400);
+    });
+  });
+
+  describe('PD_SKIP_PHONE_VERIFY_EMAILS (tester phone skip)', () => {
+    type Send = (url: string, payload: Record<string, unknown>) => Promise<LightMyRequestResponse>;
+
+    /** An app built with this skip list, whose log lines are collected. */
+    async function skipApp(list: string) {
+      vi.stubEnv('PD_SKIP_PHONE_VERIFY_EMAILS', list);
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const logs: string[] = [];
+      const { buildApp } = await import('../src/app.js');
+      const built = await buildApp({ logger: { level: 'info', stream: { write: (line: string) => { logs.push(line); } } } });
+      vi.unstubAllEnvs();
+      const send: Send = (url, payload) => built.inject({ method: 'POST', url, remoteAddress: ip, payload });
+      return { app: built, logs, send };
+    }
+
+    async function verifyEmailOf(email: string, send: Send) {
+      expect((await send('/api/auth/verify-email', { token: lastSecret('email', email) })).statusCode).toBe(200);
+    }
+
+    it('lets an allow-listed email sign in after email verification only, and sends no SMS', async () => {
+      const email = uniqueEmail('tester');
+      const phone = uniquePhone();
+      const { app: skip, logs, send } = await skipApp(`other@acme-test.com, ${email}`);
+      try {
+        const signup = await send('/api/auth/signup', { email, phone, password: 'correct horse battery' });
+        expect(signup.statusCode, signup.body).toBe(201);
+        expect(countTo('sms', phone)).toBe(0);
+        expect(await getDb().select().from(schema.phoneCodes).where(eq(schema.phoneCodes.phoneE164, phone))).toHaveLength(0);
+        // Email is still required.
+        expect((await send('/api/auth/login', { email, password: 'correct horse battery' })).statusCode).toBe(403);
+        await verifyEmailOf(email, send);
+        const login = await send('/api/auth/login', { email, password: 'correct horse battery' });
+        expect(login.statusCode, login.body).toBe(200);
+        const me = await skip.inject({ method: 'GET', url: '/api/me', headers: { authorization: `Bearer ${login.json<{ token: string }>().token}` } });
+        expect(me.statusCode).toBe(200);
+        // The phone stays unverified in the data: the skip is decided per login from the list.
+        const [user] = await getDb().select().from(schema.users).where(eq(schema.users.email, email));
+        expect(user.phoneVerifiedAt).toBeNull();
+        // The skip is logged with the user id and never the email or phone.
+        const skipped = logs.filter((line) => line.includes('auth.phone_verify_skipped'));
+        expect(skipped.some((line) => line.includes('"step":"signup"'))).toBe(true);
+        expect(skipped.some((line) => line.includes('"step":"login"'))).toBe(true);
+        expect(skipped.every((line) => line.includes(user.id))).toBe(true);
+        expect(logs.join('\n')).not.toContain(email);
+        expect(logs.join('\n')).not.toContain(phone);
+      } finally {
+        await skip.close();
+      }
+    });
+
+    it('matches regardless of case in the list or the sign-up', async () => {
+      const email = uniqueEmail('casey');
+      const { app: skip, send } = await skipApp(`  ${email.toUpperCase()}  `);
+      try {
+        expect((await send('/api/auth/signup', { email: email.replace('casey', 'CaSeY'), phone: uniquePhone(), password: 'correct horse battery' })).statusCode).toBe(201);
+        await verifyEmailOf(email, send);
+        expect((await send('/api/auth/login', { email: email.toUpperCase(), password: 'correct horse battery' })).statusCode).toBe(200);
+      } finally {
+        await skip.close();
+      }
+    });
+
+    it('does not skip for an email that is not on the list', async () => {
+      const email = uniqueEmail('outsider');
+      const phone = uniquePhone();
+      const domain = email.split('@')[1];
+      const { app: skip, logs, send } = await skipApp(`tester-${email}, someone@${domain}`);
+      try {
+        expect((await send('/api/auth/signup', { email, phone, password: 'correct horse battery' })).statusCode).toBe(201);
+        expect(countTo('sms', phone)).toBe(1);
+        await verifyEmailOf(email, send);
+        expect((await send('/api/auth/login', { email, password: 'correct horse battery' })).statusCode).toBe(403);
+        expect(logs.join('\n')).not.toContain('auth.phone_verify_skipped');
+      } finally {
+        await skip.close();
+      }
+    });
+
+    it('is off by default', async () => {
+      const user = await signUp();
+      expect(countTo('sms', user.phone)).toBe(1);
+      expect((await call('POST', '/api/auth/verify-email', { token: lastSecret('email', user.email) })).statusCode).toBe(200);
+      expect((await call('POST', '/api/auth/login', { email: user.email, password: user.password })).statusCode).toBe(403);
+    });
+
+    it('applies to an existing unverified account added to the list later', async () => {
+      const user = await signUp();
+      expect(countTo('sms', user.phone)).toBe(1);
+      expect((await call('POST', '/api/auth/verify-email', { token: lastSecret('email', user.email) })).statusCode).toBe(200);
+      expect((await call('POST', '/api/auth/login', { email: user.email, password: user.password })).statusCode).toBe(403);
+      const { app: skip, send } = await skipApp(user.email);
+      try {
+        expect((await send('/api/auth/login', { email: user.email, password: user.password })).statusCode).toBe(200);
+      } finally {
+        await skip.close();
+      }
+    });
+
+    it('sends no SMS on resend-code for an allow-listed email, and answers as usual', async () => {
+      const user = await signUp();
+      const { app: skip, send } = await skipApp(user.email);
+      try {
+        const response = await send('/api/auth/resend-code', { email: user.email });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual({ ok: true });
+        expect(countTo('sms', user.phone)).toBe(1);
+      } finally {
+        await skip.close();
+      }
+    });
+
+    it('leaves password reset unchanged for an allow-listed account', async () => {
+      const email = uniqueEmail('resetter');
+      const { app: skip, send } = await skipApp(email);
+      try {
+        expect((await send('/api/auth/signup', { email, phone: uniquePhone(), password: 'correct horse battery' })).statusCode).toBe(201);
+        await verifyEmailOf(email, send);
+        expect((await send('/api/auth/reset', { email })).statusCode).toBe(200);
+        const token = sent.filter((item) => item.purpose === 'reset_password' && item.to === email).at(-1)!.secret;
+        expect((await send('/api/auth/reset', { token, password: 'a brand new password' })).statusCode).toBe(200);
+        expect((await send('/api/auth/login', { email, password: 'correct horse battery' })).statusCode).toBe(401);
+        expect((await send('/api/auth/login', { email, password: 'a brand new password' })).statusCode).toBe(200);
+      } finally {
+        await skip.close();
+      }
+    });
+
+    it('refuses to start with an entry that is not an exact email', async () => {
+      const { buildApp } = await import('../src/app.js');
+      for (const bad of ['*@acme-test.com', '@acme-test.com', 'acme-test.com', 'pat@acme-test.com,*']) {
+        vi.stubEnv('PD_SKIP_PHONE_VERIFY_EMAILS', bad);
+        await expect(buildApp({ logger: false }), bad).rejects.toThrow(/PD_SKIP_PHONE_VERIFY_EMAILS/);
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('warns once at startup with the count, never the emails', async () => {
+      vi.stubEnv('PD_SKIP_PHONE_VERIFY_EMAILS', 'a@acme-test.com,b@acme-test.com,c@acme-test.com');
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const { buildApp } = await import('../src/app.js');
+      const built = await buildApp({ logger: false });
+      vi.unstubAllEnvs();
+      await built.close();
+      const lines = warn.mock.calls.map((args) => args.map(String).join(' ')).filter((line) => line.includes('PD_SKIP_PHONE_VERIFY_EMAILS'));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('3');
+      expect(lines[0]).not.toContain('acme-test.com');
     });
   });
 

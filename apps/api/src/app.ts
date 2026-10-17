@@ -1,5 +1,5 @@
 import { isIP } from 'node:net';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import { enforceTenantRole } from '@pd/core';
 import { registerAmendments } from './amendments.js';
 import { registerAuth } from './auth.js';
@@ -8,6 +8,7 @@ import { registerDocuments } from './documents.js';
 import { registerJobs } from './jobs.js';
 import { registerInvites } from './invites.js';
 import { registerOrg } from './org.js';
+import { phoneSkipListFromEnv, warnPhoneSkip } from './phone-skip.js';
 import { assertOutOfBandDelivery } from './security.js';
 import { registerTabs } from './tabs.js';
 import { registerUploads } from './uploads.js';
@@ -38,9 +39,12 @@ export function trustProxyFromEnv(value = process.env.PD_TRUST_PROXY): string[] 
   return entries;
 }
 
-export async function buildApp(options: { logger?: boolean } = {}): Promise<FastifyInstance> {
+export async function buildApp(options: { logger?: FastifyServerOptions['logger'] } = {}): Promise<FastifyInstance> {
   // Signup, resends, resets and invites need a delivery in production.
   assertOutOfBandDelivery();
+  // Testers whose phone step is skipped; an entry that is not one exact email stops the start.
+  const phoneSkip = phoneSkipListFromEnv();
+  warnPhoneSkip(phoneSkip);
   const fastify = Fastify({
     logger: options.logger ?? true,
     // Behind nginx or Cloudflare, the per-IP send caps need the client's address, not the proxy's.
@@ -59,7 +63,7 @@ export async function buildApp(options: { logger?: boolean } = {}): Promise<Fast
     return { status: 'ok', timestamp: new Date().toISOString() };
   });
 
-  await registerAuth(fastify);
+  await registerAuth(fastify, { phoneSkip });
   await registerOrg(fastify);
   await registerInvites(fastify);
   await registerBids(fastify);
