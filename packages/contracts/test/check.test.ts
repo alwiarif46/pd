@@ -16,6 +16,12 @@ function copyPackage(): string {
   for (const part of ['openapi', 'events', 'generated', 'src', 'scripts', 'services.json', 'package.json', 'tsconfig.json']) {
     cpSync(join(PACKAGE_ROOT, part), join(dir, part), { recursive: true });
   }
+  // Tests that are not about skeletons must not depend on the real service folders: switch every flag off.
+  // Skeleton tests turn on the one service they need.
+  const svcFile = join(dir, 'services.json');
+  const services = JSON.parse(readFileSync(svcFile, 'utf8')) as Array<{ skeleton: boolean }>;
+  for (const s of services) s.skeleton = false;
+  writeFileSync(svcFile, JSON.stringify(services, null, 2) + '\n');
   return dir;
 }
 
