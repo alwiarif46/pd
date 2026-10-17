@@ -94,7 +94,7 @@ describe.each(pySkeletons.map((s) => [s.id] as const))('%s skeleton (Python)', (
 });
 
 describe('gateway (informational)', () => {
-  it('has /healthz as its only public endpoint; its /api routes are in the contract', () => {
+  it('lists GET /healthz in PUBLIC_ENDPOINTS', () => {
     const endpoints = endpointsOf('gateway');
     expect(endpoints.filter((e) => e.public).map((e) => `${e.method} ${e.path}`)).toEqual(['GET /healthz']);
     expect(endpoints.filter((e) => !e.public).length).toBeGreaterThan(40);
