@@ -1,3 +1,35 @@
 // Routes of intel in the OpenAPI file (packages/contracts/openapi/intel.yaml).
 // `pnpm contracts:check` compares this list with the file. Add a route to the contract first.
-export const routes: ReadonlyArray<{ method: string; path: string }> = [{ method: 'GET', path: '/healthz' }];
+// The handlers arrive in the service PRs of chat 2. Until then the list only mirrors the contract.
+export const routes: ReadonlyArray<{ method: string; path: string }> = [
+  { method: 'GET', path: '/healthz' },
+  { method: 'GET', path: '/bids' },
+  { method: 'POST', path: '/bids' },
+  { method: 'GET', path: '/bids/:id' },
+  { method: 'DELETE', path: '/bids/:id' },
+  { method: 'PATCH', path: '/bids/:id' },
+  { method: 'GET', path: '/bids/:id/tabs/:tab' },
+  { method: 'POST', path: '/bids/:id/tabs/:tab/rows' },
+  { method: 'POST', path: '/bids/:id/tabs/:tab/seed' },
+  { method: 'GET', path: '/bids/:id/rows/:table/:rowId' },
+  { method: 'DELETE', path: '/bids/:id/rows/:table/:rowId' },
+  { method: 'PATCH', path: '/bids/:id/rows/:table/:rowId' },
+  { method: 'POST', path: '/bids/:id/outline/move' },
+  { method: 'GET', path: '/bids/:id/matrix' },
+  { method: 'POST', path: '/bids/:id/compliance/merge' },
+  { method: 'POST', path: '/bids/:id/compliance/split' },
+  { method: 'GET', path: '/bids/:id/amendments' },
+  { method: 'POST', path: '/bids/:id/amendments/:documentId/key-override' },
+  { method: 'PATCH', path: '/bids/:id/amendments/:documentId/amendment-no' },
+  { method: 'GET', path: '/bids/:id/amendment-links' },
+  { method: 'POST', path: '/amendment-links/:id/confirm' },
+  { method: 'POST', path: '/amendment-links/:id/reject' },
+  { method: 'GET', path: '/bids/:id/schedule' },
+  { method: 'POST', path: '/bids/:id/schedule/adjust' },
+  { method: 'GET', path: '/bids/:id/check-these' },
+  { method: 'POST', path: '/check-these/:id/promote' },
+  { method: 'POST', path: '/check-these/:id/dismiss' },
+  { method: 'GET', path: '/bids/:id/fit' },
+  { method: 'GET', path: '/bids/:id/jobs' },
+  { method: 'POST', path: '/bids/:id/jobs/:jobId/retry' },
+];
