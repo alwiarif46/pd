@@ -4,7 +4,7 @@
   "title": "ingest.document.classified",
   "x-owner": "ingest",
   "x-stream": "e2e.ingest.document.classified",
-  "x-schema-version": "1.0",
+  "x-schema-version": "1.1",
   "type": "object",
   "allOf": [
     {
@@ -23,7 +23,46 @@
     "payload": {
       "type": "object",
       "additionalProperties": true,
-      "description": "Payload of ingest.document.classified. Open for now. The chat that builds the owning service (ingest) tightens it."
+      "description": "Payload of ingest.document.classified. Intel reads it to start the shred and the amendment steps. amendment_no is the number typed on the upload session, or null when none was typed.",
+      "required": [
+        "document_id",
+        "bid_id",
+        "kind"
+      ],
+      "properties": {
+        "document_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "bid_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "enum": [
+            "solicitation",
+            "amendment",
+            "attachment",
+            "resume",
+            "draft"
+          ]
+        },
+        "amendment_no": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 999
+        },
+        "solicitation_number": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The number printed on the file, when the client sent it."
+        }
+      }
     }
   }
 }
