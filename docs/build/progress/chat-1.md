@@ -33,7 +33,7 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 | 9 Skeletons | e2e/c1-09-skeletons | merged (#57) | Fable: no majors; 11 minors fixed incl. a racy test guard found on a fresh cluster |
 | 10 Testing | e2e/c1-10-testing | merged (#58) | Fable: 4 majors fixed over 3 rounds (positive control, CI-vacuous RLS tests, seed guard x2); follow-ups logged |
 | 11 Local stack | e2e/c1-11-stack | merged (#59) | Fable: no majors; 4 minors fixed (JWKS host, clamd double O(n), native chown scope, TCP healthcheck) |
-| 12 CI | e2e/c1-12-ci | built, stacked on #11, not pushed | Orchestrator pushes and iterates on CI. Never run on GitHub yet: the new jobs (contracts, test-services, test-python, compose-stack, e2e-web) and the 14 new build-docker entries are unverified until the first run. fable-reviewer: CI |
+| 12 CI | e2e/c1-12-ci | in review (#60). Three CI fix rounds used; `compose-stack` split out to workflow `compose-stack.yml` (manual) and PR 12b | Orchestrator pushes and iterates on CI. Never run on GitHub yet: the new jobs (contracts, test-services, test-python, compose-stack, e2e-web) and the 14 new build-docker entries are unverified until the first run. fable-reviewer: CI |
 | 13 Rename notice | - | planned | |
 
 ## PR 12 CI: which Done-when check which job verifies
@@ -50,7 +50,7 @@ All of these are first verified by the first GitHub run of `.github/workflows/ci
 | Playwright browser install and a real-browser smoke | `e2e-web` (`playwright install --with-deps chromium`, build, run) | local: the spec passes on the preinstalled Chromium |
 | Skills stay out of git | `lint` step "Skills stay out of git" | local: same command |
 
-Workflow-level notes: `permissions: contents: read`, a concurrency group that cancels only pull request runs, `timeout-minutes` on every job. `build-docker` and `deploy` now also wait for `contracts`, `test-services` and `test-python`; `deploy` also waits for `compose-stack` and `e2e-web`.
+Workflow-level notes: `permissions: contents: read`, a concurrency group that cancels only pull request runs, `timeout-minutes` on every job. `build-docker` and `deploy` now also wait for `contracts`, `test-services` and `test-python`; `deploy` also waits for `e2e-web`. `compose-stack` left `ci.yml` for its own manual workflow after three CI fix rounds (see questions.md).
 
 ## Decisions
 See `docs/build/questions.md`, Chat 1.
