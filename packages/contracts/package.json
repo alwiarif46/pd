@@ -10,6 +10,7 @@
     "lint": "eslint . --max-warnings 0",
     "generate": "tsx scripts/generate.ts",
     "check": "tsx scripts/check.ts",
+    "check:bump": "tsx scripts/bump-cli.ts",
     "clean": "rm -rf dist"
   },
   "main": "./src/index.ts",

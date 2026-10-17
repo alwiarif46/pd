@@ -6,6 +6,8 @@ import { validate } from '@readme/openapi-parser';
 import { parse as parseYaml } from 'yaml';
 import { ENVELOPE_FIELDS, ENVELOPE_ID, PACKAGE_ROOT, SERVICES, VERSION_PATTERN, createAjv, eventNames, eventSchemaPath, loadEnvelopeSchema, loadEventSchema, type ServiceInfo } from '../src/index';
 import { buildGenerated, listFiles, openapiPath } from './lib';
+import { checkBump } from './bump';
+import { printBump, readBase } from './bump-args';
 
 const REPO_ROOT = process.env.CONTRACTS_REPO_ROOT ?? resolve(PACKAGE_ROOT, '..', '..');
 const failures: string[] = [];
@@ -279,6 +281,16 @@ try {
   fail(`generated types: cannot build: ${(err as Error).message}`);
 }
 await checkSkeletons(operations);
+
+// Optional: pnpm contracts:check -- --base origin/master also runs the version-bump check (scripts/bump.ts).
+const bumpArgs = readBase(process.argv.slice(2));
+if (bumpArgs) {
+  const bump = checkBump({ repoRoot: bumpArgs.repo ?? REPO_ROOT, base: bumpArgs.ref, ci: process.env.CI === 'true' });
+  if (bump.status === 'failed') {
+    for (const w of bump.warnings) console.warn(`warning: ${w}`);
+    for (const m of bump.messages) fail(`version bump: ${m}`);
+  } else printBump(bump);
+}
 
 if (failures.length > 0) {
   console.error(`contracts:check failed with ${failures.length} problem(s):`);
