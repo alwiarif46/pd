@@ -1,3 +1,4 @@
+import { getEventListeners } from 'node:events';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { StageRegistry, runStage, type StageHandler } from '../src/index';
@@ -36,7 +37,7 @@ describe('runStage', () => {
     const h = handler({ run: async (c) => ({ count: c.skill?.body.length ?? -1 }) });
     const r = await runStage(h, ctx, { text: 'x' }, { skills });
     expect(r.status).toBe('done');
-    expect(r.outputs?.count).toBeGreaterThan(0);
+    expect(r.outputs?.count).toBe('You are a stub skill with a declared version.\n'.length);
   });
 
   it('runs a stage with no skill', async () => {
@@ -92,7 +93,31 @@ describe('runStage', () => {
     const p = runStage(slow, { ...ctx, signal: ac.signal }, { text: 'a' }, { skills });
     ac.abort();
     const r = await p;
-    expect(r).toMatchObject({ status: 'failed', error: 'Stage aborted' });
+    expect(r.status).toBe('failed');
+    expect(r.error).toMatch(/^Stage aborted/);
+  });
+
+  it('puts an Error abort reason in the message', async () => {
+    const ac = new AbortController();
+    const slow = handler({ run: () => new Promise<Out>(() => {}) });
+    const p = runStage(slow, { ...ctx, signal: ac.signal }, { text: 'a' }, { skills });
+    ac.abort(new Error('deadline passed'));
+    expect(await p).toMatchObject({ status: 'failed', error: 'Stage aborted: deadline passed' });
+    const pre = new AbortController();
+    pre.abort(new Error('too late'));
+    expect(await runStage(handler(), { ...ctx, signal: pre.signal }, { text: 'a' }, { skills })).toMatchObject({ error: 'Stage aborted: too late' });
+  });
+
+  it('leaves no abort listeners behind after 100 completed stages on one signal', async () => {
+    const ac = new AbortController();
+    for (let i = 0; i < 100; i++) {
+      const r = await runStage(handler(), { ...ctx, signal: ac.signal }, { text: 'abc' }, { skills });
+      expect(r.status).toBe('done');
+    }
+    expect(getEventListeners(ac.signal, 'abort')).toHaveLength(0);
+    const failing = handler({ run: async () => { throw new Error('boom'); } });
+    await runStage(failing, { ...ctx, signal: ac.signal }, { text: 'abc' }, { skills });
+    expect(getEventListeners(ac.signal, 'abort')).toHaveLength(0);
   });
 
   it('does not start when already aborted', async () => {
@@ -102,6 +127,74 @@ describe('runStage', () => {
     const r = await runStage(handler({ run: async () => ((ran = true), { count: 1 }) }), { ...ctx, signal: ac.signal }, { text: 'a' }, { skills });
     expect(r.status).toBe('failed');
     expect(ran).toBe(false);
+  });
+});
+
+describe('runStage schemas', () => {
+  it('rejects a typo keyword in the input schema and does not throw', async () => {
+    const h = handler({ inputSchema: { type: 'object', requird: ['text'] } });
+    const r = await runStage(h, ctx, { text: 'a' }, { skills });
+    expect(r.status).toBe('failed');
+    expect(r.error).toContain('inputSchema');
+    expect(r.error).toContain('requird');
+  });
+
+  it('rejects a typo keyword in the output schema before running the handler', async () => {
+    let ran = false;
+    const h = handler({ outputSchema: { type: 'object', propertees: {} }, run: async () => ((ran = true), { count: 1 }) });
+    const r = await runStage(h, ctx, { text: 'a' }, { skills });
+    expect(r.status).toBe('failed');
+    expect(r.error).toContain('outputSchema');
+    expect(ran).toBe(false);
+  });
+
+  it('accepts union types', async () => {
+    const h = handler({ inputSchema: { type: 'object', properties: { text: { type: ['string', 'null'] } } } });
+    expect((await runStage(h, ctx, { text: 'abc' }, { skills })).status).toBe('done');
+  });
+
+  it('rebuilding a handler with the same $id many times works', async () => {
+    for (let i = 0; i < 300; i++) {
+      const h = handler({
+        inputSchema: { $id: 'https://test.local/in', type: 'object', required: ['text'], properties: { text: { type: 'string' } } },
+        outputSchema: { $id: 'https://test.local/out', type: 'object', required: ['count'], properties: { count: { type: 'number' } } },
+      });
+      const r = await runStage(h, ctx, { text: 'abc' }, { skills });
+      expect(r.status).toBe('done');
+    }
+  });
+
+  it('does not reuse a cached schema for a different schema with the same $id', async () => {
+    const a = handler({ inputSchema: { $id: 'https://test.local/clash', type: 'object', required: ['text'] } });
+    const b = handler({ inputSchema: { $id: 'https://test.local/clash', type: 'object', required: ['other'] } });
+    expect((await runStage(a, ctx, { text: 'x' }, { skills })).status).toBe('done');
+    const r = await runStage(b, ctx, { text: 'x' }, { skills });
+    expect(r.status).toBe('failed');
+    expect(r.error).toContain('other');
+  });
+});
+
+describe('runStage skill version', () => {
+  it('runs when the declared version matches', async () => {
+    const r = await runStage(handler({ skill: { name: 'stub-versioned', version: '2.3.0' } }), ctx, { text: 'abc' }, { skills });
+    expect(r.status).toBe('done');
+  });
+
+  it('fails when the loaded version differs', async () => {
+    let ran = false;
+    const h = handler({ skill: { name: 'stub-versioned', version: '9.9.9' }, run: async () => ((ran = true), { count: 1 }) });
+    const r = await runStage(h, ctx, { text: 'abc' }, { skills });
+    expect(r.status).toBe('failed');
+    expect(r.error).toContain('stub-versioned');
+    expect(r.error).toContain('2.3.0');
+    expect(r.error).toContain('9.9.9');
+    expect(ran).toBe(false);
+  });
+
+  it('does not take a skill from the caller context', async () => {
+    // @ts-expect-error runStage sets skill itself
+    const r = await runStage(handler({ skill: null }), { ...ctx, skill: null }, { text: 'abc' });
+    expect(r.status).toBe('done');
   });
 });
 

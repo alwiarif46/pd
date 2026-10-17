@@ -1,7 +1,7 @@
 // The only place that reads a SKILL.md (CLAUDE.md rule 7).
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { LoadedSkill } from './types';
 
@@ -40,7 +40,8 @@ function repoRoot(): string {
 }
 
 export function defaultSkillsDir(): string {
-  return process.env[SKILLS_DIR_ENV] || join(repoRoot(), 'skills');
+  const fromEnv = process.env[SKILLS_DIR_ENV];
+  return fromEnv ? resolve(fromEnv) : join(repoRoot(), 'skills');
 }
 
 /** Read `key: value` lines between the leading `---` lines. Not full YAML. */
@@ -58,11 +59,23 @@ export function parseFrontmatter(text: string): { data: Record<string, string>; 
   return { data, body: text.slice(m[0].length) };
 }
 
+/** The real path of `<dir>/<name>/SKILL.md` when it is a regular file inside the real skills dir, else null. */
+function resolveSkillFile(dir: string, name: string): string | null {
+  try {
+    const realDir = realpathSync(dir);
+    const realFile = realpathSync(join(dir, name, 'SKILL.md'));
+    if (!realFile.startsWith(realDir + sep)) return null;
+    return statSync(realFile).isFile() ? realFile : null;
+  } catch {
+    return null;
+  }
+}
+
 export function loadSkill(name: string, opts: LoadSkillOptions = {}): LoadedSkill {
   if (!NAME_RE.test(name) || name.includes('..')) throw new InvalidSkillNameError(name);
-  const dir = opts.dir ?? defaultSkillsDir();
-  const file = join(dir, name, 'SKILL.md');
-  if (!existsSync(file)) throw new SkillNotFoundError(name, dir);
+  const dir = opts.dir ? resolve(opts.dir) : defaultSkillsDir();
+  const file = resolveSkillFile(dir, name);
+  if (!file) throw new SkillNotFoundError(name, dir);
   const text = readFileSync(file, 'utf8');
   const { data, body } = parseFrontmatter(text);
   const version = data.version ? data.version : createHash('sha256').update(text).digest('hex').slice(0, 12);

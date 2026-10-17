@@ -14,6 +14,7 @@ export interface StageContext {
   tenantId: string;
   runId: string;
   stageId: string;
+  /** Set by runStage from the handler's skill declaration. Callers do not pass it. */
   skill: LoadedSkill | null;
   signal?: AbortSignal;
   // The model gateway client joins this context in chat 3.
@@ -28,8 +29,11 @@ export interface StageHandler<I = unknown, O = unknown> {
   id: string;
   /** The service that owns the handler. */
   service: string;
-  /** The skill that supplies the stage prompt, or null for a stage with no skill. */
-  skill: { name: string } | null;
+  /**
+   * The skill that supplies the stage prompt, or null for a stage with no skill.
+   * When `version` is set and the loaded skill has a different version, the stage fails.
+   */
+  skill: { name: string; version?: string } | null;
   inputSchema: JSONSchema;
   outputSchema: JSONSchema;
   run(ctx: StageContext, inputs: I): Promise<O>;

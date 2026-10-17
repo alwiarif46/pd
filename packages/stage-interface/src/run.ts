@@ -1,4 +1,4 @@
-import { Ajv2020 } from 'ajv/dist/2020.js';
+import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { loadSkill, type LoadSkillOptions } from './skills';
 import type { GateResult, JSONSchema, LoadedSkill, StageContext, StageHandler, StageResult } from './types';
@@ -8,11 +8,53 @@ export interface RunStageOptions {
   skills?: LoadSkillOptions;
 }
 
-const ajv = new Ajv2020({ strict: false, allErrors: true });
-addFormats(ajv);
+function newAjv(): Ajv2020 {
+  const ajv = new Ajv2020({ strict: true, strictRequired: false, allowUnionTypes: true, allErrors: true });
+  addFormats(ajv);
+  return ajv;
+}
 
-function check(schema: JSONSchema, value: unknown): string[] {
-  const fn = ajv.compile(schema);
+const ajv = newAjv();
+
+interface Compiled {
+  input: ValidateFunction;
+  output: ValidateFunction;
+}
+
+// Keyed by the handler object, so a handler is compiled once and the cache does not outlive it.
+const compiledByHandler = new WeakMap<object, Compiled>();
+
+function compileSchema(schema: JSONSchema): ValidateFunction {
+  const id = typeof schema === 'object' ? schema.$id : undefined;
+  if (typeof id !== 'string') return ajv.compile(schema);
+  const existing = ajv.getSchema(id);
+  if (!existing) return ajv.compile(schema);
+  // The same $id was compiled before (a rebuilt handler). Reuse it only when the schema is identical.
+  if (JSON.stringify(existing.schema) === JSON.stringify(schema)) return existing;
+  return newAjv().compile(schema);
+}
+
+function compiledFor(handler: StageHandler<never, never>): Compiled {
+  let entry = compiledByHandler.get(handler);
+  if (entry) return entry;
+  let input: ValidateFunction;
+  let output: ValidateFunction;
+  try {
+    input = compileSchema(handler.inputSchema);
+  } catch (err) {
+    throw new Error(`Invalid inputSchema for stage ${handler.id}: ${message(err)}`);
+  }
+  try {
+    output = compileSchema(handler.outputSchema);
+  } catch (err) {
+    throw new Error(`Invalid outputSchema for stage ${handler.id}: ${message(err)}`);
+  }
+  entry = { input, output };
+  compiledByHandler.set(handler, entry);
+  return entry;
+}
+
+function check(fn: ValidateFunction, value: unknown): string[] {
   if (fn(value)) return [];
   return (fn.errors ?? []).map((e) => `${e.instancePath || '/'} ${e.message ?? 'is invalid'}`);
 }
@@ -21,18 +63,32 @@ function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function aborted(signal: AbortSignal): Promise<never> {
-  return new Promise((_, reject) => {
-    const fail = () => reject(new Error('Stage aborted'));
+function abortMessage(signal: AbortSignal): string {
+  return signal.reason instanceof Error ? `Stage aborted: ${signal.reason.message}` : 'Stage aborted';
+}
+
+/** Wait for `work`, or reject when the signal aborts. The abort listener is always removed. */
+async function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    const fail = () => reject(new Error(abortMessage(signal)));
     if (signal.aborted) fail();
-    else signal.addEventListener('abort', fail, { once: true });
+    else {
+      onAbort = fail;
+      signal.addEventListener('abort', fail, { once: true });
+    }
   });
+  try {
+    return await Promise.race([work, aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
 }
 
 /** Run one stage. Stage errors come back as a result with status 'failed'; this function does not throw for them. */
 export async function runStage<I, O>(
   handler: StageHandler<I, O>,
-  ctx: Omit<StageContext, 'skill'> & { skill?: LoadedSkill | null },
+  ctx: Omit<StageContext, 'skill'>,
   inputs: I,
   opts: RunStageOptions = {},
 ): Promise<StageResult<O>> {
@@ -47,18 +103,26 @@ export async function runStage<I, O>(
   });
 
   try {
-    if (ctx.signal?.aborted) return failed('Stage aborted');
+    if (ctx.signal?.aborted) return failed(abortMessage(ctx.signal));
 
-    const inputErrors = check(handler.inputSchema, inputs);
+    const compiled = compiledFor(handler as StageHandler<never, never>);
+
+    const inputErrors = check(compiled.input, inputs);
     if (inputErrors.length > 0) return failed(`Invalid inputs for stage ${handler.id}: ${inputErrors.join('; ')}`);
 
-    if (handler.skill) skill = loadSkill(handler.skill.name, opts.skills);
+    if (handler.skill) {
+      skill = loadSkill(handler.skill.name, opts.skills);
+      const wanted = handler.skill.version;
+      if (wanted !== undefined && wanted !== skill.version) {
+        return failed(`Stage ${handler.id} needs skill ${skill.name} version ${wanted}, but version ${skill.version} is installed`);
+      }
+    }
 
     const stageCtx: StageContext = { ...ctx, skill };
     const work = handler.run(stageCtx, inputs);
-    const outputs = await (ctx.signal ? Promise.race([work, aborted(ctx.signal)]) : work);
+    const outputs = await (ctx.signal ? raceAbort(work, ctx.signal) : work);
 
-    const outputErrors = check(handler.outputSchema, outputs);
+    const outputErrors = check(compiled.output, outputs);
     if (outputErrors.length > 0) return failed(`Invalid outputs from stage ${handler.id}: ${outputErrors.join('; ')}`);
 
     const gate: GateResult = handler.gateCheck(outputs);
