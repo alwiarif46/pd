@@ -461,7 +461,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The arguments failed the tool's schema. */
+            /** @description The arguments failed the tool's schema, a file key is not under the caller's tenant, or a named input file is missing. */
             422: {
                 headers: {
                     [name: string]: unknown;
