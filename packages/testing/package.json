@@ -23,6 +23,7 @@
     "@pd/stage-interface": "workspace:*",
     "drizzle-orm": "^0.33.0",
     "pg": "^8.12.0",
+    "pg-connection-string": "^2.14.1",
     "yaml": "^2.9.1"
   },
   "devDependencies": {

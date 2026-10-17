@@ -55,7 +55,7 @@ export function useSeededDatabase(): () => SeededDb {
     await lock.query('select pg_advisory_lock($1)', [CLUSTER_LOCK]);
     roleExisted = ((await lock.query("select 1 from pg_roles where rolname = 'pd_app'")).rowCount ?? 0) > 0;
 
-    const database = `testing_${randomBytes(6).toString('hex')}`;
+    const database = `test_pd_${randomBytes(6).toString('hex')}`;
     await lock.query(`create database ${database}`);
     const adminUrl = urlFor(BASE_URL, null, null, database);
     const firstRun = await seedAll(adminUrl, undefined, { migrate: true });

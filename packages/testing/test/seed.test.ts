@@ -90,7 +90,7 @@ describe.skipIf(SKIP_DB)('pnpm seed against a scratch database', () => {
     let emptyUrl = '';
     const base = () => new pg.Client({ connectionString: BASE_URL });
     beforeAll(async () => {
-      empty = `testing_empty_${randomBytes(4).toString('hex')}`;
+      empty = `test_pd_empty_${randomBytes(4).toString('hex')}`;
       const c = base();
       await c.connect();
       await c.query(`create database ${empty}`);
