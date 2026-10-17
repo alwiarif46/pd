@@ -1,0 +1,225 @@
+# Local development stack (09 s9.1). One command boots it:
+#   docker compose -f infra/compose/local.yml --env-file infra/compose/local.env up -d
+# Copy infra/compose/local.env.example to infra/compose/local.env first (the copy is not in git).
+# Every secret comes from that env file and has no default (${VAR:?}). Only non-secret values have defaults.
+# This file is for development and CI only. PD's production compose is infra/docker-compose.yml; do not mix them.
+# Build contexts are the repo root (the sandbox Dockerfile needs the workspace lockfile and packages).
+#
+# Zitadel licence note: Zitadel is AGPL-3.0. We run the unmodified upstream image as a separate container and talk to it
+# over HTTP only (OIDC and the management API), so nothing of ours links against it. Do not copy Zitadel code into this repo.
+#
+# S3: the plans say MinIO. Its prebuilt images are no longer pullable from Docker Hub, so the S3-compatible store is
+# SeaweedFS. The variable names stay S3_* (09 s9.2); only the container differs. See infra/compose/README.md.
+
+name: pd-local
+
+services:
+  postgres:
+    # Postgres 16 with pgvector, for the 15 service schemas, the Zitadel database, and the evidence service's vectors.
+    image: pgvector/pgvector:0.8.7-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the env file}
+      POSTGRES_DB: ${E2E_DB_NAME:-e2e}
+      E2E_DB_NAME: ${E2E_DB_NAME:-e2e}
+      ZITADEL_DB_USER: ${ZITADEL_DB_USER:-zitadel}
+      ZITADEL_DB_NAME: ${ZITADEL_DB_NAME:-zitadel}
+      ZITADEL_DB_PASSWORD: ${ZITADEL_DB_PASSWORD:?set ZITADEL_DB_PASSWORD in the env file}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Runs once, on an empty data volume only: docker compose down -v to run it again.
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${E2E_DB_NAME:-e2e}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  redis:
+    image: redis:7.4.9-alpine
+    restart: unless-stopped
+    # Streams, BullMQ and rate buckets: never evict (01 s3).
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+
+  zitadel:
+    # Pinned. start-from-init creates the schema in its own database on first start and migrates on every start.
+    image: ghcr.io/zitadel/zitadel:v4.19.5
+    restart: unless-stopped
+    command: ["start-from-init", "--masterkeyFromEnv"]
+    # The image runs as uid 1000; a fresh named volume is owned by root. Run as root so the machine key can be written.
+    user: "0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ZITADEL_MASTERKEY: ${ZITADEL_MASTERKEY:?set ZITADEL_MASTERKEY (exactly 32 characters) in the env file}
+      # Plain HTTP on localhost for development.
+      ZITADEL_EXTERNALDOMAIN: localhost
+      ZITADEL_EXTERNALPORT: "8080"
+      ZITADEL_EXTERNALSECURE: "false"
+      ZITADEL_TLS_ENABLED: "false"
+      # Own database and own role in the same Postgres. The admin login is used only by the init step.
+      ZITADEL_DATABASE_POSTGRES_HOST: postgres
+      ZITADEL_DATABASE_POSTGRES_PORT: "5432"
+      ZITADEL_DATABASE_POSTGRES_DATABASE: ${ZITADEL_DB_NAME:-zitadel}
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: ${ZITADEL_DB_USER:-zitadel}
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: ${ZITADEL_DB_PASSWORD:?set ZITADEL_DB_PASSWORD in the env file}
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: ${POSTGRES_USER:-postgres}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the env file}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      # First instance: one organization, one human admin, and one machine user whose key the identity service
+      # (chat 2) reads from the named volume zitadel_bootstrap, at /zitadel-bootstrap/identity-sa.json.
+      ZITADEL_FIRSTINSTANCE_ORG_NAME: ${ZITADEL_ORG_NAME:-PD Local}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: ${ZITADEL_ADMIN_USERNAME:-admin}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${ZITADEL_ADMIN_PASSWORD:?set ZITADEL_ADMIN_PASSWORD in the env file}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: "false"
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: identity-sa
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Identity service
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINEKEY_TYPE: "1"
+      ZITADEL_FIRSTINSTANCE_MACHINEKEYPATH: /zitadel-bootstrap/identity-sa.json
+      # Keep the built-in login UI. The separate login v2 container is not part of the local stack.
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "false"
+    volumes:
+      - zitadel_bootstrap:/zitadel-bootstrap
+    ports:
+      - "127.0.0.1:${ZITADEL_PORT:-8080}:8080"
+    healthcheck:
+      # The image has no shell or curl. `zitadel ready` calls the readiness endpoint (/debug/ready) of the local server.
+      test: ["CMD", "/app/zitadel", "ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  s3:
+    # S3-compatible store (SeaweedFS: master, volume, filer and the S3 gateway in one process). S3 API on 8333.
+    image: chrislusf/seaweedfs:4.48
+    restart: unless-stopped
+    command: ["server", "-dir=/data", "-ip.bind=0.0.0.0", "-s3", "-s3.port=8333"]
+    environment:
+      # SeaweedFS reads the one admin identity of the S3 gateway from these two variables when no s3.config is given.
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in the env file}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in the env file}
+    volumes:
+      - s3_data:/data
+    ports:
+      - "127.0.0.1:${S3_PORT:-8333}:8333"
+    healthcheck:
+      # Master answers, and the S3 port accepts connections.
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9333/cluster/status && nc -z 127.0.0.1 8333"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  s3-init:
+    # One-shot: creates the bucket, then exits. Other services wait for it with service_completed_successfully.
+    image: chrislusf/seaweedfs:4.48
+    restart: "no"
+    depends_on:
+      s3:
+        condition: service_healthy
+    environment:
+      S3_BUCKET: ${S3_BUCKET:-pd-local}
+    entrypoint: ["/bin/sh", "-c"]
+    command: ['echo "s3.bucket.create -name $$S3_BUCKET" | weed shell -master=s3:9333 -filer=s3:8888']
+
+  clamav:
+    image: clamav/clamav:1.5.4
+    restart: unless-stopped
+    volumes:
+      - clamav_data:/var/lib/clamav
+      # The same daemon settings as production (infra/clamav/clamd.conf, 01 s2.2).
+      - ../clamav/clamd.conf:/etc/clamav/clamd.conf:ro
+    ports:
+      - "127.0.0.1:${CLAMAV_PORT:-3310}:3310"
+    healthcheck:
+      # Shipped by the image: pings clamd through the configured socket. Healthy only after the signatures are loaded,
+      # which needs one freshclam download on the first start.
+      test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+
+  sandbox:
+    # PD's file sandbox image, built from the ingest service. In production the host runner starts one container per file
+    # job (infra/docker-compose.yml, profile tools). Here the container idles so the image build, its tools, and the
+    # hardening are checked. Run a job with:
+    #   docker compose -f infra/compose/local.yml run --rm --entrypoint node sandbox dist/index.js <args>
+    build:
+      context: ../..
+      dockerfile: services/ingest/sandbox/Dockerfile
+    image: pd-local-sandbox:dev
+    restart: "no"
+    entrypoint: ["sleep", "infinity"]
+    # Same as production: no network. Plus the hardening below.
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    user: sandbox
+    tmpfs:
+      # uid 1000 is the image's sandbox user (the renamed node user). Jobs write only to /input, /output, /tmp and HOME.
+      - /input:uid=1000,gid=1000,mode=0755,size=256m
+      - /output:uid=1000,gid=1000,mode=0755,size=256m
+      - /tmp:uid=1000,gid=1000,mode=1777,size=512m
+      - /home/node:uid=1000,gid=1000,mode=0700,size=64m
+    healthcheck:
+      test: ["CMD-SHELL", "qpdf --version >/dev/null && pdftotext -v >/dev/null 2>&1 && node -e 'process.exit(0)'"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1.5G
+          pids: 256
+
+volumes:
+  postgres_data:
+  redis_data:
+  zitadel_bootstrap:
+  s3_data:
+  clamav_data:
