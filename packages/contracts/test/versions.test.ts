@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { PACKAGE_ROOT, makeEvent, validateEvent } from '../src/index';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
-const NAME = 'render.done';
+const NAME = 'orchestrator.run.started';
 type Api = typeof import('../src/index');
 
 // Copies live inside the package so node resolves its node_modules. The real files are never changed.

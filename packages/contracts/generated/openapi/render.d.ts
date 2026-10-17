@@ -17,6 +17,177 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Tools the toolrunner can run (01 s5.3) */
+        get: operations["listTools"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tools/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run one tool in a fresh job folder (01 s5.3) */
+        post: operations["runTool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/render": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Convert one assembled DOCX to PDF, check the pages and count them (01 s5.5) */
+        post: operations["createRender"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/render/{renderId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One render with its issues */
+        get: operations["getRender"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/packages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Build the package from finished renders (04 s5.22) */
+        post: operations["createPackage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/packages/{packageId}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Signed download link for a package */
+        get: operations["downloadPackage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/format-specs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The tenant's format specs (05 s6 Format specs) */
+        get: operations["listFormatSpecs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/format-specs/{specId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One format spec */
+        get: operations["getFormatSpec"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fonts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Installed fonts and the substitute for each Microsoft font name (05 s6 Fonts) */
+        get: operations["listFonts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fonts/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** This tenant's font requests */
+        get: operations["listFontRequests"];
+        put?: never;
+        /** Request a font. Admin only. Audited with the acting user (06 s6, 03 s2) */
+        post: operations["createFontRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -27,9 +198,179 @@ export interface components {
             /** @description Name of the last applied migration for this service's schema. */
             schemaMigration: string;
         };
+        FileRef: {
+            /** @description File name inside the job folder. */
+            name: string;
+            /** @description Object storage key. It starts with the tenant id, then the owning service (03 s11). */
+            key: string;
+        };
+        ToolInfo: {
+            name: string;
+            timeoutSeconds: number;
+            hasSelftest: boolean;
+        };
+        ToolRequest: {
+            /** Format: uuid */
+            runId: string;
+            args: {
+                [key: string]: unknown;
+            };
+            files?: components["schemas"]["FileRef"][];
+        };
+        ToolResult: {
+            tool: string;
+            ok: boolean;
+            exitCode: number;
+            /** @description The JSON the tool printed on stdout. */
+            output: {
+                [key: string]: unknown;
+            };
+            files: components["schemas"]["FileRef"][];
+            cached: boolean;
+            durationMs: number;
+        };
+        RenderRequest: {
+            /** Format: uuid */
+            runId: string;
+            volumeId: string;
+            docx: components["schemas"]["FileRef"];
+            pageLimit?: number;
+            /** @description Drafting round that produced the DOCX (03 s9 renders.round). */
+            round?: number;
+            /** @description True when the solicitation requires Word files (04 s6). */
+            wordOnly?: boolean;
+        };
+        /** @enum {string} */
+        PageIssueKind: "overflow" | "broken_table" | "cut_graphic" | "orphan_heading" | "margin" | "other";
+        RenderIssue: {
+            page: number;
+            kind: components["schemas"]["PageIssueKind"];
+            /** @enum {string} */
+            severity: "blocker" | "warning";
+            detail: string;
+            /** @description The block to send back to recovery (04 s5.20). Null when the issue is not tied to one block. */
+            blockId?: string | null;
+            /** @enum {string} */
+            source: "geometry" | "vision";
+        };
+        FontUse: {
+            requested: string;
+            embedded: string;
+            substitute?: boolean;
+        };
+        RenderResult: {
+            /** Format: uuid */
+            renderId: string;
+            /** Format: uuid */
+            runId: string;
+            volumeId: string;
+            /** @enum {string} */
+            status: "done" | "failed";
+            /** @description Counted with pdfinfo on the exact PDF to submit (01 s5.5). */
+            pageCount: number;
+            round?: number;
+            pageLimit?: number | null;
+            withinLimit: boolean;
+            pdf?: components["schemas"]["FileRef"];
+            docx?: components["schemas"]["FileRef"];
+            issues: components["schemas"]["RenderIssue"][];
+            fonts: components["schemas"]["FontUse"][];
+            /** @description Present when wordOnly is true. Tells the user to check the page limit in Word. */
+            wordOnlyNote?: string;
+            /** @description False when the vision check did not run, for example when the model gateway is down. */
+            visionChecked?: boolean;
+        };
+        PackageRequest: {
+            /** Format: uuid */
+            runId: string;
+            renderIds: string[];
+        };
+        Package: {
+            /** Format: uuid */
+            packageId: string;
+            /** @enum {string} */
+            status: "building" | "ready" | "downloaded";
+            /** Format: uuid */
+            runId: string;
+            files: components["schemas"]["FileRef"][];
+            wordOnlyNote: string | null;
+        };
+        FormatSpec: {
+            /** Format: uuid */
+            specId: string;
+            /** @description Null for a tenant house style. */
+            bidId: string | null;
+            name: string;
+            /** @description Page size, margins, fonts, spacing, heading styles, caption format. Every rule has a verify method. */
+            rules: {
+                [key: string]: unknown;
+            };
+            volumes: {
+                volumeId: string;
+                title: string;
+                pageLimit?: number;
+            }[];
+        };
+        FontEntry: {
+            family: string;
+            /** @enum {string} */
+            source: "base" | "tenant";
+        };
+        FontAlias: {
+            /** @description A Microsoft font name, such as Times New Roman. */
+            requested: string;
+            /** @description The open font the render service uses, such as Liberation Serif. */
+            substitute: string;
+            metricCompatible: boolean;
+        };
+        FontList: {
+            fonts: components["schemas"]["FontEntry"][];
+            aliases: components["schemas"]["FontAlias"][];
+            /** @description The one-time request fee, read from billing for display. Null while the amount is not set (06 s6 is open on it). */
+            feeCents: number | null;
+            currency: string;
+        };
+        FontRequestCreate: {
+            fontName: string;
+            /**
+             * @description The checkbox "We hold a license to use this font." It must be true.
+             * @constant
+             */
+            licenseConfirmed: true;
+            /** @description True when the font is a commercial font (03 s3). */
+            commercial?: boolean;
+            file: components["schemas"]["FileRef"];
+        };
+        FontRequest: {
+            /** Format: uuid */
+            requestId: string;
+            fontName: string;
+            /** @enum {string} */
+            status: "requested" | "uploaded" | "installed" | "rejected";
+            /** Format: date-time */
+            licenseConfirmedAt: string;
+            /**
+             * Format: uuid
+             * @description User id of the Admin who ticked the box, from x-user-id.
+             */
+            licenseConfirmedBy: string;
+            commercial?: boolean;
+            /**
+             * Format: uuid
+             * @description Billing's charge for the one-time fee (kind font_fee, 03 s12). Null until billing confirms it.
+             */
+            feeChargeId: string | null;
+            file?: components["schemas"]["FileRef"];
+        };
     };
     responses: never;
-    parameters: never;
+    parameters: {
+        /** @description The acting user, set by the gateway. */
+        UserId: string;
+        /** @description Comma-separated roles of the acting user, set by the gateway. */
+        UserRoles: string;
+        TenantId: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -53,6 +394,370 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HealthResponse"];
                 };
+            };
+        };
+    };
+    listTools: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-tenant-id": components["parameters"]["TenantId"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The registered tools. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tools: components["schemas"]["ToolInfo"][];
+                    };
+                };
+            };
+        };
+    };
+    runTool: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-tenant-id": components["parameters"]["TenantId"];
+            };
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ToolRequest"];
+            };
+        };
+        responses: {
+            /** @description The tool ran. A tool that exits non-zero still answers 200 with ok false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolResult"];
+                };
+            };
+            /** @description A file key is outside this tenant. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such tool. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The arguments failed the tool's schema. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createRender: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-tenant-id": components["parameters"]["TenantId"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenderRequest"];
+            };
+        };
+        responses: {
+            /** @description The render finished. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderResult"];
+                };
+            };
+            /** @description The file key is outside this tenant. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request failed validation. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getRender: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-tenant-id": components["parameters"]["TenantId"];
+            };
+            path: {
+                renderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The render. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderResult"];
+                };
+            };
+            /** @description No such render for this tenant. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createPackage: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-tenant-id": components["parameters"]["TenantId"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackageRequest"];
+            };
+        };
+        responses: {
+            /** @description The package. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Package"];
+                };
+            };
+            /** @description A render belongs to another tenant. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    downloadPackage: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-tenant-id": components["parameters"]["TenantId"];
+            };
+            path: {
+                packageId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A short-lived link. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        url: string;
+                        /** Format: date-time */
+                        expiresAt: string;
+                    };
+                };
+            };
+            /** @description No such package for this tenant. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listFormatSpecs: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-tenant-id": components["parameters"]["TenantId"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The specs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        specs: components["schemas"]["FormatSpec"][];
+                    };
+                };
+            };
+        };
+    };
+    getFormatSpec: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-tenant-id": components["parameters"]["TenantId"];
+            };
+            path: {
+                specId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The spec. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FormatSpec"];
+                };
+            };
+            /** @description No such spec for this tenant. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listFonts: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-tenant-id": components["parameters"]["TenantId"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Base fonts, this tenant's fonts and the alias table. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FontList"];
+                };
+            };
+        };
+    };
+    listFontRequests: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-tenant-id": components["parameters"]["TenantId"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The requests, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        requests: components["schemas"]["FontRequest"][];
+                    };
+                };
+            };
+        };
+    };
+    createFontRequest: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-tenant-id": components["parameters"]["TenantId"];
+                /** @description The acting user, set by the gateway. */
+                "x-user-id": components["parameters"]["UserId"];
+                /** @description Comma-separated roles of the acting user, set by the gateway. */
+                "x-user-roles": components["parameters"]["UserRoles"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FontRequestCreate"];
+            };
+        };
+        responses: {
+            /** @description The request. The fee charge id arrives from billing, so it can be null at first. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FontRequest"];
+                };
+            };
+            /** @description The tenant or user header is missing or malformed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an Admin, or the file key is outside this tenant. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The license is not confirmed, the font file is missing or not a font. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

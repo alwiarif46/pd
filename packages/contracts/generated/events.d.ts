@@ -656,10 +656,21 @@ export interface RenderDoneEvent {
   occurred_at: string;
   type: "render.done";
   /**
-   * Payload of render.done. Open for now. The chat that builds the owning service (render) tightens it.
+   * Payload of render.done: one volume rendered and checked.
    */
   payload: {
-    [k: string]: unknown;
+    render_id: string;
+    run_id: string;
+    volume_id: string;
+    page_count: number;
+    page_limit?: number | null;
+    within_limit: boolean;
+    pdf_key: string;
+    docx_key: string;
+    issue_count: number;
+    vision_checked: boolean;
+    word_only?: boolean;
+    round?: number;
   };
 }
 
@@ -673,10 +684,18 @@ export interface RenderIssueFoundEvent {
   occurred_at: string;
   type: "render.issue.found";
   /**
-   * Payload of render.issue.found. Open for now. The chat that builds the owning service (render) tightens it.
+   * Payload of render.issue.found: one layout issue on one page.
    */
   payload: {
-    [k: string]: unknown;
+    render_id: string;
+    run_id: string;
+    volume_id: string;
+    page: number;
+    kind: "overflow" | "broken_table" | "cut_graphic" | "orphan_heading" | "margin" | "other";
+    severity: "blocker" | "warning";
+    detail: string;
+    source: "geometry" | "vision";
+    block_id?: string | null;
   };
 }
 
@@ -690,10 +709,13 @@ export interface RenderPackageReadyEvent {
   occurred_at: string;
   type: "render.package.ready";
   /**
-   * Payload of render.package.ready. Open for now. The chat that builds the owning service (render) tightens it.
+   * Payload of render.package.ready: a package is built and downloadable.
    */
   payload: {
-    [k: string]: unknown;
+    package_id: string;
+    run_id: string;
+    file_count: number;
+    word_only_note?: string | null;
   };
 }
 
