@@ -1,0 +1,11 @@
+{
+  "sourceCommit": "2fcea2d105fb5a6ba6e2b5a94a97a48e407083d0",
+  "files": [
+    "ComplianceMatrixTab.tsx",
+    "RowDetail.tsx",
+    "SourceViewer.tsx",
+    "sample-data.ts",
+    "types.ts"
+  ],
+  "keepLocal": []
+}
