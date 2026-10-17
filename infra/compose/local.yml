@@ -179,8 +179,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 2G
+          # clamd compiles about 3.6 million signatures on the first start while freshclam tests the same set in the
+          # same cgroup. One CPU and 2G stalled it in CI (no clamd line after config parsing for 7 minutes).
+          cpus: "2.0"
+          memory: 4G
 
   sandbox:
     # PD's file sandbox image, built from the ingest service. In production the host runner starts one container per file

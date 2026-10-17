@@ -339,6 +339,13 @@ jobs:
       - name: Container state
         if: always()
         run: $COMPOSE ps -a
+      - name: ClamAV diagnostics (OOM kill, processes, health check output)
+        if: failure()
+        run: |
+          docker inspect pd-local-clamav-1 --format '{{json .State}}' || true
+          $COMPOSE exec -T clamav ps aux || true
+          $COMPOSE exec -T clamav /usr/local/bin/clamdcheck.sh || echo "clamdcheck exit $?"
+          free -m || true
       - name: pgvector and the databases
         run: python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env postgres
       - name: pnpm migrate applies the 15 schemas in order (twice, the second run must change nothing)
