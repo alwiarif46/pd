@@ -4,6 +4,10 @@ Order: PR1 Cleanup, PR2 API follow-ups, PR3 Credit gaps, PR4 Schedule port (migr
 
 PR4 comes before PR5 for two reasons. Both add columns to `schedule_activities`, so their migrations must run in sequence. And PR5's amendment date prompt needs the new Schedule UI to show it.
 
+## Remaining legacy screens (17 Oct 2026)
+
+Shell, Settings, Compliance and Documents are integrated from v0. Still on the legacy bridge in `apps/web/src/screens/Workspace.tsx` (styled by `src/index.css`): Overview, Outline, Resumes, Reviews, Production, Orals and Lessons, plus the legacy `components/RowDetail.tsx` and `components/SourceViewer.tsx` they use. The Schedule tab is PR4 below. The legacy layer and `ui-preflight.css` go when the last of these is retired.
+
 ## PR1: Cleanup (Sonnet; low risk)
 
 **Worktrees**

@@ -93,6 +93,12 @@ Rules for every contract:
 - The states in 05 s4 are drawn by `TabFrame` (5.12) around each tab, except "Empty result", which each tab draws inside its own table with `EmptyState` and its add-by-hand form.
 - Tabs that hold source-bearing rows take `selectedRowId`: the row is highlighted and scrolled into view, and focus returns to it when the row detail slider closes.
 
+### Integration status (17 Oct 2026)
+- Integrated from v0 into `src/ui/`: Auth (5.13), Bids list and new bid (5.2), and, on branch `ui/v0-round2-batch1`, Shell (5.1), Settings (5.11, bid settings), Compliance (5.4) and Documents (5.11).
+- Containers: `features/shell` (with the detail host below), `features/settings`, `features/compliance`, `features/documents`, `features/row-detail` and `features/source-viewer` (the Row detail slider 5.17 and Source viewer 5.18, shared by every source-bearing tab).
+- Shell detail host: a tab registered with the route flag `rowDetail: true` (`features/shell/registry.ts`) opts into AppShell's `detail` slot. While `?row=` names a row, the shell holds one host element in that slot and the tab portals its `RowDetailContainer` into it.
+- Still legacy (`src/screens/Workspace.tsx`): Overview, Outline, Resumes, Reviews, Production, Orals, Lessons. The Schedule port is PR4 in `docs/next-prs-plan.md`.
+
 ### 5.1 Shell
 ```ts
 type OutsidePage = 'bids' | 'organization' | 'account' | 'privacy';
@@ -610,7 +616,7 @@ The copy-paste prompt for each chat is in `docs/v0-prompts.md`.
 
 Chats 1 and 2 come first because every later screen uses their types and pieces; after they are integrated, the 5.12 types live in `@/types`. Chats 8 to 12 are the paid tabs in Phase 4 order.
 
-Auth (5.13) is done (`design/v0/auth/`, integrated).
+Auth (5.13) is done (`design/v0/auth/`, integrated). Shell, Settings, Compliance and Documents are integrated (see Integration status in s5).
 
 The Schedule tab is not a v0 chat. Claude Code ports it from the offline builder into `src/schedule/`.
 
@@ -662,3 +668,8 @@ Each chat ends the same way: v0 pushes to the `v0-ui` branch, you merge it to `m
 | 16 Oct 2026 | 5.20 added: the invite-accept and seat-locked screens are built in `features/membership/ui` (shadcn + Tailwind, not by v0). The "UI not built yet" note on seats (16 Oct) is done for the seat-locked member's own screen |
 | 16 Oct 2026 | 5.20 review fixes: `onDismiss` ("Not now") on `ready` and on kept-code failures; `other` offers "Try again"; the no-organization redirect to `#/invite` happens at most once per browser session |
 | 17 Oct 2026 | 5.11: amendment number additions added to the web `Doc` and `DocumentsPanelProps` types (`@/types`) and to the code block above; v0's panel-level shape (one number for the whole bid, no file id) is a contract error |
+| 17 Oct 2026 | Settings: the DateChangePrompt question reads "Move the schedule with it?", the wording of 09 s5.11 (the same as Schedule's prompt), instead of the earlier plan's "How should the schedule change?". The contract wins; reverting is a one-word change |
+| 17 Oct 2026 | Documents: uploads are never aborted. If the panel unmounts or the bid switches mid-queue the remaining files still upload, and their outcomes arrive as sonner toasts (a failure or duplicate as `<file>: <message>`, then "Finished uploading to <bid name>.") |
+| 17 Oct 2026 | Documents: the amendment number typed on "Add amendment" goes to the first file of a batch only, and is spent even if that file is refused, so later files in the batch never inherit it |
+| 17 Oct 2026 | Documents shows an amendment's tabs status as a dismissible notice (`amendmentTabsNotice`): pending "Updating bid facts and dates from this amendment.", failed "Bid facts and dates did not update from this amendment. Open Overview and choose Retry."; a dismissed notice stays hidden until the status changes. It replaces the legacy Status-cell text of 16 Oct |
+| 17 Oct 2026 | Row detail: `RowDetailContainer` takes an optional `findRowElement(rowId)` so focus returns to the row's opener when the slider closes in tabs whose markup has no `data-row` (Compliance finds the ID button, Documents the "Open source for" button) |
