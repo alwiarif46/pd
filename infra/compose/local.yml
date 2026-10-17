@@ -164,8 +164,8 @@ services:
     restart: unless-stopped
     volumes:
       - clamav_data:/var/lib/clamav
-      # Production's config, so CI proves it. It sets LocalSocket (the image's startup and healthcheck wait for it) and
-      # logs to stdout. See docs/build/questions.md (Chat 1).
+      # Production's config, so CI proves it. It sets LocalSocket (the image's startup waits for it), binds TCP on all
+      # addresses (its healthcheck pings localhost:3310), and logs to stdout. See docs/build/questions.md (Chat 1).
       - ../clamav/clamd.conf:/etc/clamav/clamd.conf:ro
     ports:
       - "127.0.0.1:${CLAMAV_PORT:-3310}:3310"
