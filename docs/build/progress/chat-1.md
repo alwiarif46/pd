@@ -29,8 +29,8 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 | 3 to 6 | - | already merged | none |
 | 7 Restructure | e2e/c1-07-restructure | merged (#51, by owner) | Fable: no majors. Minor fixes follow in 7b |
 | 7b Review fixes | e2e/c1-07b-restructure-fixes | merged (#55) | |
-| 8 Contracts | e2e/c1-08-contracts | in review | contracts + stage-interface; CI wiring of contracts:check is PR 12 |
-| 9 Skeletons | e2e/c1-09-skeletons | planned | |
+| 8 Contracts | e2e/c1-08-contracts | merged (#56) | opus: 2 majors fixed and re-reviewed, minors fixed |
+| 9 Skeletons | e2e/c1-09-skeletons | in review | fable-reviewer: schema roles |
 | 10 Testing | e2e/c1-10-testing | planned | |
 | 11 Local stack | e2e/c1-11-stack | planned | |
 | 12 CI | e2e/c1-12-ci | planned | |

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { enforceTenantRole } from '@pd/core';
@@ -11,6 +12,9 @@ import { registerOrg } from './org.js';
 import { assertOutOfBandDelivery } from './security.js';
 import { registerTabs } from './tabs.js';
 import { registerUploads } from './uploads.js';
+
+/** The package version, so /healthz does not repeat a number that package.json owns. */
+const VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
 
 const PROXY_PRESETS = new Set(['loopback', 'linklocal', 'uniquelocal']);
 
@@ -57,6 +61,11 @@ export async function buildApp(options: { logger?: boolean } = {}): Promise<Fast
 
   fastify.get('/health', async () => {
     return { status: 'ok', timestamp: new Date().toISOString() };
+  });
+
+  // Standard service health shape (09 s9.1). The gateway has no schema, so no migration level.
+  fastify.get('/healthz', async () => {
+    return { service: 'gateway', version: VERSION, schemaMigration: 'none' };
   });
 
   await registerAuth(fastify);
