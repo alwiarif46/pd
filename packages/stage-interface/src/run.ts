@@ -1,7 +1,7 @@
 import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { loadSkill, type LoadSkillOptions } from './skills';
-import type { GateResult, JSONSchema, LoadedSkill, StageContext, StageHandler, StageResult } from './types';
+import type { GateResult, LoadedSkill, StageContext, StageHandler, StageResult } from './types';
 
 export interface RunStageOptions {
   /** Where to look for skills. Defaults to PD_SKILLS_DIR, then the repo's skills folder. */
