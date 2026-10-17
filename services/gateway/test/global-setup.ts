@@ -107,8 +107,11 @@ export default async function setup({ provide }: GlobalSetupContext) {
   const admin = new pg.Client({ connectionString: cluster.url });
   await admin.connect();
   await admin.query('select pg_advisory_lock($1)', [CLUSTER_LOCK]);
-  const existing = await admin.query("select 1 from pg_roles where rolname = 'pd_app'");
-  const roleExisted = (existing.rowCount ?? 0) > 0;
+  const existing = await admin.query("select rolname from pg_roles where rolname in ('pd_app', 'pd_system')");
+  const present = new Set(existing.rows.map((r: { rolname: string }) => r.rolname));
+  const roleExisted = present.has('pd_app');
+  // Only the roles this run creates are dropped at teardown.
+  const createdRoles = ['pd_app', 'pd_system'].filter((r) => !present.has(r));
   if (roleExisted && !process.env.TEST_PD_APP_PASSWORD) {
     await admin.end(); // closing the connection releases the lock
     await cluster.stop();
@@ -157,15 +160,15 @@ export default async function setup({ provide }: GlobalSetupContext) {
       await cleanup.query('select pg_advisory_lock($1)', [CLUSTER_LOCK]);
       try {
         await cleanup.query(`drop database if exists "${database}" with (force)`);
-        if (!roleExisted) {
+        if (createdRoles.length > 0 || !roleExisted) {
           // Created by this run's migration on a throwaway cluster; leave the cluster as found.
           // A statement that fails is logged, not swallowed: a role left behind makes the next run refuse.
-          for (const statement of [
-            'drop owned by pd_app, pd_system cascade',
-            'drop role if exists pd_app',
-            'drop role if exists pd_system',
-            `drop role if exists "${owner.name}"`,
-          ]) {
+          const statements = [
+            ...(createdRoles.length > 0 ? [`drop owned by ${createdRoles.join(', ')} cascade`] : []),
+            ...createdRoles.map((r) => `drop role if exists ${r}`),
+            ...(roleExisted ? [] : [`drop role if exists "${owner.name}"`]),
+          ];
+          for (const statement of statements) {
             await cleanup.query(statement).catch((error: unknown) => {
               console.warn(`[api tests] teardown: "${statement}" failed: ${error instanceof Error ? error.message : String(error)}`);
             });
