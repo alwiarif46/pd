@@ -84,11 +84,38 @@ describe.each(tsSkeletons.map((s) => [s.id, s.folder] as const))('%s skeleton', 
   });
 });
 
+/**
+ * Python routes that are in the OpenAPI file but have no handler yet, per service. The PR that writes a handler
+ * deletes its entry here and adds a pytest second-tenant test for it (CLAUDE.md rule 4).
+ */
+const PY_CONTRACT_ONLY: Record<string, string[]> = {
+  render: [
+    'GET /tools',
+    'POST /tools/{name}',
+    'POST /render',
+    'GET /render/{renderId}',
+    'POST /packages',
+    'GET /packages/{packageId}/download',
+    'GET /format-specs',
+    'GET /format-specs/{specId}',
+    'GET /fonts',
+    'GET /fonts/requests',
+    'POST /fonts/requests',
+  ],
+};
+
 describe.each(pySkeletons.map((s) => [s.id] as const))('%s skeleton (Python)', (id) => {
   // There is no TypeScript harness for a FastAPI app. Until a pytest equivalent exists (see the README),
-  // this test fails the moment the OpenAPI file gains a non-public path, so the gap cannot go unnoticed.
-  it('has no non-public endpoints, so there is nothing for a missing harness to miss', () => {
-    expect(endpointsOf(id).filter((e) => !e.public)).toEqual([]);
+  // this test fails when the OpenAPI file gains a non-public path that is not listed as contract only,
+  // so a handler without a tenant test cannot slip in.
+  it('has no non-public endpoint outside the contract-only list', () => {
+    const open = endpointsOf(id).filter((e) => !e.public).map((e) => `${e.method} ${e.path}`);
+    expect(open.filter((e) => !(PY_CONTRACT_ONLY[id] ?? []).includes(e))).toEqual([]);
+  });
+
+  it('lists only contract-only routes that still exist in the OpenAPI file', () => {
+    const all = endpointsOf(id).map((e) => `${e.method} ${e.path}`);
+    expect((PY_CONTRACT_ONLY[id] ?? []).filter((e) => !all.includes(e))).toEqual([]);
   });
 });
 
