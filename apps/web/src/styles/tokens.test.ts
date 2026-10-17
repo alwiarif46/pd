@@ -11,7 +11,7 @@ describe('tokens.css', () => {
     const layer = css.indexOf('@layer base {');
     expect(layer).toBeGreaterThanOrEqual(0);
     expect(root).toBeGreaterThan(layer);
-    expect(css.indexOf('@theme')).toBeGreaterThan(root);
+    expect(css.indexOf('@theme static')).toBeGreaterThan(root);
   });
   it('keeps the dark values under .dark', () => {
     expect(css).toMatch(/\n\s*\.dark \{/);
