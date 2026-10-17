@@ -1,25 +1,454 @@
 openapi: 3.1.0
 info:
   title: Identity and tenancy service
-  version: 0.1.0
+  version: 0.2.0
 x-service: identity
+security:
+  - bearerAuth: []
+tags:
+  - name: tenants
+    description: The tenant (organization) record.
+  - name: members
+    description: Memberships and roles.
+  - name: invites
+    description: Invites to join a tenant.
+  - name: me
+    description: The signed-in user.
+  - name: auth
+    description: OIDC code flow against Zitadel.
+  - name: internal
+    description: Private network routes and public keys.
 paths:
   /healthz:
     get:
       operationId: healthz
       summary: Liveness and schema migration level
+      security: []
       responses:
-        '200':
+        "200":
           description: The service is up.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HealthResponse'
+                $ref: "#/components/schemas/HealthResponse"
+  /tenants:
+    post:
+      operationId: createTenant
+      summary: Create the caller's tenant
+      tags:
+        - tenants
+      security:
+        - bearerAuth: []
+      description: The caller becomes its owner. A user belongs to one tenant. The tenant comes from the verified token. No tenant id is sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTenantRequest"
+      responses:
+        "201":
+          description: The tenant exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    get:
+      operationId: getTenant
+      summary: Get the caller's tenant
+      tags:
+        - tenants
+      security:
+        - bearerAuth: []
+      description: Returns the tenant, the caller's role and the plan limits that the identity service owns. The tenant comes from the verified token. No tenant id is sent.
+      responses:
+        "200":
+          description: The tenant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateTenant
+      summary: Rename the tenant
+      tags:
+        - tenants
+      security:
+        - bearerAuth: []
+      description: Owner only. The tenant comes from the verified token. No tenant id is sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTenantRequest"
+      responses:
+        "200":
+          description: Renamed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-roles:
+        - owner
+  /members:
+    get:
+      operationId: listMembers
+      summary: List the tenant's members
+      tags:
+        - members
+      security:
+        - bearerAuth: []
+      description: Members past the plan's seats carry seatLocked. The tenant comes from the verified token. No tenant id is sent.
+      responses:
+        "200":
+          description: The members, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Member"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /members/{userId}:
+    delete:
+      operationId: removeMember
+      summary: Remove a member
+      tags:
+        - members
+      security:
+        - bearerAuth: []
+      description: "The owner cannot remove themself: transfer ownership first. Emits identity.user.removed. Owner only. The tenant comes from the verified token. No tenant id is sent."
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-roles:
+        - owner
+  /invites:
+    post:
+      operationId: createInvite
+      summary: Invite a member by work email
+      tags:
+        - invites
+      security:
+        - bearerAuth: []
+      description: Holds a seat until accepted or expired (7 days). 402 when the plan has no seat left. 409 invite_pending when the email has an open invite. The code goes out of band to the invitee, never in the response. Owner only. The tenant comes from the verified token. No tenant id is sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInviteRequest"
+      responses:
+        "201":
+          description: The invite is sent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      x-roles:
+        - owner
+  /invites/accept:
+    post:
+      operationId: acceptInvite
+      summary: Accept an invite
+      tags:
+        - invites
+      security:
+        - bearerAuth: []
+      description: "The caller has a token but no tenant yet. Error codes: invite_invalid (404), invite_email_mismatch (403), invite_used, invite_expired, already_in_org, seats_full (409). A foreign or guessed code is invite_invalid. The tenant comes from the verified token. No tenant id is sent."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcceptInviteRequest"
+      responses:
+        "200":
+          description: The caller joined, or already was a member.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcceptInviteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /me:
+    get:
+      operationId: getMe
+      summary: Get the signed-in user
+      tags:
+        - me
+      security:
+        - bearerAuth: []
+      description: The tenant comes from the verified token. No tenant id is sent.
+      responses:
+        "200":
+          description: The user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      operationId: updateMe
+      summary: Change the user's name
+      tags:
+        - me
+      security:
+        - bearerAuth: []
+      description: Only the name changes here. Zitadel owns credentials, MFA factors and passkeys. The tenant comes from the verified token. No tenant id is sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMeRequest"
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /auth/login:
+    get:
+      operationId: authLogin
+      summary: Start the OIDC code flow
+      tags:
+        - auth
+      security: []
+      description: "Redirects the browser to Zitadel (authorization code with PKCE). Zitadel serves the login, MFA, passkey and SSO screens. No password reaches this service. Public: no token needed."
+      parameters:
+        - name: returnTo
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: ^/
+          description: A path in the web app to return to. Absolute URLs are refused.
+      responses:
+        "302":
+          description: Redirect to Zitadel.
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /auth/callback:
+    get:
+      operationId: authCallback
+      summary: Finish the OIDC code flow
+      tags:
+        - auth
+      security: []
+      description: "Exchanges the code for tokens, upserts the user mirror, sets the e2e_session cookie and redirects to returnTo. A wrong state is 400. Public: no token needed."
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The authorization code from Zitadel.
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The state the login step set.
+      responses:
+        "302":
+          description: Signed in. Redirect to the web app.
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              schema:
+                type: string
+              description: e2e_session, httpOnly, Secure, SameSite=Lax.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /auth/logout:
+    post:
+      operationId: authLogout
+      summary: Sign out
+      tags:
+        - auth
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: Clears the cookie and returns the Zitadel end-session URL for the browser to visit. The tenant comes from the verified token. No tenant id is sent.
+      responses:
+        "200":
+          description: Signed out here.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogoutResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /tokens/verify:
+    post:
+      operationId: verifyToken
+      summary: Verify an access token (internal)
+      tags:
+        - internal
+      security:
+        - serviceAuth: []
+      description: Private network only. The gateway calls it when it cannot check the signature itself. A bad, expired or revoked token is 401. The tenant comes from the verified token. No tenant id is sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyTokenRequest"
+      responses:
+        "200":
+          description: The token is valid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenClaims"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /.well-known/jwks.json:
+    get:
+      operationId: getJwks
+      summary: Public signing keys
+      tags:
+        - internal
+      security: []
+      description: "Services fetch these keys to verify access tokens. Public keys only. Public: no token needed."
+      responses:
+        "200":
+          description: The key set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Jwks"
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: The access token the identity service issued (signed, verified with its JWKS). It carries user_id, tenant_id and role.
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: e2e_session
+      description: "Browser sign-in: an httpOnly cookie that holds the same access token."
+    serviceAuth:
+      type: http
+      scheme: bearer
+      description: A service token. Internal routes only, on the private network.
+  responses:
+    BadRequest:
+      description: The request body or a parameter is not valid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: No valid token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PaymentRequired:
+      description: The plan or the credits do not allow this.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: The caller may not do this.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Not found. Also the answer when the id belongs to another tenant.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: The current state does not allow this.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
   schemas:
     HealthResponse:
       type: object
-      required: [service, version, schemaMigration]
+      required:
+        - service
+        - version
+        - schemaMigration
       properties:
         service:
           type: string
@@ -28,3 +457,273 @@ components:
         schemaMigration:
           type: string
           description: Name of the last applied migration for this service's schema.
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: A sentence a person can read.
+        code:
+          type: string
+          description: A stable machine code the client can branch on, such as out_of_credits.
+    Ok:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+          const: true
+    Role:
+      type: string
+      enum:
+        - owner
+        - member
+    Tenant:
+      type: object
+      required:
+        - id
+        - name
+        - plan
+        - planStatus
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        emailDomain:
+          type:
+            - string
+            - "null"
+        plan:
+          type: string
+          description: The plan id. Billing owns the plan; identity mirrors it.
+        planStatus:
+          type: string
+        cycleStart:
+          type:
+            - string
+            - "null"
+          format: date-time
+        cycleEnd:
+          type:
+            - string
+            - "null"
+          format: date-time
+        freeFirstMonthEnds:
+          type:
+            - string
+            - "null"
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    TenantView:
+      type: object
+      required:
+        - tenant
+        - role
+        - seatLimit
+      properties:
+        tenant:
+          $ref: "#/components/schemas/Tenant"
+        role:
+          $ref: "#/components/schemas/Role"
+        seatLimit:
+          type: integer
+        mbCap:
+          type: integer
+          description: Largest upload for the plan, in megabytes.
+    CreateTenantRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+    UpdateTenantRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+    Member:
+      type: object
+      required:
+        - userId
+        - email
+        - role
+        - joinedAt
+        - isYou
+        - seatLocked
+      properties:
+        orgId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        name:
+          type:
+            - string
+            - "null"
+        email:
+          type: string
+          format: email
+        role:
+          $ref: "#/components/schemas/Role"
+        joinedAt:
+          type: string
+          format: date-time
+        isYou:
+          type: boolean
+        seatLocked:
+          type: boolean
+      description: orgId is the tenant id.
+    CreateInviteRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+          description: A work address. Free mail domains are refused.
+    AcceptInviteRequest:
+      type: object
+      required:
+        - code
+      properties:
+        code:
+          type: string
+          description: '"<tenantId>.<64 hex token>".'
+    AcceptInviteResponse:
+      type: object
+      required:
+        - orgId
+        - name
+        - role
+        - alreadyMember
+      properties:
+        orgId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+        alreadyMember:
+          type: boolean
+    Me:
+      type: object
+      required:
+        - id
+        - email
+        - name
+        - orgId
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type:
+            - string
+            - "null"
+        orgId:
+          type:
+            - string
+            - "null"
+          format: uuid
+          description: The tenant id, or null before the user has a tenant.
+        role:
+          anyOf:
+            - $ref: "#/components/schemas/Role"
+            - type: "null"
+    UpdateMeRequest:
+      type: object
+      required: []
+      properties:
+        name:
+          type: string
+    LogoutResponse:
+      type: object
+      required:
+        - endSessionUrl
+      properties:
+        endSessionUrl:
+          type: string
+          format: uri
+    VerifyTokenRequest:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+    TokenClaims:
+      type: object
+      required:
+        - userId
+        - tenantId
+        - role
+        - seatLocked
+        - expiresAt
+      properties:
+        userId:
+          type: string
+          format: uuid
+        tenantId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        role:
+          anyOf:
+            - $ref: "#/components/schemas/Role"
+            - type: "null"
+        seatLocked:
+          type: boolean
+          description: True when the plan has no seat for this member.
+        expiresAt:
+          type: string
+          format: date-time
+    Jwks:
+      type: object
+      required:
+        - keys
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            required:
+              - kty
+              - kid
+            properties:
+              kty:
+                type: string
+              kid:
+                type: string
+              use:
+                type: string
+              alg:
+                type: string
+              n:
+                type: string
+              e:
+                type: string
+            additionalProperties: true
