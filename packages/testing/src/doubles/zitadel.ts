@@ -6,7 +6,10 @@ import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import type { MockOidc } from './oidc.js';
+import { DEFAULT_ORG_ID, ZITADEL_API_AUDIENCE, type MockOidc } from './oidc.js';
+
+/** Header that carries the event signature. The real name is "verify in CI". */
+export const ZITADEL_SIGNATURE_HEADER = 'X-ZITADEL-Signature';
 
 export interface ZitadelOrg {
   id: string;
@@ -139,7 +142,7 @@ export async function startMockZitadel(options: MockZitadelOptions = {}): Promis
     loginIdps: [],
     executions: new Map(),
     addUser(u) {
-      const user: ZitadelUser = { orgId: 'default-org', email: `${u.id}@example.test`, name: u.id, emailVerified: true, state: 'active', ...u };
+      const user: ZitadelUser = { orgId: DEFAULT_ORG_ID, email: `${u.id}@example.test`, name: u.id, emailVerified: true, state: 'active', ...u };
       z.users.set(user.id, user);
       return user;
     },
@@ -178,7 +181,7 @@ export async function startMockZitadel(options: MockZitadelOptions = {}): Promis
     const m = /^Bearer (.+)$/.exec(String(req.headers.authorization ?? ''));
     if (!m || !jwks || !options.oidc) return undefined;
     try {
-      const { payload } = await jwtVerify(m[1] as string, jwks, { issuer: options.oidc.issuer });
+      const { payload } = await jwtVerify(m[1] as string, jwks, { issuer: options.oidc.issuer, audience: ZITADEL_API_AUDIENCE });
       return payload.sub ?? null;
     } catch {
       return null;
@@ -193,10 +196,11 @@ export async function startMockZitadel(options: MockZitadelOptions = {}): Promis
     if (method === 'POST' && path === '/v2/organizations') {
       const name = str(body.name);
       if (!name) return fail(400, 3, 'name is required');
-      const id = str(body.organization_id ?? body.organizationId) || String(randomBytes(9).readBigUInt64BE() % 10n ** 18n);
+      // organization_id wins; org_id and orgId are the deprecated spellings
+      const id = str(body.organization_id) || str(body.org_id) || str(body.orgId) || String(randomBytes(9).readBigUInt64BE() % 10n ** 18n);
       if (z.orgs.has(id)) return fail(409, 6, `organization ${id} already exists`);
       z.orgs.set(id, { id, name });
-      return reply(201, { organization_id: id, organizationId: id, created_date: new Date().toISOString() });
+      return reply(201, { details: { sequence: '1', changeDate: new Date().toISOString(), resourceOwner: id }, organizationId: id, createdAdmins: [] });
     }
 
     const userAction = /^\/v2\/users\/([^/]+)(?:\/(deactivate|reactivate))?$/.exec(path);
@@ -215,7 +219,10 @@ export async function startMockZitadel(options: MockZitadelOptions = {}): Promis
         });
       }
       if (method === 'POST' && userAction[2]) {
-        user.state = userAction[2] === 'deactivate' ? 'inactive' : 'active'; // idempotent here; the real API may differ (verify in CI)
+        // Like Zitadel: a repeat is a failed precondition (gRPC code 9), not a no-op.
+        const wanted = userAction[2] === 'deactivate' ? 'inactive' : 'active';
+        if (user.state === wanted) return fail(400, 9, `user is already ${wanted === 'inactive' ? 'deactivated' : 'active'}`);
+        user.state = wanted;
         return reply(200, details());
       }
     }
@@ -263,6 +270,8 @@ export async function startMockZitadel(options: MockZitadelOptions = {}): Promis
     }
     const idpKind = /^\/admin\/v1\/idps\/(google|azure)$/.exec(path);
     if (method === 'POST' && idpKind) {
+      const name = str(body.name);
+      if (name && [...z.idps.values()].some((i) => i.body.name === name)) return fail(409, 6, 'idp name already exists');
       const id = randomUUID();
       z.idps.set(id, { id, kind: idpKind[1] as 'google' | 'azure', body });
       return reply(200, { id, ...details() });
@@ -278,10 +287,17 @@ export async function startMockZitadel(options: MockZitadelOptions = {}): Promis
     if (method === 'POST' && path === '/v2/actions/targets') {
       const name = str(body.name);
       if (!name) return fail(400, 3, 'name is required');
+      if ([...z.targets.values()].some((t) => t.body.name === name)) return fail(409, 6, 'target name already exists');
       const id = randomUUID();
       const signingKey = randomBytes(24).toString('base64url');
       z.targets.set(id, { id, body, signingKey });
-      return reply(201, { id, creationDate: new Date().toISOString(), signingKey });
+      return reply(200, { id, creationDate: new Date().toISOString(), signingKey });
+    }
+    if (method === 'POST' && path === '/v2/actions/targets/search') {
+      const filters = Array.isArray(body.filters) ? (body.filters as Array<{ targetNameFilter?: { targetName?: string } }>) : [];
+      const names = filters.map((f) => f.targetNameFilter?.targetName).filter((n): n is string => typeof n === 'string');
+      const result = [...z.targets.values()].filter((t) => names.length === 0 || names.includes(str(t.body.name))).map((t) => ({ id: t.id, name: t.body.name, endpoint: t.body.endpoint }));
+      return reply(200, { result });
     }
     if (method === 'PUT' && path === '/v2/actions/executions') {
       const ids = Array.isArray(body.targets) ? (body.targets as unknown[]).map(String) : [];
@@ -332,7 +348,7 @@ export async function startMockZitadel(options: MockZitadelOptions = {}): Promis
 }
 
 /**
- * Signs a Zitadel Actions v2 webhook body: `t=<unix>,v1=<hex hmac-sha256 of "t.body">`.
+ * Signs a Zitadel Actions v2 webhook body: `t=<unix>,v1=<hex hmac-sha256 of "t.body">`, for the `ZITADEL_SIGNATURE_HEADER` header.
  * This follows the design note. The real header format is "verify in CI" against the CI Zitadel.
  */
 export function signZitadelEvent(body: string, signingKey: string, now: number = Math.floor(Date.now() / 1000)): string {
@@ -347,16 +363,25 @@ export interface VerifyZitadelEventOptions {
   now?: number;
 }
 
-/** Checks the header from `signZitadelEvent` with a constant-time compare and a timestamp window. */
+/**
+ * Checks the header from `signZitadelEvent` with a constant-time compare and a timestamp window. A reference for tests
+ * only: the identity service writes its own verifier. A header with two `t` parts is refused. With several `v1`
+ * parts, any one that matches passes (key rotation).
+ */
 export function verifyZitadelEvent(body: string, header: string | undefined, signingKey: string, opts: VerifyZitadelEventOptions = {}): boolean {
   if (!header) return false;
-  const parts = Object.fromEntries(header.split(',').map((p) => [p.slice(0, p.indexOf('=')).trim(), p.slice(p.indexOf('=') + 1).trim()]));
-  const t = Number(parts.t);
-  const v1 = parts.v1;
-  if (!Number.isInteger(t) || !v1 || !/^[0-9a-f]+$/i.test(v1)) return false;
+  const pairs = header.split(',').map((p) => [p.slice(0, p.indexOf('=')).trim(), p.slice(p.indexOf('=') + 1).trim()] as const);
+  const ts = pairs.filter(([k]) => k === 't').map(([, v]) => v);
+  const sigs = pairs.filter(([k]) => k === 'v1').map(([, v]) => v);
+  if (ts.length !== 1 || sigs.length === 0) return false;
+  const t = Number(ts[0]);
+  if (!Number.isInteger(t)) return false;
   const now = opts.now ?? Math.floor(Date.now() / 1000);
   if (Math.abs(now - t) > (opts.toleranceSeconds ?? 300)) return false;
   const expected = createHmac('sha256', signingKey).update(`${t}.${body}`).digest();
-  const given = Buffer.from(v1, 'hex');
-  return given.length === expected.length && timingSafeEqual(given, expected);
+  return sigs.some((v1) => {
+    if (!/^[0-9a-f]+$/i.test(v1)) return false;
+    const given = Buffer.from(v1, 'hex');
+    return given.length === expected.length && timingSafeEqual(given, expected);
+  });
 }

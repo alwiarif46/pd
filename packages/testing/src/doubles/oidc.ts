@@ -5,7 +5,7 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { SignJWT, decodeJwt, exportJWK, generateKeyPair, importJWK, jwtVerify, type JWK } from 'jose';
+import { SignJWT, decodeJwt, decodeProtectedHeader, exportJWK, generateKeyPair, importJWK, jwtVerify, type JWK } from 'jose';
 import { TENANT_A, TENANT_B, type TenantFixture } from '../fixtures.js';
 
 export interface MockOidcUser {
@@ -44,10 +44,12 @@ export interface MockOidcOptions {
   orgId?: string;
   /** Makes every /token call fail with this OAuth error. Change it later with `setTokenError`. */
   tokenError?: MockOidcTokenError;
-  /** Public keys the jwt-bearer grant accepts, by assertion issuer (the machine user id). Add more with `registerServiceKey`. */
+  /** Public keys (each with a `kid`) the jwt-bearer grant accepts, by assertion issuer (the machine user id). Add more with `registerServiceKey`. */
   serviceKeys?: Record<string, JWK>;
   /** When true, `prompt=none` succeeds without a session cookie. Default false. Change it later with `setLoggedIn`. */
   loggedIn?: boolean;
+  /** When true, the id_token carries email, email_verified and name. Default false (Zitadel puts them in /userinfo). */
+  idTokenUserinfo?: boolean;
 }
 
 export interface MockOidc {
@@ -63,6 +65,14 @@ export interface MockOidc {
   setLoggedIn(loggedIn: boolean): void;
   close(): Promise<void>;
 }
+
+/** Scope that asks for the resource owner claim. */
+export const RESOURCE_OWNER_SCOPE = 'urn:zitadel:iam:user:resourceowner';
+/** A jwt-bearer token gets the `zitadel` audience only when its scope holds this. The admin fake requires that audience. */
+export const ZITADEL_API_SCOPE = 'urn:zitadel:iam:org:project:id:zitadel:aud';
+export const ZITADEL_API_AUDIENCE = 'zitadel';
+/** How far in the future an assertion's `iat` may be, in seconds. */
+const IAT_SKEW_SECONDS = 5;
 
 export const JWT_BEARER_GRANT = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
 /** The claim Zitadel uses for the user's resource owner (organization) in its tokens. */
@@ -131,12 +141,14 @@ export function fixtureUser(t: TenantFixture): MockOidcUser {
 
 interface AccessGrant {
   user: MockOidcUser;
+  scope: string;
   expires: number;
 }
 interface CodeGrant {
   user: MockOidcUser;
   clientId: string;
   redirectUri: string;
+  scope: string;
   nonce?: string;
   challenge?: string;
   expires: number;
@@ -144,9 +156,19 @@ interface CodeGrant {
 interface RefreshGrant {
   user: MockOidcUser;
   clientId: string;
+  scope: string;
 }
 
+/** Deprecated: Zitadel does not send this claim. Kept for old tests. Use `RESOURCE_OWNER_CLAIM` with `RESOURCE_OWNER_SCOPE`. */
 export const ORG_CLAIM = 'urn:zitadel:iss:org:id';
+
+const ENDPOINT_ALIASES: Record<string, string> = {
+  '/oauth/v2/authorize': '/authorize',
+  '/oauth/v2/token': '/token',
+  '/oidc/v1/userinfo': '/userinfo',
+  '/oidc/v1/end_session': '/end_session',
+  '/oauth/v2/keys': '/jwks',
+};
 
 function cookieOf(req: IncomingMessage, name: string): string | undefined {
   for (const part of String(req.headers.cookie ?? '').split(';')) {
@@ -192,7 +214,14 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
 
   let tokenError = options.tokenError;
   let loggedIn = options.loggedIn ?? false;
-  const serviceKeys = new Map<string, JWK>(Object.entries(options.serviceKeys ?? {}));
+  const serviceKeys = new Map<string, Map<string, JWK>>();
+  const addServiceKey = (userId: string, key: JWK): void => {
+    if (!key.kid) throw new Error('a service key needs a kid');
+    const keys = serviceKeys.get(userId) ?? new Map<string, JWK>();
+    keys.set(key.kid, key);
+    serviceKeys.set(userId, keys);
+  };
+  for (const [userId, key] of Object.entries(options.serviceKeys ?? {})) addServiceKey(userId, key);
   const codes = new Map<string, CodeGrant>();
   const refreshTokens = new Map<string, RefreshGrant>();
   const accessTokens = new Map<string, AccessGrant>();
@@ -216,26 +245,29 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
     for (const [k, g] of accessTokens) if (g.expires < now) accessTokens.delete(k);
   }
 
-  function claimsOf(user: MockOidcUser): Record<string, unknown> {
+  /** Claims every token carries. The resource owner claim needs its scope. */
+  function claimsOf(user: MockOidcUser, scope: string): Record<string, unknown> {
     const org = options.orgId ?? user.tenantId ?? DEFAULT_ORG_ID;
     return {
-      email: user.email,
-      email_verified: user.emailVerified ?? true,
-      name: user.name,
       amr: user.amr ?? ['pwd'],
       [ORG_CLAIM]: org,
-      [RESOURCE_OWNER_CLAIM]: org,
+      ...(scope.split(' ').includes(RESOURCE_OWNER_SCOPE) ? { [RESOURCE_OWNER_CLAIM]: org } : {}),
     };
   }
 
+  function profileOf(user: MockOidcUser): Record<string, unknown> {
+    return { email: user.email, email_verified: user.emailVerified ?? true, name: user.name };
+  }
+
   async function tokensFor(user: MockOidcUser, clientId: string, nonce: string | undefined, scope: string): Promise<Record<string, unknown>> {
-    const common = claimsOf(user);
-    const idToken = await sign(privateKey, { ...common, ...(nonce ? { nonce } : {}) }, clientId, user.sub);
+    const common = claimsOf(user, scope);
+    const idClaims = { ...common, ...(options.idTokenUserinfo ? profileOf(user) : {}), ...(nonce ? { nonce } : {}) };
+    const idToken = await sign(privateKey, idClaims, clientId, user.sub);
     const accessToken = await sign(privateKey, { ...common, scope }, clientId, user.sub);
     const refreshToken = randomBytes(24).toString('base64url');
     sweep();
-    accessTokens.set(accessToken, { user, expires: Date.now() + ttl * 1000 });
-    refreshTokens.set(refreshToken, { user, clientId });
+    accessTokens.set(accessToken, { user, scope, expires: Date.now() + ttl * 1000 });
+    refreshTokens.set(refreshToken, { user, clientId, scope });
     return { access_token: accessToken, token_type: 'Bearer', expires_in: ttl, id_token: idToken, refresh_token: refreshToken, scope };
   }
 
@@ -245,23 +277,23 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', issuer || 'http://localhost');
-    const path = url.pathname;
+    const path = ENDPOINT_ALIASES[url.pathname] ?? url.pathname;
 
     if (req.method === 'GET' && path === '/.well-known/openid-configuration') {
       return json(res, 200, {
         issuer,
-        authorization_endpoint: `${issuer}/authorize`,
-        token_endpoint: `${issuer}/token`,
-        userinfo_endpoint: `${issuer}/userinfo`,
-        end_session_endpoint: `${issuer}/end_session`,
-        jwks_uri: `${issuer}/jwks`,
+        authorization_endpoint: `${issuer}/oauth/v2/authorize`,
+        token_endpoint: `${issuer}/oauth/v2/token`,
+        userinfo_endpoint: `${issuer}/oidc/v1/userinfo`,
+        end_session_endpoint: `${issuer}/oidc/v1/end_session`,
+        jwks_uri: `${issuer}/oauth/v2/keys`,
         response_types_supported: ['code'],
         grant_types_supported: ['authorization_code', 'refresh_token', JWT_BEARER_GRANT],
         subject_types_supported: ['public'],
         id_token_signing_alg_values_supported: ['RS256'],
         code_challenge_methods_supported: ['S256'],
         token_endpoint_auth_methods_supported: ['none', 'client_secret_post', 'client_secret_basic'],
-        scopes_supported: ['openid', 'profile', 'email', 'offline_access'],
+        scopes_supported: ['openid', 'profile', 'email', 'offline_access', RESOURCE_OWNER_SCOPE],
         claims_supported: ['sub', 'iss', 'aud', 'exp', 'iat', 'nonce', 'email', 'email_verified', 'name', 'amr', ORG_CLAIM, RESOURCE_OWNER_CLAIM],
       });
     }
@@ -274,9 +306,10 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
       const clientId = q.get('client_id') ?? '';
       if (!redirectUri) return oauthError(res, 400, 'invalid_request', 'redirect_uri is required');
       if (options.clientId && clientId !== options.clientId) return oauthError(res, 400, 'unauthorized_client', 'unknown client_id');
-      const sessionKey = cookieOf(req, SESSION_COOKIE);
+      const cookieKey = cookieOf(req, SESSION_COOKIE);
+      const sessionKey = cookieKey && users[cookieKey] ? cookieKey : undefined;
       const hinted = Object.keys(users).find((k) => users[k]?.email === q.get('login_hint'));
-      const userKey = q.get('user') ?? hinted ?? (sessionKey && users[sessionKey] ? sessionKey : defaultUser);
+      const userKey = q.get('user') ?? hinted ?? sessionKey ?? defaultUser;
       const user = users[userKey];
       if (!user) return oauthError(res, 400, 'invalid_request', `unknown user ${userKey}`);
       const back = new URL(redirectUri);
@@ -299,6 +332,7 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
         user,
         clientId,
         redirectUri,
+        scope: q.get('scope') ?? 'openid',
         ...(q.get('nonce') ? { nonce: q.get('nonce') as string } : {}),
         ...(q.get('code_challenge') ? { challenge: q.get('code_challenge') as string } : {}),
         expires: Date.now() + 60_000,
@@ -339,33 +373,40 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
           const verifier = form.get('code_verifier');
           if (!verifier || s256(verifier) !== g.challenge) return oauthError(res, 400, 'invalid_grant', 'PKCE verification failed');
         }
-        return json(res, 200, await tokensFor(g.user, g.clientId || clientId, g.nonce, 'openid profile email offline_access'));
+        return json(res, 200, await tokensFor(g.user, g.clientId || clientId, g.nonce, g.scope));
       }
       if (grant === 'refresh_token') {
         const token = form.get('refresh_token') ?? '';
         const g = refreshTokens.get(token);
         if (!g) return oauthError(res, 400, 'invalid_grant', 'unknown refresh token');
         refreshTokens.delete(token); // rotate
-        return json(res, 200, await tokensFor(g.user, g.clientId, undefined, 'openid profile email offline_access'));
+        return json(res, 200, await tokensFor(g.user, g.clientId, undefined, g.scope));
       }
       if (grant === JWT_BEARER_GRANT) {
         const assertion = form.get('assertion');
         if (!assertion) return oauthError(res, 400, 'invalid_request', 'assertion is required');
         let iss: string | undefined;
+        let kidOfAssertion: string | undefined;
         try {
           iss = decodeJwt(assertion).iss;
+          kidOfAssertion = decodeProtectedHeader(assertion).kid;
         } catch {
           return oauthError(res, 400, 'invalid_grant', 'assertion is not a JWT');
         }
-        const registered = iss ? serviceKeys.get(iss) : undefined;
-        if (!iss || !registered) return oauthError(res, 400, 'invalid_grant', 'no key is registered for the assertion issuer');
+        if (!kidOfAssertion) return oauthError(res, 400, 'invalid_grant', 'assertion header has no kid');
+        const registered = iss ? serviceKeys.get(iss)?.get(kidOfAssertion) : undefined;
+        if (!iss || !registered) return oauthError(res, 400, 'invalid_grant', 'no key is registered for the assertion issuer and kid');
+        let claims;
         try {
-          await jwtVerify(assertion, await importJWK(registered, 'RS256'), { issuer: iss, audience: issuer, algorithms: ['RS256'], requiredClaims: ['exp', 'iat'] });
+          claims = (await jwtVerify(assertion, await importJWK(registered, 'RS256'), { issuer: iss, audience: issuer, algorithms: ['RS256'], requiredClaims: ['exp', 'iat'] })).payload;
         } catch (err) {
           return oauthError(res, 400, 'invalid_grant', `assertion rejected: ${(err as Error).message}`);
         }
+        if (claims.sub !== iss) return oauthError(res, 400, 'invalid_grant', 'assertion sub must equal iss');
+        if ((claims.iat as number) > Math.floor(Date.now() / 1000) + IAT_SKEW_SECONDS) return oauthError(res, 400, 'invalid_grant', 'assertion iat is in the future');
         const scope = form.get('scope') ?? 'openid';
-        const accessToken = await sign(privateKey, { scope }, issuer, iss);
+        const aud = scope.split(' ').includes(ZITADEL_API_SCOPE) ? ZITADEL_API_AUDIENCE : issuer;
+        const accessToken = await sign(privateKey, { scope }, aud, iss);
         return json(res, 200, { access_token: accessToken, token_type: 'Bearer', expires_in: ttl, scope });
       }
       return oauthError(res, 400, 'unsupported_grant_type', `grant_type ${grant ?? '(none)'} is not supported`);
@@ -379,7 +420,7 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
         res.setHeader('www-authenticate', 'Bearer error="invalid_token"');
         return oauthError(res, 401, 'invalid_token', 'missing or unknown access token');
       }
-      return json(res, 200, { sub: user.sub, ...claimsOf(user) });
+      return json(res, 200, { sub: user.sub, ...profileOf(user), ...claimsOf(user, grant?.scope ?? 'openid') });
     }
 
     json(res, 404, { error: 'not_found' });
@@ -401,13 +442,13 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
   return {
     url: issuer,
     issuer,
-    jwksUrl: `${issuer}/jwks`,
+    jwksUrl: `${issuer}/oauth/v2/keys`,
     port,
     setTokenError: (e) => {
       tokenError = e;
     },
     registerServiceKey: (userId, publicJwk) => {
-      serviceKeys.set(userId, publicJwk);
+      addServiceKey(userId, publicJwk);
     },
     setLoggedIn: (v) => {
       loggedIn = v;
