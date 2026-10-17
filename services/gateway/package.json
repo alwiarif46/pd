@@ -3,13 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "files": ["dist"],
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
-    "lint": "eslint src test scripts --max-warnings 0",
+    "lint": "eslint src test scripts vitest.config.ts --max-warnings 0",
     "clean": "rm -rf dist"
   },
   "dependencies": {

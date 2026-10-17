@@ -1,0 +1,9 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "build": { "inputs": ["$TURBO_DEFAULT$", "!web/**"] },
+    "lint": { "inputs": ["$TURBO_DEFAULT$", "!web/**"] },
+    "typecheck": { "inputs": ["$TURBO_DEFAULT$", "!web/**"] },
+    "test": { "inputs": ["$TURBO_DEFAULT$", "!web/**"] }
+  }
+}
