@@ -13,7 +13,7 @@ services:
   web:
     build:
       context: ..
-      dockerfile: apps/web/Dockerfile
+      dockerfile: services/gateway/web/Dockerfile
     image: ${PD_IMAGE_PREFIX:-pd-}web:${PD_IMAGE_TAG:-latest}
     restart: unless-stopped
     # Static build served by nginx, not a running container
@@ -21,7 +21,7 @@ services:
   api:
     build:
       context: ..
-      dockerfile: apps/api/Dockerfile
+      dockerfile: services/gateway/Dockerfile
       target: runtime
     image: ${PD_IMAGE_PREFIX:-pd-}api:${PD_IMAGE_TAG:-latest}
     restart: unless-stopped
@@ -51,7 +51,7 @@ services:
     profiles: ['tools']
     build:
       context: ..
-      dockerfile: apps/api/Dockerfile
+      dockerfile: services/gateway/Dockerfile
       target: migrate
     image: ${PD_IMAGE_PREFIX:-pd-}migrate:${PD_IMAGE_TAG:-latest}
     depends_on:
@@ -62,7 +62,7 @@ services:
   worker:
     build:
       context: ..
-      dockerfile: apps/worker/Dockerfile
+      dockerfile: services/worker/Dockerfile
     image: ${PD_IMAGE_PREFIX:-pd-}worker:${PD_IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
@@ -85,7 +85,7 @@ services:
   sandbox:
     build:
       context: ..
-      dockerfile: apps/sandbox/Dockerfile
+      dockerfile: services/ingest/sandbox/Dockerfile
     image: ${PD_IMAGE_PREFIX:-pd-}sandbox:${PD_IMAGE_TAG:-latest}
     profiles: ['tools'] # started on demand by the sandbox runner (docker compose run), not by up
     network_mode: none

@@ -4,14 +4,16 @@
   "private": true,
   "description": "Proposal Development Tool for government contractors",
   "workspaces": [
-    "apps/*",
+    "services/*",
+    "services/gateway/web",
+    "services/ingest/sandbox",
     "packages/*",
     "evals"
   ],
   "scripts": {
     "dev": "turbo run dev",
-    "dev:db": "tsx apps/api/scripts/dev-db.ts",
-    "dev:api": "tsx apps/api/scripts/dev-api.ts",
+    "dev:db": "tsx services/gateway/scripts/dev-db.ts",
+    "dev:api": "tsx services/gateway/scripts/dev-api.ts",
     "build": "turbo run build",
     "test": "turbo run test",
     "test:infra": "bash infra/tests/run-tests.sh && bash ops/tests/run-tests.sh",

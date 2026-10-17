@@ -23,20 +23,19 @@ This tool helps contractors:
 ## Project Structure
 
 ```
-pd/
-├── apps/
-│   ├── web/          React frontend
-│   ├── api/          Fastify API server
-│   ├── worker/       BullMQ background workers
-│   └── sandbox/      File processing container
-├── packages/
-│   ├── core/         Shared types and utilities
-│   └── ai/           AI provider layer
-├── skills/           AI skill instructions
-├── evals/            Model evaluation harness
-├── infra/            Docker Compose, nginx configs
-├── design/v0/        v0 drop folder (not built)
-└── docs/plans/       Project plans (only copy)
+services/
+├── gateway/          Fastify API (PD's API for now); web/ is the React app
+├── worker/           BullMQ workers (split into ingest, intel and billing in chat 2)
+└── ingest/sandbox/   File processing container
+python/               uv workspace (render, portal-agent): skeletons in chat 1 PR 9
+packages/
+├── core/             Tenancy, credits, seats, schema
+└── ai/               AI provider layer and pipeline
+skills/               Skill instructions (mostly out of git)
+evals/                Test harness and fixtures
+infra/                Compose, hosting adapters, backups, tests
+design/               v0 (PD) and e2e (Atrium) reference, not built
+docs/plans/           Product plans (only copy); docs/build/ has the build plan
 ```
 
 ## Development

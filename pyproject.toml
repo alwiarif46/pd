@@ -1,0 +1,12 @@
+[project]
+name = "e2e-workspace"
+version = "0.0.0"
+description = "uv workspace root for the E2E Proposal Python services (render, portal-agent). No code here."
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["python/*"]
