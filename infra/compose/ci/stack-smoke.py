@@ -233,11 +233,18 @@ def check_postgres():
     ok("the e2e and zitadel databases exist")
 
 
+def schemas_sql(expected):
+    """The query behind check_schemas. Its own function so a test can pin the exact text (an operator-precedence slip
+    here once produced `any(array[') order by 1app',...` in the first CI run)."""
+    names = ",".join("'" + name + "'" for name in expected)
+    return f"select nspname from pg_namespace where nspname = any(array[{names}]) order by 1"
+
+
 def check_schemas():
     services = json.loads((Path(__file__).resolve().parents[3] / "packages" / "contracts" / "services.json").read_text())
     expected = sorted(["app"] + [svc["schema"] for svc in services if svc.get("schema")])
     out = compose("exec", "-T", "postgres", "psql", "-U", env("POSTGRES_USER", "postgres"), "-d", env("E2E_DB_NAME", "e2e"),
-                  "-Atc", "select nspname from pg_namespace where nspname = any(%s) order by 1" % "array['" + "','".join(expected) + "']")
+                  "-Atc", schemas_sql(expected))
     found = out.split()
     require(found == expected, f"schemas after pnpm migrate: expected {expected}, found {found}")
     ok(f"all {len(expected)} schemas exist in the e2e database")

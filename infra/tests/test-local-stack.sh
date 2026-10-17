@@ -16,6 +16,17 @@ YML="infra/compose/local.yml"
 ENVF="infra/compose/local.env.example"
 NS="infra/local/native-stack.sh"
 
+# ------------------------------------------------------------------ CI smoke script
+o="$(python3 - <<'PY' 2>&1
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("stack_smoke", "infra/compose/ci/stack-smoke.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(m.schemas_sql(["app", "billing", "review"]))
+PY
+)"
+[ "$o" = "select nspname from pg_namespace where nspname = any(array['app','billing','review']) order by 1" ] \
+  && ok "stack-smoke: the schemas query is well formed" || bad "stack-smoke schemas query" "$o"
+
 # ------------------------------------------------------------------ compose file
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   o="$(docker compose -f "$YML" --env-file "$ENVF" config -q 2>&1)" && ok "docker compose config -q accepts local.yml with local.env.example" || bad "compose config" "$o"
