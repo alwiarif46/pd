@@ -30,8 +30,8 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 | 7 Restructure | e2e/c1-07-restructure | merged (#51, by owner) | Fable: no majors. Minor fixes follow in 7b |
 | 7b Review fixes | e2e/c1-07b-restructure-fixes | merged (#55) | |
 | 8 Contracts | e2e/c1-08-contracts | merged (#56) | opus: 2 majors fixed and re-reviewed, minors fixed |
-| 9 Skeletons | e2e/c1-09-skeletons | in review | fable-reviewer: schema roles |
-| 10 Testing | e2e/c1-10-testing | planned | |
+| 9 Skeletons | e2e/c1-09-skeletons | merged (#57) | Fable: no majors; 11 minors fixed incl. a racy test guard found on a fresh cluster |
+| 10 Testing | e2e/c1-10-testing | in review | fable-reviewer: cross-tenant tests |
 | 11 Local stack | e2e/c1-11-stack | planned | |
 | 12 CI | e2e/c1-12-ci | planned | |
 | 13 Rename notice | - | planned | |
@@ -40,4 +40,8 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 See `docs/build/questions.md`, Chat 1.
 
 ## Stubs
-None yet.
+- Stub skills in `packages/testing/skills/` (`stub-shred`, `stub-compliance-matrix`, `stub-bid-summary`). Waits on: the owner supplying real skills through `PD_SKILLS_DIR` (BUILD-PLAN decision log 17 Oct). Blocks: any "real skill" check, in chats 3 to 6.
+- Local Postgres: real PG 16 run as user `pgrun` on port 54329 (no pgvector). pgvector checks wait for the CI Compose stack (PR 11/12).
+
+## Local environment notes
+- No Docker daemon. Native Postgres: `runuser -u pgrun -- /usr/lib/postgresql/16/bin/pg_ctl -D /home/pgrun/pg/data -o "-p 54329 -c listen_addresses=127.0.0.1 -k /tmp" start`. A second fresh cluster on 54330 (`/home/pgrun/pg2`) is reset to check fresh-cluster behavior.

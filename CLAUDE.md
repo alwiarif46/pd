@@ -9,7 +9,7 @@ One monorepo (renamed from PD). TypeScript services under `services/` (pnpm and 
 4. **`tenant_id` on every query.** Every query runs inside `withTenant`. A query without it fails review. Tests cover a second tenant on every endpoint.
 5. **No cross-service database access.** A service reads only its own schema. It gets other data through an API call or an event.
 6. **Tests and typecheck before commit.** Run the service's tests, `pnpm typecheck`, `pnpm lint`, and the contract tests. Python runs `uv run pytest` and the type checker.
-7. **Skills load through the stage interface.** No service reads a SKILL.md file directly. The stage interface loads it and records its version. Skills are not in git (the two tracked PD skills stay until chat 2); tests use the stubs in `packages/stage-interface/test/fixtures/skills/` until PR 10 adds `packages/testing/skills/`. `packages/contracts` and `packages/testing` arrive in chat 1 PRs 8 and 10.
+7. **Skills load through the stage interface.** No service reads a SKILL.md file directly. The stage interface loads it and records its version. Skills are not in git (the two tracked PD skills stay until chat 2); tests use the stubs in `packages/testing/skills/` (`stub-shred`, `stub-compliance-matrix`, `stub-bid-summary`; `withStubSkills()` points `PD_SKILLS_DIR` at them). `packages/stage-interface` keeps its own fixtures for its own tests.
 8. **No PD side copy.** PD's code lives in this repo only. Nothing keeps a copy in sync, and no parity check runs.
 9. **Writing rules.** No em dashes. Sentences of 30 words or fewer, varied in length. Active voice.
 10. **Secrets.** None in git. Keys live only in the model gateway's environment.
