@@ -29,6 +29,9 @@ importers:
       prettier:
         specifier: 3.9.10
         version: 3.9.10
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
       turbo:
         specifier: ^2.0.0
         version: 2.11.8
@@ -130,6 +133,34 @@ importers:
         specifier: 2.1.9
         version: 2.1.9(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
 
+  packages/service-kit:
+    dependencies:
+      fastify:
+        specifier: ^5.0.0
+        version: 5.12.7
+      pg:
+        specifier: ^8.12.0
+        version: 8.23.1
+    devDependencies:
+      '@pd/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@types/node':
+        specifier: '22'
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.23.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
+
   packages/stage-interface:
     dependencies:
       ajv:
@@ -142,6 +173,146 @@ importers:
       '@types/node':
         specifier: '22'
         version: 22.20.5
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
+
+  services/billing:
+    dependencies:
+      '@pd/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      fastify:
+        specifier: ^5.0.0
+        version: 5.12.7
+      pg:
+        specifier: ^8.12.0
+        version: 8.23.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.23.1
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
+
+  services/comms:
+    dependencies:
+      '@pd/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      fastify:
+        specifier: ^5.0.0
+        version: 5.12.7
+      pg:
+        specifier: ^8.12.0
+        version: 8.23.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.23.1
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
+
+  services/drafting:
+    dependencies:
+      '@pd/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      fastify:
+        specifier: ^5.0.0
+        version: 5.12.7
+      pg:
+        specifier: ^8.12.0
+        version: 8.23.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.23.1
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
+
+  services/drive:
+    dependencies:
+      '@pd/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      fastify:
+        specifier: ^5.0.0
+        version: 5.12.7
+      pg:
+        specifier: ^8.12.0
+        version: 8.23.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.23.1
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
+
+  services/evidence:
+    dependencies:
+      '@pd/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      fastify:
+        specifier: ^5.0.0
+        version: 5.12.7
+      pg:
+        specifier: ^8.12.0
+        version: 8.23.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.23.1
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -274,6 +445,62 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
 
+  services/identity:
+    dependencies:
+      '@pd/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      fastify:
+        specifier: ^5.0.0
+        version: 5.12.7
+      pg:
+        specifier: ^8.12.0
+        version: 8.23.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.23.1
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
+
+  services/ingest:
+    dependencies:
+      '@pd/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      fastify:
+        specifier: ^5.0.0
+        version: 5.12.7
+      pg:
+        specifier: ^8.12.0
+        version: 8.23.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.23.1
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
+
   services/ingest/sandbox:
     dependencies:
       mammoth:
@@ -289,6 +516,146 @@ importers:
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
+
+  services/intel:
+    dependencies:
+      '@pd/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      fastify:
+        specifier: ^5.0.0
+        version: 5.12.7
+      pg:
+        specifier: ^8.12.0
+        version: 8.23.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.23.1
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
+
+  services/modelgw:
+    dependencies:
+      '@pd/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      fastify:
+        specifier: ^5.0.0
+        version: 5.12.7
+      pg:
+        specifier: ^8.12.0
+        version: 8.23.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.23.1
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
+
+  services/notify:
+    dependencies:
+      '@pd/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      fastify:
+        specifier: ^5.0.0
+        version: 5.12.7
+      pg:
+        specifier: ^8.12.0
+        version: 8.23.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.23.1
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
+
+  services/orchestrator:
+    dependencies:
+      '@pd/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      fastify:
+        specifier: ^5.0.0
+        version: 5.12.7
+      pg:
+        specifier: ^8.12.0
+        version: 8.23.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.23.1
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
+
+  services/review:
+    dependencies:
+      '@pd/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      fastify:
+        specifier: ^5.0.0
+        version: 5.12.7
+      pg:
+        specifier: ^8.12.0
+        version: 8.23.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.23.1
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.20.5)(jsdom@25.0.1)(lightningcss@1.32.0)
 
   services/worker:
     dependencies:
