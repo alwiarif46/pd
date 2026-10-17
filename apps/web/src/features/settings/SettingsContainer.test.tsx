@@ -8,7 +8,7 @@ import { bidDto, docDto, meDto, orgPayload, organizationDto } from '@/test/fixtu
 import { DATE_CHANGE_BUSY_MESSAGE, STALE_MESSAGE } from '@/features/schedule/controller';
 import { lockedDateChangeBids, tryLockDateChange } from '@/features/schedule/date-change-lock';
 import { ShellContext, type ShellContextValue } from '@/features/shell/bid-context';
-import { DUE_SAVED_NOT_MOVED_MESSAGE, DUE_UNCHANGED_MESSAGE, type SettingsApi } from './controller';
+import { DUE_NOT_CHANGED_MESSAGE, DUE_SAVED_NOT_MOVED_MESSAGE, DUE_UNCHANGED_MESSAGE, type SettingsApi } from './controller';
 import { SettingsContainer } from './SettingsContainer';
 
 vi.mock('sonner', async (orig) => ({
@@ -82,7 +82,9 @@ function renderContainer(opts: { api?: SettingsApi; shell?: Partial<ShellContext
   const view = render(tree(shell));
   /** The shell reloading the bid (a poll, window focus): a new object for the same or new values. */
   const reloadBid = (bid: BidDto) => view.rerender(tree({ ...shell, bid }));
-  return { api, shell, user, reloadBid, ...view };
+  /** The shell switching bids without remounting the container (the same registered component). */
+  const switchTo = (bid: BidDto) => view.rerender(tree({ ...shell, bidId: bid.id, bid }));
+  return { api, shell, user, reloadBid, switchTo, ...view };
 }
 
 function deferred<T>() {
@@ -195,7 +197,7 @@ describe('SettingsContainer: the due-date change', () => {
     setDue('2026-11-13');
     await user.click(saveButton());
     const dialog = await prompt();
-    expect(within(dialog).getByText('The due date moved from Tue, Nov 3 to Fri, Nov 13. How should the schedule change?')).toBeTruthy();
+    expect(within(dialog).getByText(/^The due date moved from Tue, Nov 3 to Fri, Nov 13\./)).toBeTruthy();
     expect(api.updateBid).toHaveBeenCalledTimes(1);
     expect(api.updateBid).toHaveBeenCalledWith('bid-1', { name: 'VA EHR Support II' }); // no dueDate in the first save
 
@@ -241,9 +243,61 @@ describe('SettingsContainer: the due-date change', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(api.updateBid).not.toHaveBeenCalled();
     expect(api.getBid).not.toHaveBeenCalled();
-    expect(toast.info).toHaveBeenCalledWith(DUE_UNCHANGED_MESSAGE);
+    expect(toast.info).toHaveBeenCalledWith(DUE_NOT_CHANGED_MESSAGE); // nothing else was saved
+    expect(screen.getByRole('status').textContent).toBe(DUE_NOT_CHANGED_MESSAGE);
     expect(shell.refresh).toHaveBeenCalled();
     expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-11-03');
+  });
+
+  it('Cancel after the other fields were saved says they were', async () => {
+    const { api, user } = renderContainer();
+    await ready();
+    await user.type(screen.getByLabelText('Name'), ' II');
+    setDue('2026-11-13');
+    await user.click(saveButton());
+    await prompt();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(toast.info).toHaveBeenCalledWith(DUE_UNCHANGED_MESSAGE);
+    expect(api.updateBid).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the form and opens no prompt when the other fields fail to save', async () => {
+    const api = mockApi({ updateBid: vi.fn(async () => Promise.reject(new ApiError('That solicitation number is locked.', 409))) });
+    const { user } = renderContainer({ api });
+    await ready();
+    await user.type(screen.getByLabelText('Name'), ' II');
+    setDue('2026-11-13');
+    await user.click(saveButton());
+    expect((await screen.findByRole('alert')).textContent).toBe('That solicitation number is locked.');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.getBid).not.toHaveBeenCalled();
+    expect(api.updateBid).toHaveBeenCalledTimes(1);
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('VA EHR Support II');
+    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-11-13');
+  });
+
+  it("after a switch to another bid, leaves the other bid's typed form alone and names the bid whose due date did not change", async () => {
+    const api = mockApi();
+    const save = deferred<BidDto>();
+    vi.mocked(api.updateBid).mockReturnValueOnce(save.promise);
+    const { user, switchTo } = renderContainer({ api });
+    await ready();
+    await user.type(screen.getByLabelText('Name'), ' II');
+    setDue('2026-11-13');
+    await user.click(saveButton());
+    expect(api.updateBid).toHaveBeenCalledWith('bid-1', { name: 'VA EHR Support II' });
+
+    switchTo(bidDto({ id: 'bid-2', name: 'GSA Cloud Migration', dueDate: ts('2026-12-01') }));
+    await ready();
+    await user.type(screen.getByLabelText('Name'), ' draft');
+    await act(async () => save.resolve(bidDto()));
+
+    await waitFor(() =>
+      expect(toast.info).toHaveBeenCalledWith('The due date of VA EHR Support II did not change. Open its settings to change it again.'),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('GSA Cloud Migration draft');
+    expect(api.getBid).not.toHaveBeenCalled();
   });
 
   it('closes with the message when the due date changed elsewhere, and never PATCHes it', async () => {
@@ -328,6 +382,21 @@ describe('SettingsContainer: the due-date change', () => {
       expect(screen.getByRole('status').textContent).toBe(DUE_UNCHANGED_MESSAGE);
       expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-11-03');
       expect(api.getBid).not.toHaveBeenCalled();
+    } finally {
+      release?.();
+    }
+  });
+
+  it('says only that the due date did not change when nothing else was saved and the lock is held', async () => {
+    const release = tryLockDateChange('bid-1', Symbol('schedule'));
+    try {
+      const { api, user } = renderContainer();
+      await ready();
+      setDue('2026-11-13');
+      await user.click(saveButton());
+      await waitFor(() => expect(toast.info).toHaveBeenCalledWith(DATE_CHANGE_BUSY_MESSAGE));
+      expect(api.updateBid).not.toHaveBeenCalled();
+      expect(screen.getByRole('status').textContent).toBe(DUE_NOT_CHANGED_MESSAGE);
     } finally {
       release?.();
     }

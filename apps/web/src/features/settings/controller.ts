@@ -16,6 +16,10 @@ export const settingsApi: SettingsApi = api;
 
 export const SAVED_MESSAGE = 'Saved.';
 export const DUE_UNCHANGED_MESSAGE = 'Saved. The due date did not change.';
+/** As DUE_UNCHANGED_MESSAGE, when the save sent nothing else. */
+export const DUE_NOT_CHANGED_MESSAGE = 'The due date did not change.';
+/** A due change whose save landed after a switch to another bid: the prompt is not opened there. */
+export const dueNotAppliedMessage = (bidName: string) => `The due date of ${bidName} did not change. Open its settings to change it again.`;
 export const DUE_SAVED_NOT_MOVED_MESSAGE = 'The new due date is saved. The schedule did not move.';
 
 /** The form's values (09 s5.11 BidSettingsValues) from the stored bid. Dates are 'YYYY-MM-DD', the time 'HH:mm'. */

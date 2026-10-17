@@ -13,8 +13,10 @@ import { TabFrameContainer } from '@/features/tab-frame/TabFrameContainer';
 import { BidSettings } from '@/ui/settings/BidSettings';
 import { DateChangePrompt } from '@/ui/settings/DateChangePrompt';
 import {
+  DUE_NOT_CHANGED_MESSAGE,
   DUE_SAVED_NOT_MOVED_MESSAGE,
   DUE_UNCHANGED_MESSAGE,
+  dueNotAppliedMessage,
   isEmptyPatch,
   planSave,
   SAVED_MESSAGE,
@@ -47,8 +49,8 @@ export const SAVED_SHOWN_MS = 3000;
  */
 export function SettingsContainer({ bidId, api = settingsApi }: Props) {
   const shell = useRequiredShell();
-  /** The user's due-date change, shared with Schedule (use-user-date-change.ts); no meta of its own. */
-  const userChange = useUserDateChange<null>(api);
+  /** The user's due-date change, shared with Schedule (use-user-date-change.ts); meta: the other fields were saved first. */
+  const userChange = useUserDateChange<{ othersSaved: boolean }>(api);
   const [save, setSave] = useState<BidStatus | null>(null);
   const [del, setDel] = useState<BidStatus | null>(null);
   /** Bumped when the form must drop what was typed although the stored bid did not change (Cancel). */
@@ -93,6 +95,7 @@ export function SettingsContainer({ bidId, api = settingsApi }: Props) {
   const onSave = (next: BidSettingsValues) => {
     if (!values || saveStatus.state === 'submitting') return;
     const target = bidId;
+    const targetName = next.name || values.name;
     const { patch, due } = planSave(values, next, canKeepLive);
 
     if (due.kind === 'direct') {
@@ -121,20 +124,29 @@ export function SettingsContainer({ bidId, api = settingsApi }: Props) {
 
     // The other fields are saved first; a due change then opens the prompt (Cancel keeps them saved).
     setStatus(target, SUBMITTING);
-    const first = isEmptyPatch(patch) ? Promise.resolve(null) : api.updateBid(target, patch);
+    const othersSaved = !isEmptyPatch(patch);
+    const first = othersSaved ? api.updateBid(target, patch) : Promise.resolve(null);
     first.then(
       () => {
-        if (!isEmptyPatch(patch)) shell.refresh();
+        if (othersSaved) shell.refresh();
         if (due.kind === 'none') {
           setStatus(target, done(SAVED_MESSAGE));
           return;
         }
-        // Refused while an answer for the bid is being applied (Schedule's, perhaps); after a bid switch
-        // the prompt would open on a bid no longer shown, so the due date is left as it is.
-        if (shownRef.current !== target || !userChange.open(target, due.move, null)) {
-          if (shownRef.current === target) toast.info(DATE_CHANGE_BUSY_MESSAGE);
-          setStatus(target, done(DUE_UNCHANGED_MESSAGE));
-          setFormKey((k) => k + 1);
+        const unchanged = othersSaved ? DUE_UNCHANGED_MESSAGE : DUE_NOT_CHANGED_MESSAGE;
+        if (shownRef.current !== target) {
+          // The user switched bids while the other fields saved: the prompt would open on a bid no longer
+          // shown, so the due date is left as it is, and said so by name. The form on screen is the other
+          // bid's, so it is not touched (this container stays mounted across a bid switch).
+          toast.info(dueNotAppliedMessage(targetName));
+          setStatus(target, done(unchanged));
+          return;
+        }
+        // Refused while an answer for the bid is being applied (Schedule's, perhaps).
+        if (!userChange.open(target, due.move, { othersSaved })) {
+          toast.info(DATE_CHANGE_BUSY_MESSAGE);
+          setStatus(target, done(unchanged));
+          setFormKey((k) => k + 1); // drop the typed due date; this bid's form is the one on screen
           return;
         }
         setStatus(target, IDLE);
@@ -187,7 +199,7 @@ export function SettingsContainer({ bidId, api = settingsApi }: Props) {
     const open = userChange.current(bidId);
     if (!open) return;
     userChange.cancel(bidId);
-    const message = open.dueSaved ? DUE_SAVED_NOT_MOVED_MESSAGE : DUE_UNCHANGED_MESSAGE;
+    const message = open.dueSaved ? DUE_SAVED_NOT_MOVED_MESSAGE : open.meta.othersSaved ? DUE_UNCHANGED_MESSAGE : DUE_NOT_CHANGED_MESSAGE;
     toast.info(message);
     setStatus(bidId, done(message));
     // The stored bid may equal what the form was given, so the typed due date is dropped by a remount.
