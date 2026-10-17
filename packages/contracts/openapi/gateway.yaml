@@ -1,25 +1,1882 @@
 openapi: 3.1.0
 info:
   title: Gateway and web service
-  version: 0.1.0
+  version: 0.2.0
+  description: The public surface under /api. Each route forwards to the owning service, which has the same path without /api. This file copies the service schemas; it is standalone on purpose.
 x-service: gateway
+security:
+  - bearerAuth: []
+tags:
+  - name: composition
+    description: Routes the gateway builds from more than one service.
+  - name: tenants
+    description: "Identity: the tenant."
+  - name: members
+    description: "Identity: members."
+  - name: invites
+    description: "Identity: invites."
+  - name: me
+    description: "Identity: the user."
+  - name: auth
+    description: "Identity: OIDC sign-in."
+  - name: uploads
+    description: "Ingest: uploads."
+  - name: documents
+    description: "Ingest: documents."
+  - name: jobs
+    description: "Ingest and intel: jobs."
+  - name: bids
+    description: "Intel: bids."
+  - name: rows
+    description: "Intel: tabs and rows."
+  - name: amendments
+    description: "Intel: amendments."
+  - name: schedule
+    description: "Intel: schedule."
+  - name: check-these
+    description: "Intel: check these."
 paths:
   /healthz:
     get:
       operationId: healthz
       summary: Liveness and schema migration level
+      security: []
       responses:
-        '200':
+        "200":
           description: The service is up.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HealthResponse'
+                $ref: "#/components/schemas/HealthResponse"
+      x-note: Not under /api.
+  /api/members:
+    get:
+      operationId: listMembers
+      summary: List the tenant's members
+      tags:
+        - members
+      security:
+        - bearerAuth: []
+      description: Members past the plan's seats carry seatLocked. The tenant comes from the verified token. No tenant id is sent.
+      responses:
+        "200":
+          description: The members, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Member"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/members/{userId}:
+    delete:
+      operationId: removeMember
+      summary: Remove a member
+      tags:
+        - members
+      security:
+        - bearerAuth: []
+      description: "The owner cannot remove themself: transfer ownership first. Emits identity.user.removed. Owner only. The tenant comes from the verified token. No tenant id is sent."
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-roles:
+        - owner
+  /api/invites:
+    post:
+      operationId: createInvite
+      summary: Invite a member by work email
+      tags:
+        - invites
+      security:
+        - bearerAuth: []
+      description: Holds a seat until accepted or expired (7 days). 402 when the plan has no seat left. 409 invite_pending when the email has an open invite. The code goes out of band to the invitee, never in the response. Owner only. The tenant comes from the verified token. No tenant id is sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInviteRequest"
+      responses:
+        "201":
+          description: The invite is sent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      x-roles:
+        - owner
+  /api/invites/accept:
+    post:
+      operationId: acceptInvite
+      summary: Accept an invite
+      tags:
+        - invites
+      security:
+        - bearerAuth: []
+      description: "The caller has a token but no tenant yet. Error codes: invite_invalid (404), invite_email_mismatch (403), invite_used, invite_expired, already_in_org, seats_full (409). A foreign or guessed code is invite_invalid. The tenant comes from the verified token. No tenant id is sent."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcceptInviteRequest"
+      responses:
+        "200":
+          description: The caller joined, or already was a member.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcceptInviteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/me:
+    get:
+      operationId: getMe
+      summary: Get the signed-in user
+      tags:
+        - me
+      security:
+        - bearerAuth: []
+      description: The tenant comes from the verified token. No tenant id is sent.
+      responses:
+        "200":
+          description: The user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      operationId: updateMe
+      summary: Change the user's name
+      tags:
+        - me
+      security:
+        - bearerAuth: []
+      description: Only the name changes here. Zitadel owns credentials, MFA factors and passkeys. The tenant comes from the verified token. No tenant id is sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMeRequest"
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/auth/login:
+    get:
+      operationId: authLogin
+      summary: Start the OIDC code flow
+      tags:
+        - auth
+      security: []
+      description: "Redirects the browser to Zitadel (authorization code with PKCE). Zitadel serves the login, MFA, passkey and SSO screens. No password reaches this service. Public: no token needed."
+      parameters:
+        - name: returnTo
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: ^/
+          description: A path in the web app to return to. Absolute URLs are refused.
+      responses:
+        "302":
+          description: Redirect to Zitadel.
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/auth/callback:
+    get:
+      operationId: authCallback
+      summary: Finish the OIDC code flow
+      tags:
+        - auth
+      security: []
+      description: "Exchanges the code for tokens, upserts the user mirror, sets the e2e_session cookie and redirects to returnTo. A wrong state is 400. Public: no token needed."
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The authorization code from Zitadel.
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The state the login step set.
+      responses:
+        "302":
+          description: Signed in. Redirect to the web app.
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              schema:
+                type: string
+              description: e2e_session, httpOnly, Secure, SameSite=Lax.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/auth/logout:
+    post:
+      operationId: authLogout
+      summary: Sign out
+      tags:
+        - auth
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: Clears the cookie and returns the Zitadel end-session URL for the browser to visit. The tenant comes from the verified token. No tenant id is sent.
+      responses:
+        "200":
+          description: Signed out here.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogoutResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/bids/{id}/uploads:
+    post:
+      operationId: createUpload
+      summary: Start a chunked upload on a bid
+      tags:
+        - uploads
+      security:
+        - bearerAuth: []
+      description: "Checks the key, the bid size cap and the credit (through the billing bridge), then opens a session that lasts a day. An identical file already on the bid answers 200 with duplicate true and charges nothing. Errors: invalid_upload (400), out_of_credits (402), key_mismatch, key_required, solicitation_first, bid_cap_exceeded, amendment_no_taken (409). The bid must belong to the caller's tenant, else 404. The tenant comes from the verified token. No tenant id is sent."
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUploadRequest"
+      responses:
+        "200":
+          description: The file is already on the bid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DuplicateUpload"
+        "201":
+          description: The session is open.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadSession"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/uploads/{id}:
+    delete:
+      operationId: cancelUpload
+      summary: Cancel an open upload
+      tags:
+        - uploads
+      security:
+        - bearerAuth: []
+      description: Releases the credit the session reserved and removes the chunks. Only an open session can be cancelled. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelUploadResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/uploads/{id}/chunks/{index}:
+    put:
+      operationId: putUploadChunk
+      summary: Send one chunk
+      tags:
+        - uploads
+      security:
+        - bearerAuth: []
+      description: One chunk of 1 byte to 20 MB. Sending a chunk twice is safe. An index past chunkCount is 400. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: index
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+          description: Zero-based chunk number.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/uploads/{id}/complete:
+    post:
+      operationId: completeUpload
+      summary: Finish an upload
+      tags:
+        - uploads
+      security:
+        - bearerAuth: []
+      description: Joins the chunks, checks the size and the sha256, creates the document and queues the scan job. A second call answers 409. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "201":
+          description: The document exists and the scan is queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompleteUploadResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/bids/{id}/documents:
+    get:
+      operationId: listBidDocuments
+      summary: List a bid's documents
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+      description: "Each document carries what the Documents tab shows from ingest: liveUntil, restoredUntil and markingPage. The key check and amendment status live in intel (GET /bids/{id}/amendments). The tenant comes from the verified token. No tenant id is sent."
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      responses:
+        "200":
+          description: The documents.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Document"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/documents/{id}/view-token:
+    get:
+      operationId: createViewToken
+      summary: Get a one-hour viewer token
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+      description: The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ViewToken"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/documents/view/{token}:
+    get:
+      operationId: resolveViewToken
+      summary: Resolve a viewer token
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+      description: Returns the document the token names. An unknown or expired token is 404. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The document id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ViewTokenTarget"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/documents/{id}/pages:
+    get:
+      operationId: listDocumentPages
+      summary: Read page text
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+      description: Page text stays after the file is deleted, so source quotes keep resolving. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Defaults to from.
+      responses:
+        "200":
+          description: The pages.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PagesResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/documents/{id}/file:
+    get:
+      operationId: getDocumentFile
+      summary: Download the viewer PDF
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+      description: Streams the viewer copy. 410 when the file was deleted, 409 while it is archived or being restored. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The PDF.
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          description: The file was deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/documents/{id}/restore:
+    post:
+      operationId: restoreDocument
+      summary: Ask for an archived file back
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+      description: Moves archived to restore_requested. A second call while a restore is pending answers with the current status. 402 plan_required when the plan does not allow restores. 409 no_archive_copy or not archived. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The status after the request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/documents/{id}/confirm-marking:
+    post:
+      operationId: confirmDocumentMarking
+      summary: Confirm a held file
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+      description: A file the marking check blocked waits for this. It queues the classify job and writes an audit record. 409 when classified or not waiting. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Confirmed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/documents/{id}:
+    delete:
+      operationId: deleteDocument
+      summary: Delete a document
+      tags:
+        - documents
+      security:
+        - bearerAuth: []
+      description: Removes the stored file and keeps page text. Emits ingest.document.deleted, which intel uses to drop rows and to settle the credit. Deleting twice is fine. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteDocumentResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/jobs/{id}/retry:
+    post:
+      operationId: retryIngestJob
+      summary: Retry a failed ingest job
+      tags:
+        - jobs
+      security:
+        - bearerAuth: []
+      description: Only a failed job retries, and only the newest step of its file (409 retry_superseded). A solicitation that lost its credit reserves one again (402 out_of_credits). The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The new job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetryJobResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/bids:
+    get:
+      operationId: listBids
+      summary: List the tenant's bids
+      tags:
+        - bids
+      security:
+        - bearerAuth: []
+      description: The tenant comes from the verified token. No tenant id is sent.
+      responses:
+        "200":
+          description: The bids.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Bid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createBid
+      summary: Create a bid
+      tags:
+        - bids
+      security:
+        - bearerAuth: []
+      description: The tenant comes from the verified token. No tenant id is sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBidRequest"
+      responses:
+        "201":
+          description: The bid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bid"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/bids/{id}:
+    get:
+      operationId: getBid
+      summary: Get a bid
+      tags:
+        - bids
+      security:
+        - bearerAuth: []
+      description: The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      responses:
+        "200":
+          description: The bid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateBid
+      summary: Change a bid
+      tags:
+        - bids
+      security:
+        - bearerAuth: []
+      description: A new solicitation number rechecks held amendments. 409 key_locked once the bid holds a credit for its number. Extending file retention is owner only (403 owner_only) and needs a paid plan (402 plan_required). The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBidRequest"
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      operationId: deleteBid
+      summary: Delete a bid
+      tags:
+        - bids
+      security:
+        - bearerAuth: []
+      description: Removes the bid and its rows, then emits intel.bid.deleted. Ingest deletes the bid's documents when it gets the event. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/bids/{id}/tabs/{tab}:
+    get:
+      operationId: getBidTab
+      summary: Read a tab
+      tags:
+        - rows
+      security:
+        - bearerAuth: []
+      description: The rows of one tab. Every AI-extracted row carries sourcePage and sourceQuote. An unknown tab is 404. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+        - name: tab
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/TabName"
+      responses:
+        "200":
+          description: The tab's rows. The shape depends on the tab.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TabPayload"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/bids/{id}/tabs/{tab}/rows:
+    post:
+      operationId: createTabRow
+      summary: Add a row to a tab
+      tags:
+        - rows
+      security:
+        - bearerAuth: []
+      description: The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+        - name: tab
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/TabName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RowFields"
+      responses:
+        "201":
+          description: The new row.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Row"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/bids/{id}/tabs/{tab}/seed:
+    post:
+      operationId: seedTab
+      summary: Seed a tab with its standard rows
+      tags:
+        - rows
+      security:
+        - bearerAuth: []
+      description: Overview, production, orals and lessons get their standard rows once. Schedule applies a template counted back from the due date (400 due_date_required, 409 schedule_template_exists). Seeding twice adds nothing. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+        - name: tab
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/TabName"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RowFields"
+      responses:
+        "200":
+          description: Seeded.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Ok"
+                  - $ref: "#/components/schemas/AdjustResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/bids/{id}/rows/{table}/{rowId}:
+    get:
+      operationId: getRow
+      summary: Read a row and its history
+      tags:
+        - rows
+      security:
+        - bearerAuth: []
+      description: The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+        - name: table
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/RowTable"
+        - name: rowId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The row.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RowDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateRow
+      summary: Change fields of a row
+      tags:
+        - rows
+      security:
+        - bearerAuth: []
+      description: Typed fields reject values outside their lists with 400. Every change writes row history. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+        - name: table
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/RowTable"
+        - name: rowId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchRowRequest"
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      operationId: deleteRow
+      summary: Delete a row
+      tags:
+        - rows
+      security:
+        - bearerAuth: []
+      description: The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+        - name: table
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/RowTable"
+        - name: rowId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/bids/{id}/outline/move:
+    post:
+      operationId: moveOutlineItem
+      summary: Move an outline item
+      tags:
+        - rows
+      security:
+        - bearerAuth: []
+      description: The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OutlineMoveRequest"
+      responses:
+        "200":
+          description: The new order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/bids/{id}/matrix:
+    get:
+      operationId: getComplianceMatrix
+      summary: Read the compliance matrix
+      tags:
+        - rows
+      security:
+        - bearerAuth: []
+      description: The compliance rows of the bid, the same rows as the compliance tab. Each row has sourcePage and sourceQuote. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      responses:
+        "200":
+          description: The matrix.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComplianceMatrix"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/bids/{id}/compliance/merge:
+    post:
+      operationId: mergeComplianceRows
+      summary: Merge compliance rows
+      tags:
+        - rows
+      security:
+        - bearerAuth: []
+      description: Keeps the first row and joins the text of the others. Open amendment proposals that name a merged row are rejected. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MergeRowsRequest"
+      responses:
+        "200":
+          description: The kept row.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - id
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/bids/{id}/compliance/split:
+    post:
+      operationId: splitComplianceRow
+      summary: Split a compliance row
+      tags:
+        - rows
+      security:
+        - bearerAuth: []
+      description: The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SplitRowRequest"
+      responses:
+        "201":
+          description: The new second row.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Row"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/bids/{id}/amendments:
+    get:
+      operationId: listAmendments
+      summary: List a bid's amendments
+      tags:
+        - amendments
+      security:
+        - bearerAuth: []
+      description: Each amendment with its number, status, key check and date change. The web joins these with ingest documents for the Documents tab. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      responses:
+        "200":
+          description: The amendments.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Amendment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/bids/{id}/amendments/{documentId}/key-override:
+    post:
+      operationId: overrideAmendmentKey
+      summary: Accept an amendment despite its solicitation number
+      tags:
+        - amendments
+      security:
+        - bearerAuth: []
+      description: "A reason is required (400). Each bid has a fixed number of overrides, never refunded. 409 codes: override_not_needed, override_limit, set_bid_number_first, solicitation_first, document_deleted, not_an_amendment. Owner only. The tenant comes from the verified token. No tenant id is sent."
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+        - name: documentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The amendment's document id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KeyOverrideRequest"
+      responses:
+        "200":
+          description: The override is recorded and processing resumes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyOverrideResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      x-roles:
+        - owner
+  /api/bids/{id}/amendments/{documentId}/amendment-no:
+    patch:
+      operationId: setAmendmentNo
+      summary: Set an amendment's number
+      tags:
+        - amendments
+      security:
+        - bearerAuth: []
+      description: 400 invalid_amendment_no outside 1 to 999. 409 amendment_no_taken, document_deleted or not_an_amendment. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+        - name: documentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The amendment's document id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AmendmentNoRequest"
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AmendmentNoResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/bids/{id}/amendment-links:
+    get:
+      operationId: listAmendmentLinks
+      summary: List an amendment's proposed row changes
+      tags:
+        - amendments
+      security:
+        - bearerAuth: []
+      description: Each link names the old and new row and carries sourcePage and sourceQuote from the amendment text. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      responses:
+        "200":
+          description: The links.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AmendmentLink"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/amendment-links/{id}/confirm:
+    post:
+      operationId: confirmAmendmentLink
+      summary: Confirm a proposed change
+      tags:
+        - amendments
+      security:
+        - bearerAuth: []
+      description: Decisions are final. 409 link_already_decided, row_already_closed or new_row_missing. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Confirmed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/amendment-links/{id}/reject:
+    post:
+      operationId: rejectAmendmentLink
+      summary: Reject a proposed change
+      tags:
+        - amendments
+      security:
+        - bearerAuth: []
+      description: Decisions are final. 409 link_already_decided. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Rejected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/bids/{id}/schedule:
+    get:
+      operationId: getSchedule
+      summary: Read the schedule
+      tags:
+        - schedule
+      security:
+        - bearerAuth: []
+      description: "The same payload as the schedule tab: activities by start date, the workdays setting, amendment proposals and the pending date change. The tenant comes from the verified token. No tenant id is sent."
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      responses:
+        "200":
+          description: The schedule.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleTab"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/bids/{id}/schedule/adjust:
+    post:
+      operationId: adjustSchedule
+      summary: Shift, scale or keep the schedule dates
+      tags:
+        - schedule
+      security:
+        - bearerAuth: []
+      description: With amendmentId it answers that amendment's date change and sets the bid's due date. 400 invalid_date. 409 date_change_resolved or activity_locked. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdjustRequest"
+      responses:
+        "200":
+          description: What moved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdjustResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/bids/{id}/check-these:
+    get:
+      operationId: listCheckThese
+      summary: List sentences to check
+      tags:
+        - check-these
+      security:
+        - bearerAuth: []
+      description: Open "check these" hits from documents the user has not deleted. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      responses:
+        "200":
+          description: The hits.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CheckThese"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/check-these/{id}/promote:
+    post:
+      operationId: promoteCheckThese
+      summary: Turn a hit into a compliance row
+      tags:
+        - check-these
+      security:
+        - bearerAuth: []
+      description: 409 when the sentence is no longer on its page or was already decided. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "201":
+          description: The new compliance row.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Row"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/check-these/{id}/dismiss:
+    post:
+      operationId: dismissCheckThese
+      summary: Dismiss a hit
+      tags:
+        - check-these
+      security:
+        - bearerAuth: []
+      description: The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Dismissed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/bids/{id}/fit:
+    get:
+      operationId: getBidFit
+      summary: Read the bid/no-bid score
+      tags:
+        - bids
+      security:
+        - bearerAuth: []
+      description: The score and its factors. Every factor has a source. Before scoring, score is null. The decision itself (POST /bids/{id}/fit/decision) belongs to the orchestrator. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      responses:
+        "200":
+          description: The score.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidFit"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/bids/{id}/jobs/{jobId}/retry:
+    post:
+      operationId: retryIntelJob
+      summary: Retry a failed intel job
+      tags:
+        - jobs
+      security:
+        - bearerAuth: []
+      description: Only a failed job retries. A matrix run needs a credit again (402 out_of_credits). 409 retry_superseded. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The new job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetryJobResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/tenants:
+    post:
+      operationId: createTenant
+      summary: Create the caller's tenant
+      tags:
+        - tenants
+      security:
+        - bearerAuth: []
+      description: The caller becomes its owner. A user belongs to one tenant. The tenant comes from the verified token. No tenant id is sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTenantRequest"
+      responses:
+        "201":
+          description: The tenant exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    get:
+      operationId: getTenant
+      summary: Get the caller's tenant
+      tags:
+        - tenants
+      security:
+        - bearerAuth: []
+      description: Returns the tenant, the caller's role and the plan limits that the identity service owns. The tenant comes from the verified token. No tenant id is sent.
+      responses:
+        "200":
+          description: The tenant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateTenant
+      summary: Rename the tenant
+      tags:
+        - tenants
+      security:
+        - bearerAuth: []
+      description: Owner only. The tenant comes from the verified token. No tenant id is sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTenantRequest"
+      responses:
+        "200":
+          description: Renamed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-roles:
+        - owner
+  /api/org:
+    get:
+      operationId: getOrg
+      summary: The signed-in tenant with credits and limits
+      tags:
+        - composition
+      security:
+        - bearerAuth: []
+      description: Composed by the gateway. It reads GET /tenants from identity and the current credit period from billing. Stripe ids never appear. The tenant comes from the verified token. No tenant id is sent.
+      responses:
+        "200":
+          description: The tenant view.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/bids/{id}/jobs:
+    get:
+      operationId: listBidJobs
+      summary: List every job on a bid
+      tags:
+        - composition
+      security:
+        - bearerAuth: []
+      description: Composed by the gateway from ingest (GET /bids/{id}/jobs) and intel (GET /bids/{id}/jobs). Each job says which service ran it. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The bid id.
+      responses:
+        "200":
+          description: The jobs, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BidJob"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/about/processing:
+    get:
+      operationId: getProcessingInfo
+      summary: Who processes files
+      tags:
+        - composition
+      security: []
+      description: "Public. Reads the environment and a static list, never tenant data. The privacy page uses it signed out. Public: no token needed."
+      responses:
+        "200":
+          description: The provider, model and subprocessors.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProcessingInfo"
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: The access token the identity service issued (signed, verified with its JWKS). It carries user_id, tenant_id and role.
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: e2e_session
+      description: "Browser sign-in: an httpOnly cookie that holds the same access token."
+    serviceAuth:
+      type: http
+      scheme: bearer
+      description: A service token. Internal routes only, on the private network.
+  responses:
+    BadRequest:
+      description: The request body or a parameter is not valid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: No valid token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PaymentRequired:
+      description: The plan or the credits do not allow this.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: The caller may not do this.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Not found. Also the answer when the id belongs to another tenant.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: The current state does not allow this.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
   schemas:
     HealthResponse:
       type: object
-      required: [service, version, schemaMigration]
+      required:
+        - service
+        - version
+        - schemaMigration
       properties:
         service:
           type: string
@@ -28,3 +1885,1421 @@ components:
         schemaMigration:
           type: string
           description: Name of the last applied migration for this service's schema.
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: A sentence a person can read.
+        code:
+          type: string
+          description: A stable machine code the client can branch on, such as out_of_credits.
+    Ok:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+          const: true
+    Role:
+      type: string
+      enum:
+        - owner
+        - member
+    Tenant:
+      type: object
+      required:
+        - id
+        - name
+        - plan
+        - planStatus
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        emailDomain:
+          type:
+            - string
+            - "null"
+        plan:
+          type: string
+          description: The plan id. Billing owns the plan; identity mirrors it.
+        planStatus:
+          type: string
+        cycleStart:
+          type:
+            - string
+            - "null"
+          format: date-time
+        cycleEnd:
+          type:
+            - string
+            - "null"
+          format: date-time
+        freeFirstMonthEnds:
+          type:
+            - string
+            - "null"
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    TenantView:
+      type: object
+      required:
+        - tenant
+        - role
+        - seatLimit
+      properties:
+        tenant:
+          $ref: "#/components/schemas/Tenant"
+        role:
+          $ref: "#/components/schemas/Role"
+        seatLimit:
+          type: integer
+        mbCap:
+          type: integer
+          description: Largest upload for the plan, in megabytes.
+    CreateTenantRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+    UpdateTenantRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+    Member:
+      type: object
+      required:
+        - userId
+        - email
+        - role
+        - joinedAt
+        - isYou
+        - seatLocked
+      properties:
+        orgId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        name:
+          type:
+            - string
+            - "null"
+        email:
+          type: string
+          format: email
+        role:
+          $ref: "#/components/schemas/Role"
+        joinedAt:
+          type: string
+          format: date-time
+        isYou:
+          type: boolean
+        seatLocked:
+          type: boolean
+      description: orgId is the tenant id.
+    CreateInviteRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+          description: A work address. Free mail domains are refused.
+    AcceptInviteRequest:
+      type: object
+      required:
+        - code
+      properties:
+        code:
+          type: string
+          description: '"<tenantId>.<64 hex token>".'
+    AcceptInviteResponse:
+      type: object
+      required:
+        - orgId
+        - name
+        - role
+        - alreadyMember
+      properties:
+        orgId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+        alreadyMember:
+          type: boolean
+    Me:
+      type: object
+      required:
+        - id
+        - email
+        - name
+        - orgId
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type:
+            - string
+            - "null"
+        orgId:
+          type:
+            - string
+            - "null"
+          format: uuid
+          description: The tenant id, or null before the user has a tenant.
+        role:
+          anyOf:
+            - $ref: "#/components/schemas/Role"
+            - type: "null"
+    UpdateMeRequest:
+      type: object
+      required: []
+      properties:
+        name:
+          type: string
+    LogoutResponse:
+      type: object
+      required:
+        - endSessionUrl
+      properties:
+        endSessionUrl:
+          type: string
+          format: uri
+    VerifyTokenRequest:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+    TokenClaims:
+      type: object
+      required:
+        - userId
+        - tenantId
+        - role
+        - seatLocked
+        - expiresAt
+      properties:
+        userId:
+          type: string
+          format: uuid
+        tenantId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        role:
+          anyOf:
+            - $ref: "#/components/schemas/Role"
+            - type: "null"
+        seatLocked:
+          type: boolean
+          description: True when the plan has no seat for this member.
+        expiresAt:
+          type: string
+          format: date-time
+    Jwks:
+      type: object
+      required:
+        - keys
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            required:
+              - kty
+              - kid
+            properties:
+              kty:
+                type: string
+              kid:
+                type: string
+              use:
+                type: string
+              alg:
+                type: string
+              n:
+                type: string
+              e:
+                type: string
+            additionalProperties: true
+    FileKind:
+      type: string
+      enum:
+        - solicitation
+        - amendment
+        - attachment
+        - resume
+        - draft
+    CreateUploadRequest:
+      type: object
+      required:
+        - fileName
+        - kind
+        - declaredSize
+        - sha256
+        - chunkCount
+      properties:
+        fileName:
+          type: string
+          minLength: 1
+        kind:
+          $ref: "#/components/schemas/FileKind"
+        declaredSize:
+          type: integer
+          minimum: 1
+          description: Bytes. Must fit the plan's file cap.
+        sha256:
+          type: string
+          pattern: ^[0-9a-fA-F]{64}$
+        chunkCount:
+          type: integer
+          minimum: 1
+          description: Chunks of 1 byte to 20 MB each.
+        solicitationNumber:
+          type: string
+          description: The number printed on the file, when the client knows it.
+        amendmentNo:
+          type:
+            - integer
+            - "null"
+          minimum: 1
+          maximum: 999
+          description: "Amendments only: the number the user typed. It rides on the session and then on ingest.document.classified."
+    UploadSession:
+      type: object
+      required:
+        - id
+        - expiresAt
+        - creditReserved
+      properties:
+        id:
+          type: string
+          format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+        creditReserved:
+          type: boolean
+    DuplicateUpload:
+      type: object
+      required:
+        - duplicate
+        - documentId
+      properties:
+        duplicate:
+          type: boolean
+          const: true
+        documentId:
+          type: string
+          format: uuid
+    CancelUploadResponse:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+          const: true
+        creditReleased:
+          type: boolean
+    CompleteUploadResponse:
+      type: object
+      required:
+        - documentId
+        - jobId
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        jobId:
+          type: string
+          format: uuid
+    Document:
+      type: object
+      required:
+        - id
+        - bidId
+        - fileName
+        - kind
+        - liveStatus
+      properties:
+        id:
+          type: string
+          format: uuid
+        bidId:
+          type: string
+          format: uuid
+        fileName:
+          type: string
+        mime:
+          type: string
+        sizeBytes:
+          type: integer
+        sha256:
+          type: string
+        kind:
+          $ref: "#/components/schemas/FileKind"
+        amendmentNo:
+          type:
+            - integer
+            - "null"
+          description: Amendments only. The number typed on the upload session, or confirmed later.
+        amendmentNoSource:
+          type:
+            - string
+            - "null"
+          description: Where amendmentNo came from. "sequence" means assumed.
+        amendmentNoFound:
+          type:
+            - integer
+            - "null"
+          description: The number read from the file.
+        liveStatus:
+          type: string
+          enum:
+            - live
+            - archived
+            - restore_requested
+            - restoring
+            - restored
+            - deleted
+        liveUntil:
+          type:
+            - string
+            - "null"
+          format: date-time
+        restoredUntil:
+          type:
+            - string
+            - "null"
+          format: date-time
+        scanStatus:
+          type:
+            - string
+            - "null"
+        extractStatus:
+          type:
+            - string
+            - "null"
+        extractMethod:
+          type:
+            - string
+            - "null"
+        pageCount:
+          type:
+            - integer
+            - "null"
+        pagesEstimated:
+          type:
+            - integer
+            - "null"
+        markingStatus:
+          type:
+            - string
+            - "null"
+          enum:
+            - none
+            - blocked
+            - confirmed
+            - null
+        markingPage:
+          type:
+            - integer
+            - "null"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      additionalProperties: true
+    ViewToken:
+      type: object
+      required:
+        - token
+        - expiresInSeconds
+      properties:
+        token:
+          type: string
+        expiresInSeconds:
+          type: integer
+          const: 3600
+    ViewTokenTarget:
+      type: object
+      required:
+        - documentId
+      properties:
+        documentId:
+          type: string
+          format: uuid
+    Page:
+      type: object
+      required:
+        - pageNo
+        - text
+      properties:
+        pageNo:
+          type: integer
+          minimum: 1
+        text:
+          type: string
+      additionalProperties: true
+    PagesResponse:
+      type: object
+      required:
+        - fileName
+        - liveStatus
+        - pages
+      properties:
+        fileName:
+          type: string
+        liveStatus:
+          type: string
+        pagesEstimated:
+          type:
+            - integer
+            - "null"
+        extractMethod:
+          type:
+            - string
+            - "null"
+        pages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Page"
+    RestoreResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - restore_requested
+            - restoring
+            - restored
+            - archived
+            - live
+            - deleted
+    DeleteDocumentResponse:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+          const: true
+        creditReleased:
+          type: boolean
+    IngestJob:
+      type: object
+      required:
+        - id
+        - type
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+        bidId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        documentId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        type:
+          type: string
+          description: scan, convert, extract, ocr, marking, classify or chunk.
+        status:
+          type: string
+          enum:
+            - pending
+            - running
+            - completed
+            - failed
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        error:
+          type:
+            - string
+            - "null"
+        startedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        finishedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        stage:
+          type:
+            - string
+            - "null"
+        queuePosition:
+          type:
+            - integer
+            - "null"
+        queueDepth:
+          type: integer
+        etaSeconds:
+          type:
+            - integer
+            - "null"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      additionalProperties: true
+    RetryJobResponse:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          format: uuid
+    TabName:
+      type: string
+      enum:
+        - overview
+        - schedule
+        - compliance
+        - outline
+        - resumes
+        - reviews
+        - production
+        - orals
+        - lessons
+    RowTable:
+      type: string
+      enum:
+        - bid_facts
+        - kickoff_items
+        - schedule_activities
+        - compliance_rows
+        - outline_items
+        - personnel_requirements
+        - candidates
+        - resume_matches
+        - reviews
+        - review_assignments
+        - review_findings
+        - production_items
+        - orals_items
+        - lessons
+    Bid:
+      type: object
+      required:
+        - id
+        - name
+        - bidType
+        - solicitationNumber
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        agency:
+          type:
+            - string
+            - "null"
+        bidType:
+          type: string
+          enum:
+            - federal
+            - sled
+        solicitationNumber:
+          type: string
+          description: PENDING until the first solicitation sets it.
+        solicitationKey:
+          type: string
+        status:
+          type: string
+          enum:
+            - planning
+            - writing
+            - submitted
+            - closed
+        startDate:
+          type:
+            - string
+            - "null"
+          format: date-time
+        dueDate:
+          type:
+            - string
+            - "null"
+          format: date-time
+        dueTime:
+          type:
+            - string
+            - "null"
+        timeZone:
+          type:
+            - string
+            - "null"
+        oralsEnabled:
+          type: boolean
+        retentionExtendedUntil:
+          type:
+            - string
+            - "null"
+          format: date-time
+        scheduleWorkdaysOnly:
+          type: boolean
+        creditStatus:
+          type:
+            - string
+            - "null"
+          enum:
+            - reserved
+            - consumed
+            - released
+            - null
+        keyOverridesUsed:
+          type: integer
+        keyOverridesLeft:
+          type: integer
+        defaultLiveUntil:
+          type:
+            - string
+            - "null"
+          format: date-time
+        filesLiveUntil:
+          type:
+            - string
+            - "null"
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      additionalProperties: true
+    CreateBidRequest:
+      type: object
+      required:
+        - name
+        - bidType
+      properties:
+        name:
+          type: string
+          minLength: 1
+        bidType:
+          type: string
+          enum:
+            - federal
+            - sled
+        solicitationNumber:
+          type: string
+          description: Optional. PENDING when absent.
+    UpdateBidRequest:
+      type: object
+      required: []
+      properties:
+        name:
+          type: string
+        agency:
+          type:
+            - string
+            - "null"
+        bidType:
+          type: string
+          enum:
+            - federal
+            - sled
+        solicitationNumber:
+          type: string
+        startDate:
+          type:
+            - string
+            - "null"
+          format: date-time
+        dueDate:
+          type:
+            - string
+            - "null"
+          format: date-time
+        dueTime:
+          type:
+            - string
+            - "null"
+        timeZone:
+          type:
+            - string
+            - "null"
+        oralsEnabled:
+          type: boolean
+        retentionExtendedUntil:
+          type:
+            - string
+            - "null"
+          format: date-time
+        status:
+          type: string
+          enum:
+            - planning
+            - writing
+            - submitted
+            - closed
+        scheduleWorkdaysOnly:
+          type: boolean
+    Row:
+      type: object
+      required:
+        - id
+        - bidId
+      properties:
+        id:
+          type: string
+          format: uuid
+        bidId:
+          type: string
+          format: uuid
+        sourcePage:
+          type:
+            - integer
+            - "null"
+          description: The page the row came from. Null only on a row a user typed.
+        sourceQuote:
+          type:
+            - string
+            - "null"
+          description: The sentence the row came from. Null only on a row a user typed.
+        origin:
+          type: string
+          description: standard, ai or user.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      additionalProperties: true
+    RowFields:
+      type: object
+      additionalProperties: true
+      description: Fields of the row. The tab decides which are allowed.
+    PatchRowRequest:
+      type: object
+      required:
+        - fields
+      properties:
+        fields:
+          type: object
+          additionalProperties: true
+    RowHistoryEntry:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          format: uuid
+        rowTable:
+          type: string
+        rowId:
+          type: string
+          format: uuid
+        userId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        userName:
+          type:
+            - string
+            - "null"
+        field:
+          type: string
+        changedAt:
+          type: string
+          format: date-time
+      additionalProperties: true
+    RowDetail:
+      type: object
+      required:
+        - row
+        - history
+      properties:
+        row:
+          $ref: "#/components/schemas/Row"
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/RowHistoryEntry"
+    TabPayload:
+      type: object
+      additionalProperties: true
+      description: "overview: facts, kickoff, proposals. compliance: rows. outline, production, orals, lessons: items. resumes: requirements, candidates, matches. reviews: reviews, assignments, findings. schedule: see ScheduleTab."
+    ComplianceMatrix:
+      type: object
+      required:
+        - rows
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/Row"
+    OutlineMoveRequest:
+      type: object
+      required:
+        - id
+        - index
+      properties:
+        id:
+          type: string
+          format: uuid
+        parentId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        index:
+          type: number
+    MergeRowsRequest:
+      type: object
+      required:
+        - ids
+      properties:
+        ids:
+          type: array
+          minItems: 2
+          items:
+            type: string
+            format: uuid
+    SplitRowRequest:
+      type: object
+      required:
+        - rowId
+        - at
+      properties:
+        rowId:
+          type: string
+          format: uuid
+        at:
+          type: integer
+          minimum: 1
+          description: Character offset inside the requirement text.
+    Amendment:
+      type: object
+      required:
+        - id
+        - documentId
+      properties:
+        id:
+          type: string
+          format: uuid
+        documentId:
+          type: string
+          format: uuid
+        amendmentNo:
+          type:
+            - integer
+            - "null"
+        amendmentNoSource:
+          type:
+            - string
+            - "null"
+        amendmentNoFound:
+          type:
+            - integer
+            - "null"
+        status:
+          type: string
+          description: held, applied, failed and so on.
+        tabsStatus:
+          type:
+            - string
+            - "null"
+          enum:
+            - pending
+            - applied
+            - failed
+            - null
+        keyCheck:
+          type: string
+          enum:
+            - ok
+            - mismatch
+            - pending
+            - overridden
+            - not_applicable
+        keyReason:
+          type:
+            - string
+            - "null"
+        keyFound:
+          type:
+            - string
+            - "null"
+        solicitationKeyFound:
+          type:
+            - string
+            - "null"
+        keyOverride:
+          type: boolean
+        datesChanged:
+          type:
+            - object
+            - "null"
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+      additionalProperties: true
+    LinkedRow:
+      type: object
+      required:
+        - rowId
+        - text
+      properties:
+        rowId:
+          type: string
+          format: uuid
+        label:
+          type:
+            - string
+            - "null"
+        text:
+          type: string
+        sourcePage:
+          type:
+            - integer
+            - "null"
+    AmendmentLink:
+      type: object
+      required:
+        - id
+        - amendmentId
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+        amendmentId:
+          type: string
+          format: uuid
+        amendmentNo:
+          type:
+            - integer
+            - "null"
+        rowTable:
+          type: string
+        kind:
+          type: string
+          description: add, supersede or withdraw.
+        status:
+          type: string
+          enum:
+            - proposed
+            - confirmed
+            - rejected
+        oldRow:
+          anyOf:
+            - $ref: "#/components/schemas/LinkedRow"
+            - type: "null"
+        newRow:
+          anyOf:
+            - $ref: "#/components/schemas/LinkedRow"
+            - type: "null"
+        sourcePage:
+          type:
+            - integer
+            - "null"
+        sourceQuote:
+          type:
+            - string
+            - "null"
+      additionalProperties: true
+    KeyOverrideRequest:
+      type: object
+      required:
+        - reason
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    KeyOverrideResponse:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+        keyOverridesLeft:
+          type: integer
+      additionalProperties: true
+    AmendmentNoRequest:
+      type: object
+      required:
+        - amendmentNo
+      properties:
+        amendmentNo:
+          type: integer
+          minimum: 1
+          maximum: 999
+    AmendmentNoResponse:
+      type: object
+      required:
+        - ok
+        - amendmentNo
+      properties:
+        ok:
+          type: boolean
+          const: true
+        amendmentNo:
+          type: integer
+    ScheduleTab:
+      type: object
+      required:
+        - activities
+        - workdaysOnly
+      properties:
+        activities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Row"
+        workdaysOnly:
+          type: boolean
+        proposals:
+          type: array
+          items:
+            $ref: "#/components/schemas/Row"
+        pendingDateChange:
+          type:
+            - object
+            - "null"
+          additionalProperties: true
+      additionalProperties: true
+    AdjustRequest:
+      type: object
+      required:
+        - mode
+      properties:
+        mode:
+          type: string
+          enum:
+            - shift
+            - scale
+            - keep
+        previousDue:
+          type: string
+          format: date
+        nextDue:
+          type: string
+          format: date
+        workdaysOnly:
+          type: boolean
+        amendmentId:
+          type: string
+          format: uuid
+          description: Answers this amendment's date change. Then the dates come from the amendment.
+    AdjustResponse:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+        amendmentId:
+          type: string
+          format: uuid
+        dueDate:
+          type: string
+          format: date
+        requestedMode:
+          type: string
+        mode:
+          type: string
+        workdaysOnly:
+          type: boolean
+        unit:
+          type: string
+        delta:
+          type: number
+        moved:
+          type: integer
+        moves:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+      additionalProperties: true
+    CheckThese:
+      type: object
+      required:
+        - id
+        - documentId
+        - sentence
+        - page
+      properties:
+        id:
+          type: string
+          format: uuid
+        documentId:
+          type: string
+          format: uuid
+        sentence:
+          type: string
+        page:
+          type: integer
+          description: The source page of the sentence.
+    BidFit:
+      type: object
+      required:
+        - bidId
+        - score
+        - factors
+      properties:
+        bidId:
+          type: string
+          format: uuid
+        score:
+          type:
+            - number
+            - "null"
+          minimum: 0
+          maximum: 100
+        recommendation:
+          type:
+            - string
+            - "null"
+          enum:
+            - bid
+            - no_bid
+            - review
+            - null
+        factors:
+          type: array
+          items:
+            type: object
+            required:
+              - name
+              - score
+            properties:
+              name:
+                type: string
+              score:
+                type: number
+              note:
+                type:
+                  - string
+                  - "null"
+              sourcePage:
+                type:
+                  - integer
+                  - "null"
+              sourceQuote:
+                type:
+                  - string
+                  - "null"
+            additionalProperties: true
+        scoredAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+      additionalProperties: true
+    IntelJob:
+      type: object
+      required:
+        - id
+        - type
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+        bidId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        documentId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        type:
+          type: string
+          description: key_check, shred, matrix or amendment.
+        status:
+          type: string
+          enum:
+            - pending
+            - running
+            - completed
+            - failed
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        error:
+          type:
+            - string
+            - "null"
+        startedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        finishedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        stage:
+          type:
+            - string
+            - "null"
+        queuePosition:
+          type:
+            - integer
+            - "null"
+        queueDepth:
+          type: integer
+        etaSeconds:
+          type:
+            - integer
+            - "null"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      additionalProperties: true
+    OrgView:
+      type: object
+      required:
+        - org
+        - credits
+        - role
+        - seatLimit
+        - billingAvailable
+      properties:
+        org:
+          anyOf:
+            - $ref: "#/components/schemas/Tenant"
+            - type: "null"
+        credits:
+          anyOf:
+            - $ref: "#/components/schemas/CreditPeriod"
+            - type: "null"
+        role:
+          $ref: "#/components/schemas/Role"
+        seatLimit:
+          type: integer
+        mbCap:
+          type: integer
+        billingAvailable:
+          type: boolean
+    CreditPeriod:
+      type: object
+      required:
+        - periodStart
+        - periodEnd
+        - allowed
+        - used
+        - reserved
+      properties:
+        id:
+          type:
+            - string
+            - "null"
+          format: uuid
+          description: Null while the period has no row yet. Then allowed is the plan's allowance.
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        allowed:
+          type: integer
+        used:
+          type: integer
+        reserved:
+          type: integer
+      additionalProperties: true
+    BidJob:
+      allOf:
+        - anyOf:
+            - $ref: "#/components/schemas/IngestJob"
+            - $ref: "#/components/schemas/IntelJob"
+        - type: object
+          required:
+            - service
+          properties:
+            service:
+              type: string
+              enum:
+                - ingest
+                - intel
+          additionalProperties: true
+    ProcessingInfo:
+      type: object
+      required:
+        - provider
+        - model
+        - subprocessors
+        - privacyPath
+      properties:
+        provider:
+          type: string
+        model:
+          type: string
+        subprocessors:
+          type: array
+          items:
+            type: string
+        privacyPath:
+          type: string
