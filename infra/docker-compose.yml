@@ -48,9 +48,10 @@ services:
       # Testers whose phone step is skipped (exact emails, comma-separated). Empty: off.
       - PD_SKIP_PHONE_VERIFY_EMAILS=${PD_SKIP_PHONE_VERIFY_EMAILS:-}
       # The proxy whose X-Forwarded-For the api believes, so the per-IP send caps count visitors, not nginx.
-      # Set it to the network gateway pinned below (172.31.250.1): the host's nginx reaches the api through the
-      # loopback port, which arrives from that gateway. Empty: no proxy trusted, every visitor counts as one IP.
-      - PD_TRUST_PROXY=${PD_TRUST_PROXY:-}
+      # Defaults to the network gateway pinned below (172.31.250.1): the host's nginx reaches the api through the
+      # loopback port, which arrives from that gateway. The default keeps a missing setting from counting every
+      # visitor as one IP; override it only for another topology.
+      - PD_TRUST_PROXY=${PD_TRUST_PROXY:-172.31.250.1}
     # Loopback only: the host's nginx (infra/nginx.conf) proxies /api here. Not reachable from outside the host.
     ports:
       - "127.0.0.1:3001:3001"

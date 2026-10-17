@@ -385,14 +385,14 @@ if len(re.findall(r"proxy_pass\s+http://127\.0\.0\.1:3001", nginx)) < 2:
 if "$proxy_add_x_forwarded_for" in nginx or not re.search(r"proxy_set_header\s+X-Forwarded-For\s+\$remote_addr;", nginx):
     problems.append("X-Forwarded-For must be overwritten with $remote_addr (a client-sent header must not pass through)")
 api = compose.split("\n  api:\n", 1)[1].split("\n  migrate:\n", 1)[0]
-if "- PD_TRUST_PROXY=${PD_TRUST_PROXY:-}" not in api:
-    problems.append("api environment lacks PD_TRUST_PROXY")
+if "- PD_TRUST_PROXY=${PD_TRUST_PROXY:-172.31.250.1}" not in api:
+    problems.append("api environment must pass PD_TRUST_PROXY with the pinned gateway as its default")
 if '"127.0.0.1:3001:3001"' not in api:
     problems.append('api must publish "127.0.0.1:3001:3001" (loopback only)')
 if not re.search(r"subnet:\s*172\.31\.250\.0/24", compose) or not re.search(r"gateway:\s*172\.31\.250\.1\b", compose):
     problems.append("the default network must pin subnet 172.31.250.0/24 and gateway 172.31.250.1")
-if not re.search(r"^# PD_TRUST_PROXY=172\.31\.250\.1\b", env, re.M):
-    problems.append(".env.example must document PD_TRUST_PROXY=172.31.250.1")
+if not re.search(r"^# PD_TRUST_PROXY defaults to 172\.31\.250\.1 ", env, re.M):
+    problems.append(".env.example must document the PD_TRUST_PROXY default 172.31.250.1")
 print("\n".join(problems))
 sys.exit(1 if problems else 0)
 PYEOF

@@ -25,12 +25,12 @@ np() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf 
 setup() {
   S="$TMP/$1"; rm -rf "$S"; mkdir -p "$S"/{etc,pdbackup/borg,pddata/files,log,state,project/infra/scripts}
   export PD_ETC="$S/etc" PD_BACKUP_MOUNT="$S/pdbackup" PD_DATA_MOUNT="$S/pddata" PD_LOG_DIR="$S/log" PD_STATE_DIR="$S/state" \
-         PD_PROJECT_DIR="$S/project" PD_SKIP_OWNER_CHECK=1 \
+         PD_PROJECT_DIR="$S/project" PD_SKIP_OWNER_CHECK=1 PD_NGINX_CONF="$S/etc/nginx/conf.d/pd.conf" \
          FAKE_CALLS="$S/calls" FAKE_STATE="$S/state" PATH="$FAKES:$ORIG_PATH" PD_SECRETS="$S/secrets.env" \
          PD_BACKUP_LOCK="$S/state/pd-backup.lock"
   unset PD_SKIP_MODE_CHECK PD_TENANT FAKE_MOUNT_PDBACKUP FAKE_MOUNT_PDDATA FAKE_OLD_VOLUME FAKE_REMOTE_COUNT FAKE_LSF FAKE_BORG_EXIT FAKE_COMPOSE_EXIT \
         FAKE_MIGRATIONS FAKE_ORGS FAKE_ACTIVE BORG_PASSPHRASE PD_OS_RELEASE PD_CLOUD_BOOT_FINISHED FAKE_OLD_VOLUMES FAKE_CONTAINERS_api \
-        FAKE_CONTAINERS_worker FAKE_PGDUMP_OUT FAKE_PGDUMP_EXIT FAKE_BORG_CC_LEAVE FAKE_BORG_LIST FAKE_REMOTE_MARKER FAKE_CAT_EXIT PD_MACHINE_ID_FILE
+        FAKE_CONTAINERS_worker FAKE_NGINX_T_EXIT FAKE_PGDUMP_OUT FAKE_PGDUMP_EXIT FAKE_BORG_CC_LEAVE FAKE_BORG_LIST FAKE_REMOTE_MARKER FAKE_CAT_EXIT PD_MACHINE_ID_FILE
   : >"$FAKE_CALLS"
   : >"$S/secrets.env"
 }
@@ -470,7 +470,7 @@ deploy_env() {
   setup "$1"
   mkdir -p "$S/project/infra" "$S/project/config"
   cp -R "$REPO/infra/lib" "$REPO/infra/providers" "$S/project/infra/"
-  cp "$REPO/infra/docker-compose.yml" "$S/project/infra/"
+  cp "$REPO/infra/docker-compose.yml" "$REPO/infra/nginx.conf" "$S/project/infra/"
   cp "$REPO/config/tenant.toml" "$S/project/config/"
   mkdir -p "$S/project/.git"
   printf 'POSTGRES_PASSWORD=x\n' >"$S/project/.env"
@@ -571,6 +571,42 @@ out="$(bash infra/scripts/deploy.sh --ref feature/x 2>&1)"; rc=$?
 deploy_env dp-dry
 out="$(bash infra/scripts/deploy.sh --dry-run 2>&1)"; rc=$?
 [[ $rc == 0 ]] && ! grep -qE '^(docker compose|git (fetch|checkout|pull|clone)|chown)' "$FAKE_CALLS" && ok "deploy.sh --dry-run exits 0 and changes nothing (only read-only probes: findmnt, docker volume ls, docker ps)" || bad "deploy dry-run" "rc=$rc $(cat "$FAKE_CALLS")"
+
+# deploy.sh installs infra/nginx.conf on the host nginx: backup, nginx -t, reload only if the test passes
+NGX() { printf '%s' "$S/etc/nginx/conf.d/pd.conf"; }
+deploy_env dp-nginx
+subprocessor_set
+out="$(bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+[[ $rc == 0 ]] && cmp -s "$REPO/infra/nginx.conf" "$(NGX)" && ok "deploy installs infra/nginx.conf as the host nginx site (PD_NGINX_CONF)" || bad "nginx install" "rc=$rc $(tail -3 <<<"$out")"
+l_up="$(lno 'up -d --remove-orphans')"; l_t="$(lno '^nginx -t$')"; l_reload="$(lno '^systemctl reload nginx$')"
+[[ -n "$l_up" && -n "$l_t" && -n "$l_reload" ]] && (( l_up < l_t && l_t < l_reload )) && ok "nginx order: services restarted, then nginx -t, then systemctl reload nginx" || bad "nginx order" "up=$l_up t=$l_t reload=$l_reload"
+: >"$FAKE_CALLS"
+out="$(bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+[[ $rc == 0 ]] && ! grep -qE '^(nginx -t|systemctl reload nginx)$' "$FAKE_CALLS" && grep -q "nginx config unchanged" <<<"$out" && ok "an unchanged nginx config is neither tested nor reloaded again" || bad "nginx unchanged" "rc=$rc $(cat "$FAKE_CALLS")"
+
+deploy_env dp-nginx-old
+subprocessor_set
+mkdir -p "$(dirname "$(NGX)")"; printf 'server { listen 443; } # old\n' >"$(NGX)"
+out="$(bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+bak="$(find "$S/etc/nginx/conf.d" -name 'pd.conf.bak-*' | head -1)"
+[[ $rc == 0 && -n "$bak" ]] && grep -q '# old' "$bak" && cmp -s "$REPO/infra/nginx.conf" "$(NGX)" && ok "the previous nginx config is backed up (pd.conf.bak-<UTC stamp>) before the new one is installed" || bad "nginx backup" "rc=$rc bak=$bak"
+
+deploy_env dp-nginx-bad
+subprocessor_set
+mkdir -p "$(dirname "$(NGX)")"; printf 'server { listen 443; } # old\n' >"$(NGX)"
+out="$(FAKE_NGINX_T_EXIT=1 bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+[[ $rc != 0 ]] && grep -q "nginx -t failed" <<<"$out" && grep -q '^nginx -t$' "$FAKE_CALLS" && ! grep -q '^systemctl reload nginx' "$FAKE_CALLS" && grep -q '# old' "$(NGX)" \
+  && ok "a failing nginx -t stops the deploy, nginx is not reloaded and the previous config is put back" || bad "nginx -t guard" "rc=$rc $(cat "$FAKE_CALLS") $(cat "$(NGX)")"
+deploy_env dp-nginx-bad-new
+subprocessor_set
+out="$(FAKE_NGINX_T_EXIT=1 bash infra/scripts/deploy.sh 2>&1)"; rc=$?
+[[ $rc != 0 && ! -e "$(NGX)" ]] && ! grep -q '^systemctl reload nginx' "$FAKE_CALLS" && ok "a failing nginx -t on a first install removes the new file (nothing half-installed)" || bad "nginx first-install guard" "rc=$rc"
+
+deploy_env dp-nginx-dry
+out="$(bash infra/scripts/deploy.sh --dry-run 2>&1)"; rc=$?
+[[ $rc == 0 && ! -e "$(NGX)" ]] && grep -q '\[dry-run\] nginx -t' <<<"$out" && grep -q '\[dry-run\] systemctl reload nginx' <<<"$out" && ! grep -qE '^(nginx|systemctl reload)' "$FAKE_CALLS" \
+  && ok "deploy --dry-run prints the nginx install, test and reload, and runs none of them" || bad "nginx dry-run" "rc=$rc $(grep -i nginx <<<"$out")"
+grep -q 'PD_TRUST_PROXY=${PD_TRUST_PROXY:-172.31.250.1}' infra/docker-compose.yml && ok "compose: PD_TRUST_PROXY defaults to the pinned gateway 172.31.250.1" || bad "PD_TRUST_PROXY default"
 
 # docker-compose.yml (bugs 10-11)
 yml="$(cat infra/docker-compose.yml)"
