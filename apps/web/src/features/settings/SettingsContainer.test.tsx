@@ -197,7 +197,7 @@ describe('SettingsContainer: the due-date change', () => {
     setDue('2026-11-13');
     await user.click(saveButton());
     const dialog = await prompt();
-    expect(within(dialog).getByText(/^The due date moved from Tue, Nov 3 to Fri, Nov 13\./)).toBeTruthy();
+    expect(within(dialog).getByText('The due date moved from Tue, Nov 3 to Fri, Nov 13. Move the schedule with it?')).toBeTruthy();
     expect(api.updateBid).toHaveBeenCalledTimes(1);
     expect(api.updateBid).toHaveBeenCalledWith('bid-1', { name: 'VA EHR Support II' }); // no dueDate in the first save
 
