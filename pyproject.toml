@@ -10,3 +10,8 @@ package = false
 
 [tool.uv.workspace]
 members = ["python/*"]
+
+[tool.pytest.ini_options]
+# Both members have tests/test_healthz.py: import by path, not by basename.
+addopts = "--import-mode=importlib"
+testpaths = ["python"]

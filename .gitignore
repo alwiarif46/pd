@@ -57,3 +57,8 @@ __pycache__/
 !/skills/bid-summary/
 !/skills/compliance-matrix/
 !/docs/build/
+
+# Python
+.venv/
+.pytest_cache/
+.mypy_cache/
