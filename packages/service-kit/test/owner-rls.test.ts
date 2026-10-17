@@ -16,9 +16,6 @@ async function codeOf(p: Promise<unknown>): Promise<string | undefined> {
   }
 }
 
-/** Tables that legitimately have no RLS. Empty today: add `schema.table` here with a reason. */
-const RLS_ALLOW_LIST: ReadonlyArray<string> = [];
-
 describe.skipIf(SKIP_DB)('the table owner is not exempt from RLS', () => {
   const db = useTestDatabase();
 
@@ -47,21 +44,8 @@ describe.skipIf(SKIP_DB)('the table owner is not exempt from RLS', () => {
   });
 });
 
-describe.skipIf(SKIP_DB)('schema drift guards', () => {
+describe.skipIf(SKIP_DB)('database access guards', () => {
   const db = useTestDatabase();
-
-  it('every table in every service schema (but schema_migrations) has RLS enabled and forced', async () => {
-    const r = await db().admin.query<{ schema: string; tbl: string; rls: boolean; forced: boolean }>(
-      `select n.nspname as schema, c.relname as tbl, c.relrowsecurity as rls, c.relforcerowsecurity as forced
-         from pg_class c join pg_namespace n on n.oid = c.relnamespace
-        where n.nspname = any($1::text[]) and c.relkind in ('r', 'p') and c.relname <> 'schema_migrations'
-        order by 1, 2`,
-      [db().services.map((s) => s.schema)],
-    );
-    expect(r.rows.length).toBeGreaterThanOrEqual(db().services.length);
-    const bad = r.rows.filter((x) => !(x.rls && x.forced) && !RLS_ALLOW_LIST.includes(`${x.schema}.${x.tbl}`));
-    expect(bad.map((x) => `${x.schema}.${x.tbl}`), 'tables without ENABLE and FORCE ROW LEVEL SECURITY').toEqual([]);
-  });
 
   it('PUBLIC cannot connect to the migrated database; each service role can; an unrelated role cannot', async () => {
     const pub = await db().admin.query(

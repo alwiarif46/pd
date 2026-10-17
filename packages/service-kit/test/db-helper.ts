@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, inject } from 'vitest';
-import { applyMigrations, migrationServices, roleName, type MigrationService } from '../src/migrate';
+import { RELAY_ROLE, applyMigrations, migrationServices, roleName, type MigrationService } from '../src/migrate';
 
 export const BASE_URL = process.env.TEST_DATABASE_URL;
 export const IN_CI = process.env.CI === 'true';
@@ -44,7 +44,10 @@ export interface TestDb {
   adminRole: string;
   services: MigrationService[];
   passwords: Record<string, string>;
+  relayPassword: string;
   roleUrl(serviceId: string): string;
+  /** Connection string of the outbox relay role. */
+  relayUrl(): string;
   /** A pool connected as the owner role. */
   admin: pg.Pool;
 }
@@ -80,7 +83,7 @@ export function useTestDatabase(): () => TestDb {
     // exist yet are created by the owner, which gets ADMIN OPTION on them automatically.
     const services = migrationServices();
     const existing = await base.query<{ rolname: string }>('select rolname from pg_roles where rolname = any($1::text[])', [
-      services.map((s) => roleName(s.schema)),
+      [...services.map((s) => roleName(s.schema)), RELAY_ROLE],
     ]);
     for (const { rolname } of existing.rows) {
       await base.query(`grant "${rolname}" to "${adminRole}" with admin option`);
@@ -89,7 +92,8 @@ export function useTestDatabase(): () => TestDb {
 
     const passwords = Object.fromEntries(services.map((s) => [s.id, randomBytes(18).toString('hex')]));
     const adminUrl = urlFor(BASE_URL, adminRole, adminPassword, database);
-    await applyMigrations({ adminUrl, services, passwords });
+    const relayPassword = randomBytes(18).toString('hex');
+    await applyMigrations({ adminUrl, services, passwords, relayPassword });
     const dbName = database;
     const adminPool = new pg.Pool({ connectionString: adminUrl, max: 2 });
     // An idle client that the server drops at teardown must not become an uncaught exception.
@@ -105,6 +109,8 @@ export function useTestDatabase(): () => TestDb {
         if (!svc) throw new Error(`unknown service ${id}`);
         return urlFor(BASE_URL, roleName(svc.schema), passwords[id]!, dbName);
       },
+      relayUrl: () => urlFor(BASE_URL, RELAY_ROLE, relayPassword, dbName),
+      relayPassword,
       admin: adminPool,
     };
   });

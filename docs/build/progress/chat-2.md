@@ -16,9 +16,10 @@ Order follows the brief: contracts, then tenancy, then identity; ingest, intel a
 
 | # | Branch | What | Reviewer | Status | Next step |
 |---|---|---|---|---|---|
-| 0 | e2e/c2-00-plan | This file, questions.md Chat 2 entries | reviewer | building | open PR, ask owner to merge |
-| 1 | e2e/c2-01-contracts | OpenAPI for identity, gateway, ingest, intel; new events (`intel.bid.deleted`, `ingest.document.deleted`, audit events); version bumps | reviewer | planned | |
-| 2 | e2e/c2-02-tenancy | `withOrg` sets both settings; `*_svc` roles accepted by the role check; RLS template per schema; outbox relay role (BYPASSRLS, SELECT and UPDATE published_at only) with proving tests; LISTEN/NOTIFY prefixes; written exception in CLAUDE.md rule 4; Dockerfile ports and HEALTHCHECK | F | planned | |
+| 0 | e2e/c2-00-plan | This file, questions.md Chat 2 entries | reviewer | merged (#65, merged by the owner) | |
+| 0b | e2e/c2-00b-identity-plan | Identity design from the architect pass (`chat-2-identity-plan.md`); the identity PR split 3a-t, 3a to 3f, 4a replaces 3a to 3d above | reviewer | in review | |
+| 1 | e2e/c2-01-contracts | OpenAPI for identity, gateway, ingest, intel; new events (`intel.bid.deleted`, `ingest.document.deleted`, audit events); version bumps | reviewer | in review (#68) | review round 1 running; add identity gaps from the identity plan |
+| 2 | e2e/c2-02-tenancy (#66, 02b #67) | `withOrg` sets both settings; `*_svc` roles accepted by the role check; RLS template per schema; outbox relay role (BYPASSRLS, SELECT and UPDATE published_at only) with proving tests; LISTEN/NOTIFY prefixes; written exception in CLAUDE.md rule 4; Dockerfile ports and HEALTHCHECK | F | in review: fable round 1 no majors, minors fixed | CI, then ask owner |
 | 2b | e2e/c2-02b-testing-helpers | Cross-tenant helper follow-ups from PR 10 (packages/testing) | F | planned | |
 | 3a | e2e/c2-03a-zitadel | Zitadel pinned in stack (already), identity migration 0002, mock OIDC issuer fixes | F | planned | |
 | 3b | e2e/c2-03b-identity-tenants | Identity: tenants, members, seats, org_map, copy script | F | planned | |
@@ -58,3 +59,4 @@ Mirror of `questions.md`, Chat 2.
 ## Stubs
 - Mock OIDC issuer (`packages/testing/src/doubles/oidc.ts`) stands in for Zitadel in the session. Waits on: Docker daemon (CI runs the real Zitadel) and the owner's Google and Microsoft OAuth test apps. Blocks: the SSO check.
 - Credit bridge `unmetered` adapter for tests and dev. Waits on: billing chat.
+- identity, ingest and intel have skeleton: false until their service PRs serve the routes; each service PR flips its flag back to true to restore route-drift checking.
