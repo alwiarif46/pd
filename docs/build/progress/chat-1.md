@@ -32,7 +32,7 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 | 8 Contracts | e2e/c1-08-contracts | merged (#56) | opus: 2 majors fixed and re-reviewed, minors fixed |
 | 9 Skeletons | e2e/c1-09-skeletons | merged (#57) | Fable: no majors; 11 minors fixed incl. a racy test guard found on a fresh cluster |
 | 10 Testing | e2e/c1-10-testing | merged (#58) | Fable: 4 majors fixed over 3 rounds (positive control, CI-vacuous RLS tests, seed guard x2); follow-ups logged |
-| 11 Local stack | e2e/c1-11-stack | built, stacked on #58 | Compose file, native stack with doubles, `pnpm migrate` test. Compose parts unverified (no Docker). fable-reviewer: infra |
+| 11 Local stack | e2e/c1-11-stack | merged (#59) | Fable: no majors; 4 minors fixed (JWKS host, clamd double O(n), native chown scope, TCP healthcheck) |
 | 12 CI | e2e/c1-12-ci | built, stacked on #11, not pushed | Orchestrator pushes and iterates on CI. Never run on GitHub yet: the new jobs (contracts, test-services, test-python, compose-stack, e2e-web) and the 14 new build-docker entries are unverified until the first run. fable-reviewer: CI |
 | 13 Rename notice | - | planned | |
 
