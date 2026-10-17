@@ -46,22 +46,28 @@ export interface SeededDb {
 export function useSeededDatabase(): () => SeededDb {
   let state: SeededDb | undefined;
   let lock: pg.Client | undefined;
-  let roleExisted = true;
+  /** Assigned as soon as the database exists, so a failed seed still gets it dropped. */
+  let database: string | undefined;
+  /** The roles this run's migration created. Only these are dropped afterward. */
+  let created: string[] = [];
+  let appExisted = true;
 
   beforeAll(async () => {
     if (!BASE_URL) throw new Error('TEST_DATABASE_URL is not set (required under CI=true)');
     lock = new pg.Client({ connectionString: BASE_URL });
     await lock.connect();
     await lock.query('select pg_advisory_lock($1)', [CLUSTER_LOCK]);
-    roleExisted = ((await lock.query("select 1 from pg_roles where rolname = 'pd_app'")).rowCount ?? 0) > 0;
+    const before = new Set((await lock.query("select rolname from pg_roles where rolname in ('pd_app', 'pd_system')")).rows.map((r) => r.rolname as string));
+    appExisted = before.has('pd_app');
+    created = ['pd_app', 'pd_system'].filter((r) => !before.has(r));
 
-    const database = `test_pd_${randomBytes(6).toString('hex')}`;
+    database = `test_pd_${randomBytes(6).toString('hex')}`;
     await lock.query(`create database ${database}`);
     const adminUrl = urlFor(BASE_URL, null, null, database);
     const firstRun = await seedAll(adminUrl, undefined, { migrate: true });
 
     let appUrl: string | null = null;
-    if (!roleExisted) {
+    if (!appExisted) {
       const password = randomBytes(12).toString('hex');
       await lock.query(`alter role pd_app with login password '${password}'`);
       appUrl = urlFor(BASE_URL, 'pd_app', password, database);
@@ -76,12 +82,15 @@ export function useSeededDatabase(): () => SeededDb {
 
   afterAll(async () => {
     if (!lock) return;
+    const warn = (what: string) => (error: unknown) => {
+      console.warn(`[testing] teardown: ${what} failed: ${error instanceof Error ? error.message : String(error)}`);
+    };
     try {
-      if (state) await lock.query(`drop database if exists ${state.database} with (force)`);
-      if (!roleExisted) {
-        await lock.query('drop owned by pd_app, pd_system cascade').catch(() => undefined);
-        await lock.query('drop role if exists pd_app').catch(() => undefined);
-        await lock.query('drop role if exists pd_system').catch(() => undefined);
+      if (database) await lock.query(`drop database if exists ${database} with (force)`).catch(warn('drop database'));
+      if (created.length > 0) {
+        // Only roles this run created: one that was there before belongs to someone else.
+        await lock.query(`drop owned by ${created.join(', ')} cascade`).catch(warn('drop owned'));
+        for (const role of created) await lock.query(`drop role if exists ${role}`).catch(warn(`drop role ${role}`));
       }
     } finally {
       await lock.query('select pg_advisory_unlock($1)', [CLUSTER_LOCK]).catch(() => undefined);
