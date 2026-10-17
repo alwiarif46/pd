@@ -19,6 +19,7 @@ COPY --from=build --chown=node:node /out/package.json ./package.json
 COPY --from=build --chown=node:node /out/node_modules ./node_modules
 COPY --from=build --chown=node:node /out/dist ./dist
 USER node
+ENV PORT=4113
 EXPOSE 4113
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:4113/healthz || exit 1
 # The workspace packages ship TypeScript source (their package.json main is src/index.ts),

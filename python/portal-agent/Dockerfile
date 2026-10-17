@@ -15,6 +15,7 @@ WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 RUN useradd --system --uid 10001 app
 USER app
+ENV PORT=4112
 EXPOSE 4112
 HEALTHCHECK --interval=30s --timeout=3s CMD python -c "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:4112/healthz', timeout=2)" || exit 1
 CMD ["portal-agent"]
