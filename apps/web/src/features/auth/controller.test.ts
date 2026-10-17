@@ -98,6 +98,23 @@ describe('verify', () => {
     expect(loadPending()?.emailVerified).toBe(true);
   });
 
+  it('reports the phone step as needed unless the API says otherwise', async () => {
+    const api = mockApi();
+    savePending({ email: 'a@acme.com', phone: '+15555550100' });
+    expect((await verifyEmailAction(api, 'link-token')).phoneRequired).toBe(true);
+    api.verifyEmail.mockResolvedValue({ ok: true, phoneRequired: true });
+    expect((await verifyEmailAction(api, 'link-token')).phoneRequired).toBe(true);
+  });
+
+  it('finishes the sign-up when the API says the phone step is skipped', async () => {
+    const api = mockApi();
+    api.verifyEmail.mockResolvedValue({ ok: true, phoneRequired: false });
+    savePending({ email: 'a@acme.com', phone: '+15555550100' });
+    const status = await verifyEmailAction(api, 'link-token');
+    expect(status).toMatchObject({ state: 'done', phoneRequired: false });
+    expect(loadPending()).toEqual({ email: 'a@acme.com', phone: '+15555550100', emailVerified: true, phoneRequired: false });
+  });
+
   it('does not mark anything when the link is bad', async () => {
     const api = mockApi();
     api.verifyEmail.mockRejectedValue(new ApiError('That link has expired', 400));

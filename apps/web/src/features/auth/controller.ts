@@ -44,6 +44,8 @@ export interface PendingSignUp {
   phone: string;
   /** Set once the email link is confirmed, so a refresh resumes at the SMS code. */
   emailVerified?: boolean;
+  /** False once the API says the phone step is skipped (an allow-listed tester), so a refresh resumes at done. */
+  phoneRequired?: boolean;
 }
 
 export function savePending(value: PendingSignUp): void {
@@ -60,7 +62,12 @@ export function loadPending(): PendingSignUp | null {
     if (!raw) return null;
     const data = JSON.parse(raw) as Partial<PendingSignUp>;
     if (typeof data.email === 'string' && typeof data.phone === 'string') {
-      return { email: data.email, phone: data.phone, emailVerified: data.emailVerified === true };
+      return {
+        email: data.email,
+        phone: data.phone,
+        emailVerified: data.emailVerified === true,
+        ...(data.phoneRequired === false ? { phoneRequired: false } : {}),
+      };
     }
   } catch {
     // Treat unreadable storage as empty.
@@ -90,13 +97,30 @@ export async function signUpAction(deps: AuthApi, values: SignUpValues): Promise
   return status;
 }
 
-export async function verifyEmailAction(deps: AuthApi, token: string): Promise<AuthStatus> {
-  const status = await attempt(() => deps.verifyEmail(token), 'Email confirmed. Enter the code we texted you.');
-  const pending = loadPending();
-  if (status.state === 'done' && pending) {
-    savePending({ ...pending, emailVerified: true });
+/** The verify-email outcome; on success, `phoneRequired` says whether the phone step comes next. */
+export type VerifyEmailStatus = AuthStatus & { phoneRequired?: boolean };
+
+export async function verifyEmailAction(deps: AuthApi, token: string): Promise<VerifyEmailStatus> {
+  let phoneRequired = true;
+  const status = await attempt(async () => {
+    const result = await deps.verifyEmail(token);
+    // Only an explicit false skips the step; an older API sends no flag.
+    phoneRequired = result?.phoneRequired !== false;
+  }, '');
+  if (status.state !== 'done') {
+    return status;
   }
-  return status;
+  // Kept until the user moves on to log in, so a refresh (or a re-render without the token)
+  // resumes at the right step: the code, or done when the phone step is skipped.
+  const pending = loadPending();
+  if (pending) {
+    savePending({ ...pending, emailVerified: true, ...(phoneRequired ? {} : { phoneRequired: false }) });
+  }
+  if (!phoneRequired) {
+    // Phone already verified, or an allow-listed tester: the sign-up is finished.
+    return { state: 'done', message: 'Email confirmed. Your account is ready. Log in to continue.', phoneRequired };
+  }
+  return { state: 'done', message: 'Email confirmed. Enter the code we texted you.', phoneRequired };
 }
 
 export async function verifyPhoneAction(deps: AuthApi, phone: string, code: string): Promise<AuthStatus> {

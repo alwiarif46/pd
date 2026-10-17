@@ -565,8 +565,32 @@ describe.skipIf(Boolean(unavailable))('auth routes', () => {
     }
 
     async function verifyEmailOf(email: string, send: Send) {
-      expect((await send('/api/auth/verify-email', { token: lastSecret('email', email) })).statusCode).toBe(200);
+      const response = await send('/api/auth/verify-email', { token: lastSecret('email', email) });
+      expect(response.statusCode).toBe(200);
+      return response.json<{ ok: true; phoneRequired: boolean }>();
     }
+
+    it('tells the web client the phone step is skipped when verifying an allow-listed email', async () => {
+      const email = uniqueEmail('flagged');
+      const { app: skip, send } = await skipApp(email);
+      try {
+        expect((await send('/api/auth/signup', { email, phone: uniquePhone(), password: 'correct horse battery' })).statusCode).toBe(201);
+        expect(await verifyEmailOf(email, send)).toEqual({ ok: true, phoneRequired: false });
+      } finally {
+        await skip.close();
+      }
+    });
+
+    it('tells the web client the phone step is still needed for an email not on the list', async () => {
+      const email = uniqueEmail('unflagged');
+      const { app: skip, send } = await skipApp(`someone-else@${email.split('@')[1]}`);
+      try {
+        expect((await send('/api/auth/signup', { email, phone: uniquePhone(), password: 'correct horse battery' })).statusCode).toBe(201);
+        expect(await verifyEmailOf(email, send)).toEqual({ ok: true, phoneRequired: true });
+      } finally {
+        await skip.close();
+      }
+    });
 
     it('lets an allow-listed email sign in after email verification only, and sends no SMS', async () => {
       const email = uniqueEmail('tester');
@@ -630,8 +654,17 @@ describe.skipIf(Boolean(unavailable))('auth routes', () => {
     it('is off by default', async () => {
       const user = await signUp();
       expect(countTo('sms', user.phone)).toBe(1);
-      expect((await call('POST', '/api/auth/verify-email', { token: lastSecret('email', user.email) })).statusCode).toBe(200);
+      const verified = await call('POST', '/api/auth/verify-email', { token: lastSecret('email', user.email) });
+      expect(verified.statusCode).toBe(200);
+      expect(verified.json()).toEqual({ ok: true, phoneRequired: true });
       expect((await call('POST', '/api/auth/login', { email: user.email, password: user.password })).statusCode).toBe(403);
+    });
+
+    it('answers phoneRequired: false when the phone was verified before the email', async () => {
+      const user = await signUp();
+      expect((await call('POST', '/api/auth/verify-phone', { phone: user.phone, code: lastSecret('sms', user.phone) })).statusCode).toBe(200);
+      const verified = await call('POST', '/api/auth/verify-email', { token: lastSecret('email', user.email) });
+      expect(verified.json()).toEqual({ ok: true, phoneRequired: false });
     });
 
     it('applies to an existing unverified account added to the list later', async () => {

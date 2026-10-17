@@ -7,6 +7,12 @@
 
 export type Ok = { ok: true };
 
+/**
+ * POST /api/auth/verify-email. `phoneRequired: false` means the phone step is done or skipped
+ * (an allow-listed tester); an older server sends no flag, which means the step is still needed.
+ */
+export type VerifyEmailDto = Ok & { phoneRequired?: boolean };
+
 export type Role = 'owner' | 'member';
 export type Plan = 'free' | 'starter' | 'growth';
 export type BidType = 'federal' | 'sled';

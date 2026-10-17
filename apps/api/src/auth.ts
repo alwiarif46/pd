@@ -215,15 +215,21 @@ export async function registerAuth(app: FastifyInstance, options: AuthOptions = 
         gt(schema.authTokens.expiresAt, new Date()),
       )).returning({ userId: schema.authTokens.userId });
       if (!row) {
-        return false;
+        return null;
       }
-      await tx.update(schema.users).set({ emailVerifiedAt: new Date(), updatedAt: new Date() }).where(eq(schema.users.id, row.userId));
-      return true;
+      const [user] = await tx.update(schema.users).set({ emailVerifiedAt: new Date(), updatedAt: new Date() })
+        .where(eq(schema.users.id, row.userId))
+        .returning({ email: schema.users.email, phoneVerifiedAt: schema.users.phoneVerifiedAt });
+      return user ?? null;
     });
     if (!verified) {
       return reply.code(400).send(invalid);
     }
-    return { ok: true };
+    // `phoneRequired: false` tells the web client to skip the phone step: the phone is already
+    // verified, or the account is on PD_SKIP_PHONE_VERIFY_EMAILS. Only the holder of the email
+    // link learns it.
+    const phoneRequired = !verified.phoneVerifiedAt && !skipsPhone(phoneSkip, verified.email);
+    return { ok: true, phoneRequired };
   });
 
   /**

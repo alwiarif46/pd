@@ -1,13 +1,13 @@
 import { request, type CallOptions } from './http';
 import { getToken, setToken } from './session';
-import type { Ok, SignUpInput } from './types';
+import type { Ok, SignUpInput, VerifyEmailDto } from './types';
 
 /** Creates an account and sends the email link and phone code. */
 export function signUp(input: SignUpInput, opts?: CallOptions): Promise<{ userId: string }> {
   return request('/api/auth/signup', { method: 'POST', json: input, signal: opts?.signal });
 }
 
-export function verifyEmail(token: string, opts?: CallOptions): Promise<Ok> {
+export function verifyEmail(token: string, opts?: CallOptions): Promise<VerifyEmailDto> {
   return request('/api/auth/verify-email', { method: 'POST', json: { token }, signal: opts?.signal });
 }
 
