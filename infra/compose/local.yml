@@ -33,7 +33,7 @@ services:
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${E2E_DB_NAME:-e2e}"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-postgres} -d ${E2E_DB_NAME:-e2e}"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -147,7 +147,8 @@ services:
           memory: 1G
 
   s3-init:
-    # One-shot: creates the bucket, then exits. Other services wait for it with service_completed_successfully.
+    # One-shot: creates the bucket, then exits. Nothing depends on it yet; a service that needs the bucket (chat 2)
+    # should wait for it with depends_on condition: service_completed_successfully.
     image: chrislusf/seaweedfs:4.48
     restart: "no"
     depends_on:

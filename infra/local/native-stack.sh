@@ -68,26 +68,50 @@ wait_port() { # port label seconds
 
 pg_running() { [[ -f "$PG_DIR/postmaster.pid" ]] && as_pg_user "$PG_BIN/pg_ctl" -D "$PG_DIR" status >/dev/null 2>&1; }
 redis_pid_file() { printf '%s' "$RUN_DIR/redis.pid"; }
-redis_running() {
-  local f; f="$(redis_pid_file)"
-  [[ -f "$f" ]] && kill -0 "$(cat "$f")" 2>/dev/null
+# A pid file can outlive its process and the number can be reused: also check the command line (/proc) names the program.
+pid_is() { # pidfile pattern
+  local pid
+  [[ -f "$1" ]] || return 1
+  pid="$(cat "$1")"
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || return 1
+  [[ -r "/proc/$pid/cmdline" ]] || return 0 # no /proc (not Linux): trust kill -0
+  tr '\0' ' ' <"/proc/$pid/cmdline" | grep -q -- "$2"
 }
-doubles_running() { [[ -f "$DOUBLES_PID" ]] && kill -0 "$(cat "$DOUBLES_PID")" 2>/dev/null; }
+redis_running() { pid_is "$(redis_pid_file)" 'redis-server'; }
+doubles_running() { pid_is "$DOUBLES_PID" 'doubles.ts'; }
 
+# Creates pg/, redis/ and run/ inside NATIVE_DIR. As root it hands to PG_USER only the directories it created in this run,
+# never NATIVE_DIR itself or a directory that was already there. With DRY=1 it prints what it would do and changes nothing
+# (PD_NATIVE_ASSUME_ROOT=1 plans as root, for tests).
 prepare_dirs() {
-  mkdir -p "$PG_DIR" "$REDIS_DIR" "$RUN_DIR"
-  if [[ "$(id -u)" == 0 ]]; then
-    # Only the directories this script made, and only when they are inside NATIVE_DIR.
-    chown "$PG_USER" "$NATIVE_DIR" "$PG_DIR" "$REDIS_DIR" "$RUN_DIR"
-    chmod 755 "$NATIVE_DIR"
-  fi
-  chmod 700 "$PG_DIR"
+  local dry="${1:-0}" d root=0
+  [[ "$(id -u)" == 0 || "${PD_NATIVE_ASSUME_ROOT:-}" == 1 ]] && root=1
+  for d in "$NATIVE_DIR" "$PG_DIR" "$REDIS_DIR" "$RUN_DIR"; do
+    if [[ -d "$d" ]]; then
+      say "exists $d"
+      continue
+    fi
+    say "create $d"
+    if [[ "$dry" != 1 ]]; then
+      mkdir -p "$d"
+      # NATIVE_DIR itself stays as it is; only its three children are handed over.
+      if [[ "$root" == 1 && "$d" != "$NATIVE_DIR" ]]; then chown "$PG_USER" "$d"; fi
+    fi
+    if [[ "$root" == 1 && "$d" != "$NATIVE_DIR" ]]; then say "chown $d"; fi
+  done
+  if [[ "$dry" != 1 && -d "$PG_DIR" ]]; then chmod 700 "$PG_DIR"; fi
+}
+
+check_pg_dir_writable() {
+  as_pg_user test -w "$PG_DIR" \
+    || die "$PG_DIR is not writable by ${PG_USER:-the current user}. $PG_USER must be able to enter every parent directory of $NATIVE_DIR (chmod o+x on them) and own $PG_DIR. Or set PD_NATIVE_DIR to a directory it can use."
 }
 
 start_pg() {
   if pg_running; then say "postgres: already running on $PG_PORT"; return 0; fi
   port_open "$PG_PORT" && die "port $PG_PORT is already in use by something that is not this stack's Postgres (set PD_NATIVE_PG_PORT)"
   [[ -x "$PG_BIN/initdb" ]] || die "no Postgres binaries in $PG_BIN (set PD_NATIVE_PG_BIN)"
+  check_pg_dir_writable
   if [[ ! -f "$PG_DIR/PG_VERSION" ]]; then
     say "postgres: creating a new cluster in $PG_DIR"
     as_pg_user "$PG_BIN/initdb" -D "$PG_DIR" -U postgres -A trust -E UTF8 --locale=C.UTF-8 >"$RUN_DIR/initdb.log" 2>&1 \
@@ -152,7 +176,7 @@ ENVEOF
 }
 
 cmd_start() {
-  prepare_dirs
+  prepare_dirs 0 >/dev/null
   start_pg
   start_redis
   start_doubles
@@ -202,8 +226,9 @@ case "${1:-}" in
   status) cmd_status ;;
   env) print_env ;;
   stop) cmd_stop ;;
+  prepare-dry-run) prepare_dirs 1 ;;
   -h | --help | help | "")
-    sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     [[ -n "${1:-}" ]] ;;
   *) die "unknown command: $1 (use start, status, env or stop)" ;;
 esac

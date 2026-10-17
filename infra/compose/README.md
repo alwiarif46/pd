@@ -74,7 +74,7 @@ Secrets have no defaults in `local.yml` (`${VAR:?}`); only ports, names and othe
 No Docker daemon runs in the build session, so these have not run anywhere yet. CI (PR 12) runs them:
 
 - `docker compose up` itself: the boot, every healthcheck, the `depends_on` order, volume permissions.
-- Zitadel: start-from-init against the `zitadel` database, the first-instance variables, the machine key file, `/app/zitadel ready`. Names such as `ZITADEL_FIRSTINSTANCE_*` and `ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED` come from Zitadel's documented configuration and are unconfirmed against v4.19.5.
+- Zitadel: start-from-init against the `zitadel` database, the machine key file, and `/app/zitadel ready` (it calls `/debug/ready`). The variable names (`ZITADEL_EXTERNALDOMAIN`, `EXTERNALPORT`, `EXTERNALSECURE`, `TLS_ENABLED`, `DATABASE_POSTGRES_*`, `FIRSTINSTANCE_*`, `DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED`) were confirmed against the v4.19.5 source. Still unverified: the actual boot. Zitadel resolves the instance by Host, so clients use `localhost:8080`, not `127.0.0.1:8080`.
 - ClamAV: the signature download, `clamdcheck.sh`, a real EICAR scan.
 - SeaweedFS: the S3 gateway with env credentials, the `s3-init` bucket creation, the healthcheck.
 - The sandbox image build and its read-only, no-network run.

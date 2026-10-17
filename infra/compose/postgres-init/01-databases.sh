@@ -1,5 +1,6 @@
 #!/bin/sh
-# Runs once, when the Postgres data volume is empty (docker-entrypoint-initdb.d).
+# Runs once, when the Postgres data volume is empty (docker-entrypoint-initdb.d). It is not idempotent: a second run
+# fails on "create role". To run it again, remove the data volume (docker compose down -v).
 # - the pgvector extension in the e2e database (evidence service)
 # - the Zitadel database and its login role, and no other role may connect to that database
 # The 14 service roles and their schemas are made by `pnpm migrate`, not here (infra/db/README.md).

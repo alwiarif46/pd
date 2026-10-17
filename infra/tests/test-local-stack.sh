@@ -27,6 +27,7 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
   grep -q "network_mode: none" <<<"$rendered" && grep -q "read_only: true" <<<"$rendered" && grep -q "no-new-privileges" <<<"$rendered" \
     && ok "sandbox: no network, read-only root, no-new-privileges" || bad "sandbox hardening"
   grep -A3 "cap_drop" <<<"$rendered" | grep -q ALL && ok "sandbox drops all capabilities" || bad "sandbox cap_drop"
+  grep -q "pg_isready -h 127.0.0.1" <<<"$rendered" && ok "postgres healthcheck uses TCP (-h 127.0.0.1)" || bad "postgres healthcheck must use TCP"
   grep -q "maxmemory-policy" <<<"$rendered" && grep -q "appendonly" <<<"$rendered" && grep -q "noeviction" <<<"$rendered" \
     && ok "redis: appendonly yes, maxmemory-policy noeviction" || bad "redis flags"
 else
@@ -67,6 +68,25 @@ o="$(PD_NATIVE_DIR="$S" PD_NATIVE_PG_PORT=54999 bash "$NS" status 2>&1)"; rc=$?
 [[ $rc == 1 ]] && grep -q "postgres: down" <<<"$o" && grep -q "doubles: down" <<<"$o" && ok "status on an empty stack: all down, exit 1" || bad "status" "rc=$rc $o"
 o="$(PD_NATIVE_DIR="$S" bash "$NS" stop 2>&1)"; rc=$?
 [[ $rc == 0 ]] && grep -q "not running" <<<"$o" && ok "stop on an empty stack is a no-op" || bad "stop" "rc=$rc $o"
+# As root the script hands over only the directories it creates. Planned as root (PD_NATIVE_ASSUME_ROOT=1) with a dry run:
+# an existing NATIVE_DIR is never chowned, a new pg/ redis/ run/ are.
+E="$TMP/existing"; mkdir -p "$E"
+o="$(PD_NATIVE_DIR="$E" PD_NATIVE_ASSUME_ROOT=1 bash "$NS" prepare-dry-run 2>&1)"
+grep -q "^exists $E\$" <<<"$o" && ! grep -q "^chown $E\$" <<<"$o" && grep -q "^chown $E/pg\$" <<<"$o" && grep -q "^chown $E/run\$" <<<"$o" \
+  && ok "as root: an existing PD_NATIVE_DIR is not chowned; the new pg/ redis/ run/ are" || bad "prepare-dry-run existing dir" "$o"
+[[ ! -e "$E/pg" ]] && ok "the dry run created nothing" || bad "dry run created $E/pg"
+mkdir -p "$E/pg"
+o="$(PD_NATIVE_DIR="$E" PD_NATIVE_ASSUME_ROOT=1 bash "$NS" prepare-dry-run 2>&1)"
+! grep -q "^chown $E/pg\$" <<<"$o" && grep -q "^exists $E/pg\$" <<<"$o" && ok "as root: a pre-existing pg/ is not chowned" || bad "pre-existing pg/" "$o"
+if [[ "$(id -u)" != 0 ]]; then
+  o="$(PD_NATIVE_DIR="$TMP/fresh/native" bash "$NS" prepare-dry-run 2>&1)"
+  ! grep -q "^chown" <<<"$o" && grep -q "^create $TMP/fresh/native\$" <<<"$o" && ok "not root: nothing is chowned" || bad "non-root plan" "$o"
+else
+  skip "not-root plan (this run is root)"
+fi
+grep -q "check_pg_dir_writable" "$NS" && grep -q "test -w" "$NS" && ok "native-stack.sh checks PG_DIR is writable before initdb" || bad "writable check missing"
+grep -q "/proc/" "$NS" && ok "native-stack.sh verifies /proc/<pid>/cmdline for stale pid files" || bad "cmdline check missing"
+
 # no destructive command anywhere in the script
 ! grep -nE '\brm +-[a-zA-Z]*r|\bmkfs|\bdd +if=|\bcryptsetup' "$NS" >/dev/null && ok "native-stack.sh has no recursive delete or disk command" || bad "destructive command in native-stack.sh"
 if command -v shellcheck >/dev/null 2>&1; then
