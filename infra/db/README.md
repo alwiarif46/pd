@@ -38,7 +38,7 @@ Steps, in one run, under one advisory lock per database:
 - `GRANT` and `REVOKE` for the role are in the migration, so the role must exist first. `pnpm migrate` guarantees that.
 - No passwords or secrets in SQL or in git.
 - No `search_path` in a migration file; the migrator sets it per file.
-- Every table in a service schema except `schema_migrations` needs `ENABLE` and `FORCE ROW LEVEL SECURITY`. A test fails otherwise; a table that cannot have RLS goes on the allow-list in `packages/service-kit/test/owner-rls.test.ts` with a reason.
+- Every table in a service schema except `schema_migrations` needs `ENABLE` and `FORCE ROW LEVEL SECURITY`. A test fails otherwise; a table that cannot have RLS goes on the allow-list in `packages/service-kit/test/rls.test.ts` with a reason. The same test checks that each table has a `tenant_id` column and a policy on `app.tenant_id`. `tenantRlsSql` in `@pd/service-kit` writes the template statements.
 
 ## Other databases on the same cluster
 
@@ -48,6 +48,6 @@ Steps, in one run, under one advisory lock per database:
 
 `packages/service-kit` tests reset the `<schema>_svc` passwords of the cluster in `TEST_DATABASE_URL`. They refuse to run when any of those roles already has a login password, unless `SERVICE_KIT_TEST_RESETS_ROLES=1` is set. Use a disposable cluster. See `packages/service-kit/README.md`.
 
-## Not solved yet
+## The outbox relay role
 
-The outbox relay must read every tenant's rows, which RLS blocks for the service role. Decision (option A, a separate BYPASSRLS relay role limited to the outbox tables) is in `docs/build/questions.md`, Chat 1. Chats 2 and 3 build it.
+One cluster-wide role, `outbox_relay`, publishes every tenant's outbox rows. It is `LOGIN NOINHERIT NOSUPERUSER`. Set its password with `OUTBOX_RELAY_DB_PASSWORD` (sent as a SCRAM-SHA-256 verifier; without it the role is `NOLOGIN`, and a run with no password sets an existing relay role to `NOLOGIN`). It holds `CONNECT` on the migrated database, `USAGE` on each service schema, `SELECT` and `UPDATE (published_at)` on each `<schema>.outbox`, and nothing else: no other table, no `schema_migrations`, no `app`, no `CREATE`. The grants run after the service migrations, as the last step. Postgres lets only a role with `BYPASSRLS` create a `BYPASSRLS` role, so the role gets that attribute when the migrator has it. Three policies, `relay_read`, `relay_publish` and the restrictive `relay_no_unsend`, give it every tenant's rows (published ones too) and stop it from setting `published_at` back to null, even with `app.tenant_id` set. They test `current_user`, so the migrator, which is a member of the role, still obeys the tenant policy. `packages/service-kit/test/relay-role.test.ts` proves the limits. Policies do not apply to a BYPASSRLS role, so when the migrator gave it that attribute only the column grant protects the table (it can still null `published_at`). The relay orders by `occurred_at` within one batch only; consumers must not rely on order across batches. This is the one exception to CLAUDE.md rule 4.

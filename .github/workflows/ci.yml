@@ -269,6 +269,8 @@ jobs:
         run: pnpm --filter @pd/service-kit test
       - name: '@pd/testing tests (tenant fixtures, seed, doubles, pnpm migrate end to end)'
         run: pnpm --filter @pd/testing test
+      - name: '@pd/core tests (no database needed)'
+        run: pnpm --filter @pd/core test
       - name: The twelve TypeScript service skeletons
         # One package at a time: they share the cluster.
         run: >-
