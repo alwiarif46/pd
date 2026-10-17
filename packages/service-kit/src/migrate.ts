@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { SERVICES as CONTRACT_SERVICES } from '@pd/contracts';
+import { scramVerifier } from './scram.js';
 
 /** The fixed order of 09 s9.3: later schemas carry ids that earlier services issue. */
 export const MIGRATION_ORDER = [
@@ -108,6 +109,8 @@ async function runDir(client: pg.Client, schema: string, dir: string, step: stri
     const sql = readFileSync(join(dir, file), 'utf8');
     await client.query('BEGIN');
     try {
+      // A file that names a table without a schema lands in its own schema, never another's.
+      await client.query(`set local search_path = ${ident(schema)}`);
       await client.query(sql);
       await client.query(`insert into ${ident(schema)}.schema_migrations (id) values ($1)`, [file]);
       await client.query('COMMIT');
@@ -131,10 +134,11 @@ async function bootstrapRole(client: pg.Client, svc: MigrationService, password:
      end $$`,
   );
   if (password) {
-    // DDL takes no bind parameters: let the server quote the literal.
+    // DDL takes no bind parameters: let the server quote the literal. The literal is a SCRAM-SHA-256
+    // verifier, not the plain password, so the plain text never reaches the server or its logs.
     const stmt = await client.query<{ sql: string }>(
       "select format('alter role %I login password %L', $1::text, $2::text) as sql",
-      [role, password],
+      [role, scramVerifier(password)],
     );
     await client.query(stmt.rows[0]!.sql);
   }
@@ -155,8 +159,19 @@ async function appStep(
   log: (line: string) => void,
 ): Promise<StepResult> {
   await client.query('revoke all on schema public from public');
+  // Roles can otherwise connect to every database of the cluster through PUBLIC. Only this
+  // database, which the migrator was pointed at on purpose, is changed.
+  const revoke = await client.query<{ sql: string }>(
+    "select format('revoke connect on database %I from public', current_database()) as sql",
+  );
+  await client.query(revoke.rows[0]!.sql);
   for (const svc of services) {
     await bootstrapRole(client, svc, passwords(svc.id));
+    const grant = await client.query<{ sql: string }>(
+      "select format('grant connect on database %I to %I', current_database(), $1::text) as sql",
+      [roleName(svc.schema)],
+    );
+    await client.query(grant.rows[0]!.sql);
     log(`role ${roleName(svc.schema)}: ready`);
   }
   await client.query('create schema if not exists app');

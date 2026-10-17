@@ -47,6 +47,16 @@ describe('migration files', () => {
     }
   });
 
+  it('never set search_path: the migrator sets it, and a file may not change it', () => {
+    const dirs = [APP_MIGRATIONS_DIR, ...services.map((svc) => join(REPO_ROOT, svc.folder, 'migrations'))];
+    for (const dir of dirs) {
+      for (const file of migrationFiles(dir)) {
+        const sql = readFileSync(join(dir, file), 'utf8').replace(/--[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+        expect(/search_path/i.test(sql), `${dir}/${file} mentions search_path`).toBe(false);
+      }
+    }
+  });
+
   it('give each outbox the 09 s2 columns, FORCE RLS and the tenant policy', () => {
     for (const svc of services) {
       const sql = readFileSync(join(REPO_ROOT, svc.folder, 'migrations', '0001_init.sql'), 'utf8');
@@ -124,7 +134,7 @@ describe.skipIf(SKIP_DB)('applyMigrations against Postgres', () => {
       const svc = [{ id: 'billing', schema: 'billing', folder }];
       const first = await applyMigrations({ adminUrl, services: svc, repoRoot: root, only: ['billing'] });
       expect(first.find((r) => r.step === 'billing')?.applied).toEqual(['0001_a.sql', '0002_b.sql']);
-      writeFileSync(join(root, folder, 'migrations', '0003_c.sql'), 'create table if not exists billing.t_c (n int);');
+      writeFileSync(join(root, folder, 'migrations', '0003_c.sql'), 'create table if not exists billing.t_c (n int); create table if not exists t_unqualified (n int);');
       const second = await applyMigrations({ adminUrl, services: svc, repoRoot: root });
       expect(second.find((r) => r.step === 'billing')).toMatchObject({ applied: ['0003_c.sql'], skipped: ['0001_a.sql', '0002_b.sql'] });
       writeFileSync(join(root, folder, 'migrations', '0004_bad.sql'), 'select * from no_such_table;');
@@ -134,6 +144,12 @@ describe.skipIf(SKIP_DB)('applyMigrations against Postgres', () => {
       const ids = (await admin.query('select id from billing.schema_migrations order by id')).rows.map((r) => r.id);
       await admin.end();
       expect(ids).toEqual(['0001_a.sql', '0002_b.sql', '0003_c.sql']);
+      // An unqualified name in a migration file lands in the service's own schema.
+      const where = new pg.Client({ connectionString: adminUrl });
+      await where.connect();
+      const loc = await where.query("select table_schema from information_schema.tables where table_name = 't_unqualified'");
+      await where.end();
+      expect(loc.rows).toEqual([{ table_schema: 'billing' }]);
     } finally {
       await base.query(`drop database if exists ${database} with (force)`);
       await base.end();

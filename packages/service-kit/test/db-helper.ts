@@ -5,12 +5,49 @@ import { applyMigrations, migrationServices, roleName, type MigrationService } f
 
 export const BASE_URL = process.env.TEST_DATABASE_URL;
 export const IN_CI = process.env.CI === 'true';
-/** True when DB tests must be skipped: no database and not in CI. In CI a missing URL fails. */
-export const SKIP_DB = !BASE_URL && !IN_CI;
+/** No database and not in CI. In CI a missing URL fails. */
+export const SKIP_DB_NO_URL = !BASE_URL && !IN_CI;
 
-if (SKIP_DB) {
+if (SKIP_DB_NO_URL) {
   console.warn('[service-kit] TEST_DATABASE_URL is not set: database tests are skipped (they fail under CI=true)');
 }
+
+/**
+ * The tests call applyMigrations with random passwords, which resets the password of each
+ * `<schema>_svc` role. Roles are cluster-wide, so on a cluster whose roles are really in use
+ * (a login role with a password already set) that would lock the services out. Refuse unless the
+ * runner says the cluster is disposable.
+ */
+export const RESETS_ROLES_OK = process.env.SERVICE_KIT_TEST_RESETS_ROLES === '1';
+
+async function realServiceRoles(): Promise<string[]> {
+  if (!BASE_URL) return [];
+  const client = new pg.Client({ connectionString: BASE_URL });
+  await client.connect();
+  try {
+    const names = migrationServices().map((s) => roleName(s.schema));
+    const r = await client.query<{ rolname: string }>(
+      'select rolname from pg_authid where rolname = any($1::text[]) and rolcanlogin and rolpassword is not null order by 1',
+      [names],
+    );
+    return r.rows.map((x) => x.rolname);
+  } finally {
+    await client.end();
+  }
+}
+
+const inUse = RESETS_ROLES_OK ? [] : await realServiceRoles();
+if (inUse.length > 0) {
+  const msg =
+    `[service-kit] REFUSING to run database tests: ${inUse.length} service role(s) already have a login password ` +
+    `(${inUse.slice(0, 3).join(', ')}${inUse.length > 3 ? ', ...' : ''}). The tests reset those passwords. ` +
+    'Point TEST_DATABASE_URL at a disposable cluster, or set SERVICE_KIT_TEST_RESETS_ROLES=1 if resetting them is fine.';
+  if (IN_CI) throw new Error(msg);
+  console.warn(`\n!!!!!!!! ${msg} !!!!!!!!\n`);
+}
+export const SKIP_ROLE_RESET = inUse.length > 0;
+/** True when database tests are skipped: no URL (outside CI), or a cluster whose service roles are in use. */
+export const SKIP_DB = SKIP_DB_NO_URL || SKIP_ROLE_RESET;
 
 // Roles are cluster-wide, so two test runs on one cluster must not overlap.
 const CLUSTER_LOCK = 7_450_902;
@@ -25,18 +62,26 @@ export function urlFor(base: string, user: string | null, password: string | nul
 
 export interface TestDb {
   database: string;
+  /** Connection of the database owner: a plain role (CREATEROLE, CREATEDB), not a superuser, not BYPASSRLS. */
   adminUrl: string;
+  adminRole: string;
   services: MigrationService[];
   passwords: Record<string, string>;
   roleUrl(serviceId: string): string;
+  /** A pool connected as the owner role. */
   admin: pg.Pool;
 }
 
-/** Creates a fresh database, migrates it, and drops it after the file's tests. */
+/**
+ * Creates a fresh database owned by a throwaway non-superuser role, migrates it as that role
+ * (so FORCE RLS is proven for the table owner), and drops both after the file's tests.
+ */
 export function useTestDatabase(): () => TestDb {
   let state: TestDb | undefined;
   let lockClient: pg.Client | undefined;
   let base: pg.Pool | undefined;
+  let adminRole: string | undefined;
+  let database: string | undefined;
 
   beforeAll(async () => {
     if (!BASE_URL) throw new Error('TEST_DATABASE_URL is not set (required under CI=true)');
@@ -44,34 +89,54 @@ export function useTestDatabase(): () => TestDb {
     await lockClient.connect();
     await lockClient.query('select pg_advisory_lock($1)', [CLUSTER_LOCK]);
 
-    const database = `sk_test_${randomBytes(6).toString('hex')}`;
+    const suffix = randomBytes(6).toString('hex');
+    database = `sk_test_${suffix}`;
+    adminRole = `sk_admin_${suffix}`;
+    const adminPassword = randomBytes(18).toString('hex');
     base = new pg.Pool({ connectionString: BASE_URL, max: 1 });
-    await base.query(`create database ${database}`);
-
+    const create = await base.query<{ sql: string }>(
+      "select format('create role %I createrole createdb nosuperuser nobypassrls login password %L', $1::text, $2::text) as sql",
+      [adminRole, adminPassword],
+    );
+    await base.query(create.rows[0]!.sql);
+    // PG16: altering a role that already exists needs ADMIN OPTION on it. Roles that do not
+    // exist yet are created by the owner, which gets ADMIN OPTION on them automatically.
     const services = migrationServices();
+    const existing = await base.query<{ rolname: string }>('select rolname from pg_roles where rolname = any($1::text[])', [
+      services.map((s) => roleName(s.schema)),
+    ]);
+    for (const { rolname } of existing.rows) {
+      await base.query(`grant "${rolname}" to "${adminRole}" with admin option`);
+    }
+    await base.query(`create database "${database}" owner "${adminRole}"`);
+
     const passwords = Object.fromEntries(services.map((s) => [s.id, randomBytes(18).toString('hex')]));
-    const adminUrl = urlFor(BASE_URL, null, null, database);
+    const adminUrl = urlFor(BASE_URL, adminRole, adminPassword, database);
     await applyMigrations({ adminUrl, services, passwords });
+    const dbName = database;
+    const adminPool = new pg.Pool({ connectionString: adminUrl, max: 2 });
+    // An idle client that the server drops at teardown must not become an uncaught exception.
+    adminPool.on('error', () => undefined);
     state = {
-      database,
+      database: dbName,
       adminUrl,
+      adminRole,
       services,
       passwords,
       roleUrl: (id) => {
         const svc = services.find((s) => s.id === id);
         if (!svc) throw new Error(`unknown service ${id}`);
-        return urlFor(BASE_URL, roleName(svc.schema), passwords[id]!, database);
+        return urlFor(BASE_URL, roleName(svc.schema), passwords[id]!, dbName);
       },
-      admin: new pg.Pool({ connectionString: adminUrl, max: 2 }),
+      admin: adminPool,
     };
   });
 
   afterAll(async () => {
     try {
       await state?.admin.end();
-      if (base && state) {
-        await base.query(`drop database if exists ${state.database} with (force)`);
-      }
+      if (base && database) await base.query(`drop database if exists "${database}" with (force)`);
+      if (base && adminRole) await base.query(`drop role if exists "${adminRole}"`);
     } finally {
       await base?.end();
       if (lockClient) {

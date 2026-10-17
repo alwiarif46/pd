@@ -81,6 +81,36 @@ describe.skipIf(SKIP_DB)('healthz with a real database', () => {
     }
   });
 
+  it('cancels the query on the server at 2 s instead of leaving it running', async () => {
+    const pool = new pg.Pool({ connectionString: db().roleUrl('identity'), max: 1 });
+    const holder = new pg.Client({ connectionString: db().adminUrl });
+    await holder.connect();
+    try {
+      // A lock the ledger query has to wait for.
+      await holder.query('begin');
+      await holder.query('lock table identity.schema_migrations in access exclusive mode');
+      const started = Date.now();
+      expect(await readSchemaMigration('identity', { pool })).toBe('unavailable');
+      expect(Date.now() - started).toBeLessThan(3500);
+      let waiting = 1;
+      for (let i = 0; i < 20 && waiting > 0; i++) {
+        const r = await db().admin.query(
+          "select count(*)::int as n from pg_stat_activity where datname = $1 and usename = 'identity_svc' and state = 'active' and query like '%schema_migrations%'",
+          [db().database],
+        );
+        waiting = r.rows[0].n;
+        if (waiting > 0) await new Promise((res) => setTimeout(res, 100));
+      }
+      expect(waiting, 'the ledger query is still running on the server').toBe(0);
+      // The pool is healthy afterwards and its default has no statement timeout.
+      expect((await pool.query('show statement_timeout')).rows[0].statement_timeout).toBe('0');
+    } finally {
+      await holder.query('rollback').catch(() => undefined);
+      await holder.end();
+      await pool.end();
+    }
+  });
+
   it('is "unavailable" when the database is down', async () => {
     const pool = new pg.Pool({ connectionString: 'postgres://nobody@127.0.0.1:1/none', connectionTimeoutMillis: 500 });
     pool.on('error', () => undefined);
