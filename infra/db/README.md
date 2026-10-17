@@ -42,7 +42,7 @@ Steps, in one run, under one advisory lock per database:
 
 ## Other databases on the same cluster
 
-`CONNECT` is revoked from `PUBLIC` only on the database `pnpm migrate` is pointed at. The Zitadel and PD databases must do the same for their own roles (PR 11): `REVOKE CONNECT ON DATABASE <db> FROM PUBLIC`, then `GRANT CONNECT` to the roles that use it. Until then those databases are reachable by every role through `PUBLIC`.
+`CONNECT` is revoked from `PUBLIC` only on the database `pnpm migrate` is pointed at. The Zitadel and PD databases must do the same for their own roles: `REVOKE CONNECT ON DATABASE <db> FROM PUBLIC`, then `GRANT CONNECT` to the roles that use it. The Compose stack does this for the Zitadel database in `infra/compose/postgres-init/01-databases.sh` (`infra/compose/README.md`). PD's own database is not covered yet.
 
 ## Running the tests
 

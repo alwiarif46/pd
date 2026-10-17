@@ -361,6 +361,11 @@ export PD_CLOUDFLARE_API="$DEAD_SINK/client/v4"; unset PD_BASH
 o="$(bash infra/tests/test-providers.sh </dev/null 2>&1)"; rc=$?
 [[ $rc == 0 ]] && ok "provider layer suite: $(tail -1 <<<"$o")" || bad "provider layer suite (bash infra/tests/test-providers.sh)" "$(grep -A1 '^FAIL' <<<"$o" | head -20)"
 
+# ------------------------------------------------------------------ local stack files
+# the real docker client on PATH, not the fake the earlier cases put first
+o="$(PATH="$ORIG_PATH" bash infra/tests/test-local-stack.sh </dev/null 2>&1)"; rc=$?
+[[ $rc == 0 ]] && ok "local stack suite: $(tail -1 <<<"$o")" || bad "local stack suite (bash infra/tests/test-local-stack.sh)" "$(grep -A1 '^FAIL' <<<"$o" | head -20)"
+
 # ------------------------------------------------------------------ static
 mapfile -t SH < <(find infra ops -name '*.sh' -not -path '*/node_modules/*')
 badsyntax=""

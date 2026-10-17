@@ -62,3 +62,6 @@ __pycache__/
 .venv/
 .pytest_cache/
 .mypy_cache/
+
+# Local Compose stack env (infra/compose/local.env.example is the template)
+infra/compose/local.env
