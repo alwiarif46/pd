@@ -1,114 +1,235 @@
-# 08 — Build Phases, Testing, and Launch
+# 08: Build Phases, Testing, and Launch
 
-**Status:** Draft v2 · 13 Oct 2026
+**Status:** Draft v2 · 17 Oct 2026
 
-The model test comes before the app UI because its result sets the model, the cost, and the prices.
+E2E Proposal is built as services in the PD repo, renamed to E2E Proposal (09 s5). E2E absorbs PD: PD's code becomes E2E's first working services. Each later phase adds services or stages, so every phase ends with something a tenant could use. Nothing ships until the tool passes the 10-RFP test (Phase 9).
 
-## Phase 0 — Setup
+## 1. Build order
 
-- Server at the provider set in `config/tenant.toml` (`[infra] provider`; production provider OPEN, HUMAN-TODO H-02), Ubuntu, firewall, Docker, nginx, Cloudflare DNS for the subdomain. Root and SSH: Amaan only until decided (01 s1).
-- Compose layout with the `sandbox` service and its host runner (01 s2.1). clamd limits at 300 MB or more and `ConcurrentDatabaseReload no`.
-- Database roles `pd_owner`, `pd_app`, and `pd_system` (02 s4).
-- GitHub repository, CI, container registry, staging environment (a separate small VPS if chosen; 🟨 **OPEN** in 01 s6).
-- Start Telnyx 10DLC registration (or toll-free verification) for the SMS codes, since it takes days to weeks.
-- Request zero-retention and no-training terms from DeepInfra (and from Anthropic for its candidates) before any golden-set document is sent.
-- Write the CUI and export-control marking rules list (04 s2) with test pages for each marking.
-- Amaan assembles the golden set: 5 past solicitations with human matrices, at least 3 federal and 2 SLED, and picks the 2 held-out documents.
-- Amaan sets `DEEPINFRA_API_KEY`. Claude runs the small provider benchmark on public text before Phase 1 work starts (04 s5).
-- **Done when:** a hello-world api answers on `https://pd.shaavir.com/health` through Cloudflare; a push to `main` deploys to staging; and DeepInfra's retention and training terms are confirmed in writing, or the golden set is recorded as limited to documents the owner is allowed to send.
+| Phase | Builds | Services (09 s3) | Ends with |
+|---|---|---|---|
+| 0 | Repo rename, restructure, contracts, local stack, test set | `packages/`, `infra/` | PD's code and tests run in the E2E layout |
+| 1 | Identity, gateway, PD services and tabs | 1, 2, 4, 5 | Upload to compliance matrix through E2E; PD's tabs work as E2E features |
+| 2 | Orchestrator, model gateway, evidence, credit ledger | 3 (ledger only), 6, 7, 11 | Soft intake, AI-ban flag, Gate 0b, resume |
+| 3 | Render service and fonts | 10 | Word, PDF, and verified page counts |
+| 4 | Drafting | 8 | Every volume drafted with NEEDs and page gates |
+| 5 | Reviews, gates, locks, package | 9, plus 8 and 10 | A full run to a downloadable package |
+| 6 | Mid-run integrations | 12, 13, 14, 15 | Amendments, Q&A, request and collect, Drive, eBuy, portals, notices |
+| 7 | Plans and Stripe | 3 | Paid plans live in Stripe test mode |
+| 8 | Hardening, security, legal | All | Every check in 07 passes |
+| 9 | 10-RFP test gate | All | Ten or more RFPs run end to end; cost cap set; fixes made |
+| 10 | Terms, hosting, beta, launch | All | Paying tenants |
 
-## Phase 1 — Model test harness
+**PD's open PRs.** PRs #35 to #38 finish in the renamed repo in Phase 0, in the order #37, #35, #36, #38. Proposed: before the restructure PR (09 s6).
 
-- Document processing as a library, run in the sandbox: scan, encryption check, DOCX to PDF (Mammoth fallback), extract, OCR (`--jobs 2`), marking check, classify, chunk, pre-scan.
-- Compliance matrix passes 1 to 6 with the provider layer and skill loader. Quote normalization and cross-page matching (04 s1). Pass 3 flags instead of drops.
-- Amendment run with the amendment-diff step (04 s3.1), tested on golden solicitations that have amendments.
-- Golden set converted to a comparison format and split: 3 for tuning, 2 held out.
-- Harness scoring with the 80% quote-overlap match rule, both ways, plus a manual check of disagreements.
-- Benchmark on the full pipeline: output tokens per second, latency per chunk, JSON validity rate, and the provider's concurrent-call limit.
-- Run Qwen3.5-397B on DeepInfra first, then the other candidates.
-- **Done when:** a report per model shows recall and precision on the held-out documents (and on all 5), due-date accuracy, the quote-check failure rate before drops and the count of dropped rows, time per 200-page text-layer PDF on an idle worker, measured time for scanned documents, the benchmark measures, and cost per RFP using the 04 s7 arithmetic; Amaan picks the model; and starting values are written down for provider concurrency, the per-bid cap, chunk size, the token budget per RFP, and the scanned-document time expectation.
+### Phase 0: Repo rename, restructure, contracts, test set
 
-## Phase 2 — Core app (free tabs)
+- Rename the PD GitHub repo (`pd`) to E2E Proposal. History, CI, the secret scan, hooks, infra tests, and PR branches stay. Start now.
+- Finish PD's open PRs #35 to #38 in the repo.
+- First E2E PR: restructure into `services/`, `packages/`, and `python/` (uv workspace) by the map in 09 s6. Rewrite CLAUDE.md. Move the E2E plans into `docs/plans/` and PD's plans into `docs/plans/archive-pd/`. Remove any parity check.
+- Keep `C:\Tools\E2E` for working files only.
+- Write CLAUDE.md from the outline in 09 s8.
+- Set up `packages/contracts` with the OpenAPI and event schema layout, and `packages/stage-interface`.
+- Local stack in Docker Compose: one Postgres cluster with a schema and role per service plus Zitadel's database, Zitadel, Redis, S3-compatible storage (MinIO), and ClamAV. Redis carries BullMQ and the Redis Streams events. One command boots it; the environment variables and migration order are in 09 s9. Proposed: a staging host through PD's `ssh` adapter. The production provider is chosen in Phase 10 (01 s1).
+- Gather the test set: at least 10 past RFPs with the proposals the client firm submitted, federal and SLED. Use only documents the Owner may send to a model provider under standard terms. 🟨 **OPEN:** source tenants and written permission (00 s7).
+- **Done when:**
+  - Every service skeleton builds, boots, and answers a health check.
+  - PD's tests pass in the new layout, and CI and the secret scan stay green.
+  - PRs #35 to #38 are merged with their tests green.
+  - The old PD URL redirects to the renamed repo.
+  - A service role that queries another service's schema gets a permission error.
+  - `docker compose up` boots the whole local stack, and `pnpm migrate` applies every schema in the order 09 s9 sets.
 
-- Auth (signup, email link, SMS code, login, reset) with `sessions` and `auth_tokens` in Postgres. SMS controls: +1 numbers only, daily caps per IP and per account, Telnyx spend alert.
-- Organizations, members, invites. Row-level security with transaction-local `app.org_id` on every request and job.
-- Bids list, new bid with bid type, upload sessions (20 MB chunks, declared size and sha256, MB cap per bid, 24-hour expiry), job progress with queue position.
-- Encryption refusals, the marking prompt, and the upload refusals in 05 s3.10.
-- Tabs: Overview and kickoff, Schedule (port), Compliance matrix with the source viewer (viewing tokens about 1 hour).
-- Row detail slider (05 s3.12) and `row_history`.
-- Amendment display: superseded, withdrawn, and added rows; "Confirm amendment changes"; date changes into the schedule prompt.
-- Documents tab with MB used of the cap, live-until date, and archive status. Restore is a stub that shows the status flow; the real archive arrives in Phase 5.
-- XLSX exports.
-- **Done when:** a new user signs up, uploads a 200-page text-layer solicitation, and gets a compliance matrix with working source links in under 10 minutes on an idle staging worker; an amendment marks the right rows superseded, withdrawn, and added; and the slider shows every field in 05 s3.12.
+### Phase 1: Identity, gateway, PD services and tabs
 
-## Phase 3 — Plans and billing
+- Identity: self-hosted Zitadel in the stack, pinned by version, unmodified. The identity service wraps it over OIDC and its management API: tenants, the user mirror, roles, invites, and the Zitadel organization per tenant (09 s4.2). Work email sign-in with MFA by authenticator app or passkey. Google and Microsoft SSO. SAML SSO for Enterprise can follow in Phase 7. No SMS (06 s1).
+- `org_id` maps to `tenant_id` with the same value; `withTenant` sets both settings (09 s2).
+- Gateway: routing, token check, rate limits, chunked upload pass-through.
+- Ingest from PD: upload, ClamAV, sandbox convert, extraction, OCR, marking check, classify, chunk, pre-scan.
+- Solicitation intel from PD: shred, compliance matrix, quote check, dates and schedule, bid facts, amendment key check and diff.
+- PD's tabs become E2E features in the web app: overview, schedule, compliance matrix, outline, resumes, reviews, production, orals, lessons (09 s7).
+- **Done when:**
+  - A tenant signs in with a passkey, and another with Google SSO, both through Zitadel.
+  - PD's password and session code is gone from the repo; no E2E service stores a password.
+  - One solicitation package goes from upload to a checked compliance matrix through the E2E gateway.
+  - PD's own tests pass inside services 4 and 5.
+  - User A gets 404 on every endpoint with user B's ids.
 
-- Free plan periods: 2 then 1; a new free period with 1 on return to free; day of month clamped. `rfp_credits` as the source of truth.
-- RFP credit rule: reserve at upload, consume when the compliance matrix succeeds, release on failure. One `solicitation_key` per bid. Same-sha256 re-uploads free. Amendment match and owner override limit.
-- Seat limits, MB caps per plan, storage quota per organization, plan gating in the UI.
-- Stripe Checkout; Customer Portal set so downgrades take effect at period end; webhooks stored in `stripe_events`, with plan and status taken from the fetched subscription.
-- **Done when:** in Stripe test mode with test clocks, an organization upgrades, downgrades, goes `past_due`, then fails its final payment, and limits, credits, and free periods change correctly each time; out-of-order webhook events still give the right plan.
+### Phase 2: Orchestrator, model gateway, evidence, credit ledger
 
-## Phase 4 — Paid tabs
+- Orchestrator: run state machine, stage records, idempotent stages, stage leases, retries, resume, gates (01 s3; 04 s12).
+- Stage interface with today's skills as placeholders (02 s4).
+- Model gateway: Anthropic adapter, rate buckets, metering, `ai_runs`, run budgets.
+- Cost ledger and pause at the cap. The cap starts as a high placeholder; the 10-RFP test sets the real value (01 s8).
+- Evidence and repository: store and fetch by agency, factor, section type, contract, and date, with pgvector. Seed it by importing a tenant's past proposals.
+- Billing ledger without Stripe: reserve at run start, release on no-bid or when the run fails or is cancelled (06 s4).
+- Soft intake screen with "We already have this", "We still need this", the estimate panel, and "Start run" (05 s4.1).
+- AI-ban check at intake. A hit shows the flag, and the run continues (07 s4).
+- Amendment gate, shred, and compliance matrix as orchestrated stages; bid/no-bid screen; run monitor (05 s4.2; 05 s4.3).
+- **Done when:**
+  - A tenant sees intake with items fetched from its repository.
+  - An AI-ban clause in a test solicitation raises the flag, and the run goes on to Gate 0b.
+  - The run reaches Gate 0b and holds. No-bid releases the reserved credit, and so does a cancelled run.
+  - Killing the orchestrator mid-stage and restarting resumes from the saved stage with no duplicate output.
 
-- Outline and status tracker.
-- Resume and key personnel matrix.
-- Color team reviews.
-- Production checklist.
-- Orals.
-- Lessons learned.
-- Row detail slider and amendment rules on the paid tabs that hold source rows.
-- **Done when:** each tab works on two golden solicitations, with resume matching checked by hand on 5 resumes.
+### Phase 3: Render service and fonts
 
-## Phase 5 — Hardening
+- Python render service in the uv workspace, with the toolrunner and the skill scripts (01 s5.3).
+- Install the metric-compatible open fonts. No Microsoft fonts on the Linux render service (01 s5.4).
+- Format lock stage: format spec, silent rules, empty shell per volume.
+- Word assembly with python-docx from the tenant's format spec and shell.
+- Code-computed numbering: contents table, caption numbers, and cross-reference text written as results into the DOCX (01 s5.1).
+- LibreOffice headless renders DOCX to PDF. SVG graphics render with librsvg.
+- Rasterize every page. The vision model checks overflow, broken tables, cut-off graphics, orphan headings, and margins.
+- Page count on the exact PDF the tenant will submit.
+- Font request flow: upload, license confirmation, fee record (05 s6; 06 s6). 🟨 **OPEN:** fee amount.
+- **Done when:**
+  - A test volume renders to Word and PDF, and the contents table and captions match a hand check.
+  - A page count matches a hand count of the same PDF.
+  - The vision check catches each layout fault planted on purpose in a test page.
 
-- Retention job: archive moves to off-server storage with the key held outside the archive, restores, archive purges on bid, organization, and user deletion, and resume deletion at 90 days.
-- Backups by WAL archiving (or hourly dumps) with a restore test timed against the proposed RPO and RTO (01 s4). Monitoring and alerts, spend caps.
-- Security review against 07-security-privacy.md, including:
-  - cross-tenant access test (user A with user B's IDs);
-  - row-level security pool test: a pool of size 1 serving two requests in a row from different organizations never sees the other's rows;
-  - sandbox escape review: no network, no secrets, and limits hold against crafted PDF, DOCX, and XLSX files;
-  - ClamAV scan of a 300 MB test file, to prove large files are scanned, not skipped.
-- Load test: 50 users, 10 uploads at the same time, one 500-page scanned PDF. Before the test, write down the expected wait per upload from the measured concurrency. Judge the result against it.
-- Legal pages live, with the disclosures in 07 s4.
-- **Done when:** every item above passes and no tenant can read another tenant's data in testing.
+### Phase 4: Drafting
 
-## Phase 6 — Beta and launch
+- Worksheet, then outline inside the locked format and shells (04 s3).
+- Evidence pull, case vignettes, and agency intel.
+- Page-gated drafting at 90% with per-page checks, in parallel by volume and section (04 s7.1).
+- Prose checks before each gate score: kill words, plain language, term mirror, customer focus, strength test, story placement.
+- NEED placeholders for every missing fact; drafting never waits on the user.
+- Every claim carries an evidence citation (07 s5).
+- Graphics: SVG through render; the image provider for illustrative art only.
+- Executive summary. Pricing narrative: the pricing skill suggests, a human approves.
+- Pink review document. Drive lands in Phase 6; until then the document downloads from the run monitor.
+- **Done when:**
+  - On two test RFPs, every page reaches 90% or carries a reason.
+  - Every claim has a citation or a NEED.
+  - A page that fails the gate re-drafts and re-gates on its own.
 
-- Private beta with about 10 contractors from Shaavir's network, free plan only.
-- Collect issues for 3 weeks; fix anything that breaks the 98% recall mark or the source links.
-- Set final Starter and Growth prices from measured cost per RFP. Earlier prices are provisional.
-- Public launch on shaavir.com.
-- **Done when:** for every beta solicitation, a Shaavir writer checks the matrix against the solicitation and finds recall at 98% or higher, and prices are live in Stripe.
+### Phase 5: Reviews, gates, locks, package
 
-## Post-v1
+- Red team review by a separate reviewer model. 🟨 **OPEN:** reviewer model. Pick it here from a side-by-side test on the test set.
+- Gate 1 screen: findings, NEEDs ranked by score impact, predicted rating per factor, dispositions (05 s4.7).
+- The credit is consumed when the Red draft reaches the tenant at Gate 1 (06 s4).
+- Locks: every human-edited block locked; re-drafts write around it; the model proposes changes and never edits silently; the sweep obeys locks (04 s8).
+- Apply dispositions, re-draft flagged pages, re-gate, cross-volume sweep, assembly.
+- Gold Team and White Glove review. Gate 2 screen with the round-by-round page diff (05 s4.9).
+- Final package: volumes in Word and PDF, forms, attachments, compliance matrix, submission checklist, solicitation file naming (05 s4.10). Signature and review notice. Word-only page-limit note.
+- **Done when:**
+  - One full run goes from upload to package with only gate actions from a person.
+  - The credit moves from reserved to consumed at Gate 1, and not before.
+  - A locked block survives a re-draft unchanged, and a model change to it appears as a proposal.
+  - An uncited claim stops assembly.
+  - The package names files by the solicitation's rule.
 
-- Admin tooling: screens and endpoints for AI settings, caps, credits, and plan changes. Until then Amaan changes these directly in the database (03 s4).
-- More held-out test data from public solicitations (SAM.gov, state portals). This can start earlier if time allows.
+### Phase 6: Mid-run integrations
 
-## Testing summary
+- Amendment re-entry: diff, reopen affected pages, re-gate, proposals for locked blocks (04 s9).
+- Comms: Gmail and Microsoft 365 connections (02 s7.1). 🟨 **OPEN:** mailbox token storage (07 s2).
+- Q&A: draft questions in the required format, fill an agency questionnaire, draft the email, deadline alert, human review and send (05 s4.5).
+- Request and collect: send requests from the tenant's mailbox, collect replies, upload option, status per item (05 s4.6).
+- Drive: one folder per tenant, shared only with its users (07 s8).
+- eBuy watcher: inbound address per tenant, RFQ number parse, bid opened, daily check for misses. 🟨 **OPEN:** how a tenant registers its inbound address in eBuy. Test on one tenant first.
+- Portal agent on its own host: human-approved login and MFA, credentials never stored; upload and checklist for banned-automation portals (07 s2). 🟨 **OPEN:** agent implementation.
+- Notifications and audit: in-app notices, email notices, the audit log.
+- **Done when:**
+  - An amendment uploaded mid-draft reopens only the pages it touches.
+  - A Q&A email reaches a test inbox from a connected tenant mailbox after a user checks both review boxes.
+  - A request reply returns through the mailbox and marks its item received.
+  - One test tenant's eBuy notice opens a bid.
+  - The agent downloads a document from one portal with a human at the MFA step and leaves no stored credential.
+
+### Phase 7: Plans and Stripe
+
+- Monthly plans: 3, 4, and 5 proposals. Unused proposals reset each month (06 s3).
+- Free proposal: one per tenant, once only, up to 50 drafted pages, with the once-per-tenant controls in 06 s3.
+- Proposal definition: one solicitation set, up to 100 drafted pages, all review rounds inside the run (06 s4).
+- Recharge beyond 100 pages. 🟨 **OPEN:** rate.
+- Font fee. Estimate before run. Usage roll-ups from the model gateway (06 s8).
+- Stripe, reusing PD's webhook handling (PD 08 Phase 3). 🟨 **OPEN:** currency, assumed USD.
+- SAML SSO for Enterprise tenants.
+- **Done when:**
+  - In Stripe test mode with test clocks, a tenant subscribes, uses proposals, and resets at the period end.
+  - The same tenant buys a recharge and pays a font fee.
+  - A new tenant runs its free proposal, stops at 50 drafted pages, and a second tenant on the same work-email domain gets no second free proposal.
+  - Each count changes correctly at every step.
+
+### Phase 8: Hardening, security, legal
+
+- Security review against 07, including:
+  - cross-tenant tests on every endpoint, job, and event consumer;
+  - no service role can read another service's schema;
+  - a run for tenant A never reads tenant B's repository, fonts, or format specs;
+  - render jobs leave no files after they end;
+  - portal sessions leave no profile, cookie, or credential behind;
+  - comms drops inbound mail to an unknown address.
+- Load test: several tenants running at once against the Anthropic rate limits, with event lag, queue, and retry behavior measured. Write the expected wait per run before the test.
+- Backups and restore drill, as in PD (PD 08 Phase 5).
+- Legal pages drafted with the disclosures in 07 s10. 🟨 **OPEN:** legal review.
+- **Done when:** every item above passes, and no tenant can read another tenant's data in testing.
+
+### Phase 9: 10-RFP test gate
+
+The tool does not ship until it passes this gate.
+
+- Run at least 10 RFPs end to end, from upload to package, federal and SLED. Use the Phase 0 test set.
+- A proposal writer reads each package against what the client firm actually submitted.
+- Measure per run: model and image cost, time to each gate, pages passing the 90% gate, Red findings accepted, uncited claims caught, page count accuracy.
+- Set the per-run cost cap from the measured cost (01 s8).
+- Fix what the test finds, then rerun the failing RFPs.
+- Pass bar, decided: every package complete and page-verified, zero uncited claims, and zero cross-tenant reads. A writer must rate at least 8 of 10 packages "submittable after review".
+- **Done when:**
+  - At least 10 RFPs complete, and the pass bar holds.
+  - The cost cap value is written into `app_settings`.
+
+### Phase 10: Terms, hosting, beta, and launch
+
+- Move to zero-retention and no-training terms with Anthropic and the image provider. The 10-RFP test runs under standard terms. The terms change before the tool ships and before any tenant document goes out under a paid plan (07 s9).
+- Choose the production hosting provider. Deploy with PD's adapters (01 s1).
+- Private beta with a small number of client firms. 🟨 **OPEN:** how many, and on what terms.
+- Measure cost per run against the cost cap and the plan prices.
+- 🟨 **OPEN:** Enterprise terms.
+- Final product name after the trademark and domain check (00 s7).
+- **Done when:**
+  - The provider terms are in writing.
+  - Production runs on the chosen host, and the restore drill passes there.
+  - Beta runs reach the package, and measured cost per run fits under the plan prices.
+  - Prices are live in Stripe.
+
+## 2. Testing summary
 
 | Type | Where |
 |---|---|
-| Unit tests | Plan rules, credit rule, credit reservation (reserve, consume, release), free periods (2 then 1, new period with 1 on return, day-of-month clamp), MB cap per bid, one solicitation key per bid, same-sha256 re-upload, supersede and withdraw logic, quote normalization and cross-page match, marking detector, date logic, solicitation key |
-| Model tests | `evals/` harness, scored on the held-out documents, rerun on every prompt or skill change |
-| Integration tests | Upload to matrix on staging with a fixed sample solicitation; amendment run; DOCX conversion; owner-password PDF accepted and user-password PDF refused |
-| Tenant isolation | User A requests every endpoint with user B's IDs and gets 404. A pool of size 1 serving two organizations in a row never returns the other's rows. Worker jobs checked the same way |
-| Sandbox | No network, no secrets in its environment, runaway jobs stopped by the limits |
-| Retention | Archive move, restore, purge on deletion, resume deletion at 90 days |
-| Billing | Stripe test clock for period changes; out-of-order webhooks |
-| Manual | Each tab against two golden solicitations before each release |
+| Unit tests | Stage state and resume, idempotent stages, cost cap math, lock rules, NEED register, citation check, numbering, page count, file naming, credit reserve and consume, plan and reset rules, recharge |
+| Contract tests | Every service against the OpenAPI files and event schemas in `packages/contracts` |
+| Identity | Sign-in, MFA, and SSO round trips against the local Zitadel; a Zitadel user event updates the mirror |
+| Script self-tests | Every bid-autopilot script's `--selftest` runs in CI on the render image |
+| Model tests | Test set runs per phase; rerun on every skill or prompt change; reviewer model chosen in Phase 5 |
+| Render tests | Planted layout faults caught; computed numbering matches a hand check; page count matches the exact PDF; metric-compatible fonts hold line breaks |
+| Integration tests | Upload to package on staging; amendment mid-run; Q&A send; request and collect round trip; eBuy inbound on one test tenant |
+| Tenant isolation | PD's tests plus schema-role, event, repository, render, agent, Drive, and inbound mail checks in Phase 8 |
+| Lock tests | A locked block survives re-draft, sweep, and amendment; changes arrive only as proposals |
+| Accuracy | An uncited claim always blocks assembly; a NEED is never filled by the model |
+| Billing | Stripe test clocks for resets, recharge, and font fee |
+| 10-RFP test | Phase 9, before launch |
 
 ## Decision log
 
 | Date | Decision |
 |---|---|
-| 13 Oct 2026 | Model test runs before the app UI |
-| 13 Oct 2026 | 10DLC registration and golden set moved into Phase 0 |
-| 13 Oct 2026 | Phase 0 adds provider terms confirmation in "done when", the sandbox service, database roles, the marking rules list, the held-out pick, and the provider benchmark |
-| 13 Oct 2026 | Phase 1 adds benchmark measures, the held-out split, the 80% match rule, pre-drop quote failure reporting, the amendment-diff step, and DOCX conversion |
-| 13 Oct 2026 | Phase 2 adds the row detail slider, amendment display, MB cap and upload sessions, and a restore stub |
-| 13 Oct 2026 | Phase 3 adds credit reservation, free-period rules, and webhook handling by fetched subscription |
-| 13 Oct 2026 | Phase 5 adds the archive job, the row-level security pool test, the sandbox escape review, and a load test judged against measured concurrency |
-| 13 Oct 2026 | Admin tooling moved to Post-v1; final prices set in Phase 6 |
-| 13 Oct 2026 | Testing summary updated for MB cap, supersede logic, credit reservation, free-period clamp, sandbox, and retention |
+| 17 Oct 2026 | Render server and fonts before drafting, so page budgets rest on real page counts |
+| 17 Oct 2026 | eBuy watcher tested on one tenant first |
+| 17 Oct 2026 | Rush path for eBuy RFQs and task orders dropped |
+| 17 Oct 2026 | Owner decision: build order rewritten for microservices in one monorepo; work starts now |
+| 17 Oct 2026 | Owner decision: a 10-RFP test gate before launch. The tool runs at least 10 RFPs, the terms change, then it ships |
+| 17 Oct 2026 | Owner decision: the per-run cost cap comes from the 10-RFP test |
+| 17 Oct 2026 | Owner decision: hosting is chosen after the tool is built, in Phase 10 |
+| 17 Oct 2026 | Owner update: E2E absorbs PD; no shared package, no parity check |
+| 17 Oct 2026 | Owner decision: no new repo. The PD repo is renamed to E2E Proposal and restructured in Phase 0's first PR |
+| 17 Oct 2026 | Reviewer model picked in Phase 5 from a side-by-side test |
+| 17 Oct 2026 | Owner decision: PD's open PRs finish in the renamed repo in Phase 0 |
+| 17 Oct 2026 | Owner decision: one free proposal per tenant, capped at 50 drafted pages, built and tested in Phase 7 |
+| 17 Oct 2026 | Owner confirmed: the 10-RFP test runs under standard terms; zero-retention terms come before shipping |
+| 17 Oct 2026 | Owner decision: the Phase 9 pass bar is complete packages, zero uncited claims, and 8 of 10 submittable (item 64 closed) |
+| 17 Oct 2026 | Owner decision: the local stack runs Redis for BullMQ and Redis Streams events; no NATS |
+| 17 Oct 2026 | Owner decision: the Phase 9 pass bar also keeps page-verified packages and zero cross-tenant reads |
+| 17 Oct 2026 | Owner decision: Zitadel enters the local stack in Phase 0 and the identity service wraps it in Phase 1 (item 61 closed) |
+| 17 Oct 2026 | Final review: Phase 0 gains the one-command local stack and migration order (09 s9); Phase 2 release rule names failure and cancel |

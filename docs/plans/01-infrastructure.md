@@ -1,263 +1,384 @@
-# 01 — Infrastructure
+# 01: Infrastructure
 
-**Status:** Draft v2 · 13 Oct 2026
+**Status:** Draft v2 · 17 Oct 2026
+
+This file places the E2E Proposal services on server roles and sizes them. It covers the event bus, the render service, the portal agent, and the model providers. It reuses PD's infrastructure wherever it fits. 09 lists every service. PD plan references read as (PD 01 s2.1).
 
 ## 1. Hosting
 
 | Item | Choice |
 |---|---|
-| Provider | Pluggable: `[infra] provider` in `config/tenant.toml` selects an adapter (`ovh-us`, `hetzner`, `ssh`) and the provider's key goes in the secrets file (mirrors Drive D-146). 🟨 **OPEN:** the production provider (HUMAN-TODO H-02, question Q-02). An OVH US VPS ordered in the OVH panel is an `ssh`-adapter server; the account is in place |
-| Region | US, east coast preferred (closer to Washington DC area contractors). The Hetzner adapter allows `ash` and `hil` only; OVH US offers Vint Hill, Virginia, and Hillsboro, Oregon. 🟨 **OPEN:** confirm with the chosen provider (H-02) |
-| Server | A server with 8 GB RAM and at least 4 vCores at the chosen provider. 4 GB is too small once ClamAV, Postgres, OCR, and LibreOffice share the machine. 🟨 **OPEN:** confirm the plan name and price with the provider (H-02); a 4 vCore, 8 GB VPS listed at about $10 (₹970) a month in mid-2026 |
-| OS | Ubuntu 24.04 LTS |
-| Separation | New server. Nothing from shaavir-prod-01 (Payroll, HRA, Score) runs here, and this app does not run there |
-| Root and SSH access | Amaan only until decided. 🟨 **OPEN:** who else gets root on this server (07 s1) |
+| Provider | 🟨 **OPEN.** The Owner chooses it after the tool is built, in 08 Phase 10. Deploys use PD's pluggable adapters (`ovh-us`, `hetzner`, `ssh`) from the start, so the choice changes no code (PD 01 s9) |
+| During the build | Docker Compose on a development machine. Proposed: a staging host through PD's `ssh` adapter |
+| Region | US, east coast preferred, as in PD (PD 01 s1). Federal buyers and most tenants sit near Washington DC |
+| OS | Ubuntu 24.04 LTS on every server |
+| PD | E2E absorbs PD. PD's code becomes E2E services, and PD does not run as its own app (09 s6). PD's current 8 GB server retires once E2E serves PD's tenants |
+| Root and SSH | Owner decides who holds root. Same key-only SSH and logged sessions as PD (PD 01 s3) |
 
-Why a separate server: a public upload endpoint must not share a machine with payroll and HR data.
+## 2. Server roles
 
-## 2. Server layout
+Every service runs in its own container (09 s2). A role is a group of containers that share a host. Moving a service to another host is a compose change, not a code change. Each role grows by adding a server of the same kind.
+
+| Role | Services and shared parts | Starting size |
+|---|---|---|
+| App role | nginx; services 1 to 9, 11, 12, 14, and 15; Zitadel; Postgres; Redis; ClamAV; the sandbox runner and sandbox | 8 vCPU, 32 GB RAM, 240 GB disk |
+| Render role | Service 10: the render API, toolrunner, script containers, LibreOffice, Poppler, pdfplumber, python-docx, librsvg, fonts | 8 vCPU, 16 GB RAM, 160 GB disk |
+| Portal agent role | Service 13: one throwaway browser container per portal session | 2 vCPU, 4 GB RAM, 40 GB disk |
+
+The app role grew from the v1 plan. Thirteen service containers at about 256 MB to 512 MB each need room beside Postgres. The load test in 08 Phase 8 sets final values. A later split moves Postgres and Redis to a data role of their own.
 
 ```
-Server (Ubuntu 24.04)
-├── nginx           TLS with a Cloudflare Origin certificate, reverse proxy, request size limit
-├── sandbox runner  small host service; starts one sandbox container per file job
+App role (Ubuntu 24.04)
+├── nginx            TLS (Cloudflare Origin certificate), reverse proxy to the gateway
+├── sandbox runner   host service, one sandbox container per file job (PD 01 s2.1)
 └── Docker Compose
-    ├── web       Front end (static build served by nginx container)
-    ├── api       Application server (HTTP API)
-    ├── worker    Background jobs: AI calls, database writes, exports, retention, archive moves
-    ├── sandbox   File processing: encryption check, DOCX to PDF, text extraction, OCR (no network)
-    ├── postgres  Database (data on the encrypted /mnt/pddata)
-    ├── redis     Job queue and rate-limit counters (appendonly yes)
-    └── clamav    Virus scan for uploads
+    ├── gateway       [1]  BFF and the E2E web app
+    ├── identity      [2]  tenant_id, memberships, wraps Zitadel
+    ├── zitadel            self-hosted Zitadel: credentials, MFA, passkeys, SSO; own database in the cluster
+    ├── billing       [3]  plans, credits, Stripe
+    ├── ingest        [4]  PD's upload and file jobs (BullMQ)
+    ├── intel         [5]  PD's shred, matrix, amendments (BullMQ)
+    ├── orchestrator  [6]  run state machine, cost cap
+    ├── modelgw       [7]  model and image calls, rate buckets, metering
+    ├── drafting      [8]  pages, blocks, locks, NEEDs
+    ├── review        [9]  Red, Gold, White Glove
+    ├── evidence      [11] evidence, repository, pgvector
+    ├── comms         [12] mailboxes, Q&A, requests, eBuy inbound
+    ├── drive         [14] Shaavir Drive sync
+    ├── notify        [15] notices, audit log
+    ├── sandbox       file processing, no network, no secrets
+    ├── postgres      one cluster, one schema per service plus Zitadel's database, on the LUKS volume
+    ├── redis         Redis Streams events, BullMQ inside ingest and intel, rate buckets
+    │                 (appendonly yes, appendfsync everysec, maxmemory-policy noeviction, on the LUKS volume)
+    └── clamav        virus scan
 
-Off the server: encrypted file archive in object storage, and database backups (section 4)
+Render role (Ubuntu 24.04), private network only
+├── render           [10] Python API and toolrunner; one script container per tool call
+└── script image     Python 3.12, python-docx, pdfplumber, LibreOffice, Poppler, librsvg, fonts
+
+Portal agent role (Ubuntu 24.04), private network plus a portal allow list
+└── portal-agent     [13] one container per session: Chromium, virtual display, live view
+
+Off the servers: S3-compatible object storage, off-site backups, Anthropic API,
+the image provider, Shaavir Drive, tenant mailboxes
 ```
 
-- Every container has CPU and memory limits, the same pattern as the BlokClients stack on shaavir-prod-01.
-- Files live on `/mnt/pddata/files` (mounted at `/data/files` in the api and worker containers), laid out by organization (see 03-data-model.md). `/mnt/pddata` and `/mnt/pdbackup` are LUKS2 volumes: provider block volumes, or preallocated container files on the root disk for single-disk providers (mirrors Drive D-147; `infra/luks/README.md`). Postgres and Redis keep their data there too, not in Docker named volumes.
+Why the render role stands apart:
+- LibreOffice and rasterizing burn CPU in bursts. On the app role they would slow the gateway and the event bus.
+- Render jobs open tenant documents and fonts. Keeping them on a host with no database credentials limits what a broken job can reach.
+- Render load grows with page count, not with users. A second render role host is the first scale step.
 
-### 2.1 Sandbox
+Why the portal agent stands apart: it holds live sessions on government portals. A bug there must not reach the database or another tenant's files (s7).
 
-Uploaded files are opened only in the sandbox, never in the worker or the api.
+## 3. Orchestrator
+
+The orchestrator is service 6, a container on the app role (09 s4.6). It owns the `orchestrator` schema and talks to other services by API and event only.
+
+| Item | Setting |
+|---|---|
+| Job | Moves a run through its stages (04 s3). It emits `orchestrator.stage.requested`; the owning service runs the stage behind the stage interface and reports back |
+| State | Postgres is the source of truth: every stage writes its status, inputs hash, outputs, and cost before it ends (03 s4) |
+| Resume | After a crash or a deploy, the orchestrator reloads each open run and requests its next stage. Finished stages never run again |
+| Model calls | None of its own. Stage services call the model gateway (s6) |
+| Tenancy | Each stage request carries `tenant_id`. Every service sets `app.tenant_id` before any read or write (02 s6) |
+| Size | 1 vCPU and 1 GB RAM to start. It mostly waits on other services |
+
+No service but ingest opens an uploaded file. Files go through PD's sandbox, and documents the tool builds go to the render service.
+
+## 4. Events and queues
+
+Services exchange events on Redis Streams: decided. They run on the self-hosted Redis container already in the stack, which BullMQ also uses. Inside ingest and intel, PD's BullMQ on Redis carries over as built (PD 02 s1). No NATS.
+
+A hosted Redis free tier is too small for production. Production uses the self-hosted Redis container on the app role.
+
+| Rule | How |
+|---|---|
+| Durable | Redis persists streams with append-only files on the LUKS volume. With `appendfsync everysec` a crash can drop up to one second of events (🟨 **OPEN**, 00 s7 item 68). The outbox is the safety net: each service writes events to its outbox table in the same transaction as its data, and a relay publishes them and marks them sent (09 s2). Consumer groups track delivery; a consumer acknowledges with `XACK` only after its write commits, and a reclaim job takes over pending entries from a dead consumer. Streams trim by `MAXLEN` once every group has read past the point |
+| Source of truth | Postgres holds the stage record. The orchestrator's sweep rebuilds a lost request from the database |
+| Idempotent | Each stage request has a key: run, stage, scope, and inputs hash. Consumers dedupe on event id. A repeat finds the finished record and exits |
+| Retries | 3 retries with backoff for network errors, timeouts, and 5xx replies. A stage that keeps failing marks the run `needs_attention` and alerts |
+| Rate limits | A 429 from a provider does not count as a failure. The model gateway waits for `retry-after`, then retries |
+| Fairness | Per-tenant and per-run caps on running stages, as in PD's per-bid cap (PD 01 s2.2). One large run cannot hold every slot |
+| Work queues | Redis Streams consumer groups per service: `drafting.pages`, `render.jobs`, `render.vision`, `modelgw.images`, `comms.out`, `comms.in`, `drive.sync`, `portal.sessions`, plus PD's BullMQ queues |
+| Sweep | Every 5 minutes the orchestrator finds stages marked running with no live work and requests them again |
+
+## 5. Render service
+
+The render service is service 10, written in Python (09 s4.10). It runs alone on the render role.
+
+### 5.1 What it does
+
+| Job | Tool | Notes |
+|---|---|---|
+| Word assembly | python-docx 1.1 or later | Volumes start from the tenant's cover and contents shell (`client_shell.py`). Captions and NEED comments come from the scripts |
+| DOCX to PDF | LibreOffice headless | One profile folder per slot (`-env:UserInstallation`), so parallel conversions do not collide |
+| Page images | Poppler `pdftoppm` at 150 dpi | The default in `visual_gate.py`. Render scales images down to the vision model's maximum before sending them through the model gateway |
+| Page geometry | pdfplumber | Text boxes, images, and rectangles per page, for the overflow and margin checks in `visual_gate.py` |
+| Page count | `pdfinfo` on the exact PDF the tenant submits | The count comes from that file and no other (04 s6) |
+| Graphics | librsvg (`rsvg-convert`) | SVG from the model becomes PNG at 300 dpi for Word. The repository keeps the SVG source |
+| Format audit | `audit_format.py`, `visual_mix.py`, `caption_fields.py`, `compliance_check.py` | Read the DOCX and report findings as JSON |
+| PDF export | LibreOffice, fonts embedded | The submitted PDF and the page images come from the same render |
+| Numbering | Code in the render service | Decided. python-docx writes field codes but not their results, and LibreOffice does not refresh them by default. So render computes the contents table, caption numbers, and cross-reference text in code. It writes the results into the DOCX. LibreOffice headless (free, MPL 2.0) then renders DOCX to PDF with no field refresh |
+
+The Windows Word COM step (`word-page-verify`) does not move here. The PDF check replaces it (s5.5). The Word Relay loop (`word-critic`, `relay-producer`) does not move either. Review and drafting run that loop on the server (02 s3).
+
+### 5.2 Sizing
+
+Starting values. The load test in 08-build-phases sets the real ones.
+
+One run drafts up to 100 pages. The visual gate renders again after every graphic insertion. Estimated render work per run:
+
+| Work | Count per run | CPU seconds each | Total |
+|---|---|---|---|
+| Section renders while drafting | about 30 | about 12 (convert, rasterize, measure about 10 pages) | about 360 |
+| Full renders (Red recovery, sweep, assembly, Gold, final) | about 5 | about 110 (100 pages) | about 550 |
+| Assembly and script tools | about 60 calls | 1 to 5 | about 150 |
+| **Total** | | | **about 1,060 CPU seconds, near 18 CPU minutes** |
+
+At 8 vCPU the server holds about 28,800 CPU seconds an hour. That covers more than 20 runs an hour in theory. Throughput is not the limit. Peak memory and wait time are.
+
+Starting limits on the 8 vCPU, 16 GB render role:
+
+| Slot | Count | CPU each | Memory each |
+|---|---|---|---|
+| LibreOffice convert | 4 | 1.0 | 1.5 GB |
+| Python script tools (python-docx, pdfplumber) | 3 | 1.0 | 2 GB |
+| Rasterize and SVG | 1 | 1.0 | 1 GB |
+| toolrunner | 1 | 0.25 | 256 MB |
+| **Total** | | **8.25 peak** | **about 13.3 GB** |
+
+That leaves about 2.7 GB for the OS and disk cache. CPU above 8 only queues briefly.
+
+Disk: the script image with LibreOffice and fonts is about 3 GB. A run's working folder peaks near 500 MB with page images. The toolrunner deletes working folders when the run's package ships.
+
+🟨 **OPEN:** the render role's plan name and price at the provider chosen after the build. An 8 vCPU, 16 GB VPS listed between about $30 and $60 a month at budget providers in mid-2026 (provisional).
+
+### 5.3 Scripts as tools
+
+The plugin's 29 scripts in `scripts/` move to the render service, with the seven prose scripts and their shared `prose_text.py` from the skill folders (04 s5). Stage services call them as tools through the toolrunner.
+
+| Item | Setting |
+|---|---|
+| Call | `POST /tools/{name}` on the toolrunner with tenant id, run id, arguments, and file references. Private network only, mutual TLS |
+| Run | A fresh script container per call, non-root, read-only image, Docker's default seccomp plus AppArmor |
+| Files | The toolrunner copies the run's working folder from object storage, mounts it, and copies outputs back. One tenant per container |
+| Network | None by default. `agency_intel.py` goes out through an egress proxy with the official-domain allow list the script already keeps |
+| Ledger scripts | `capture_ingest.py`, `needs_register.py`, and `outcome_and_sweep.py` call a remote evidence ledger. `BID_LEDGER_URL` points at the evidence service's internal `/ledger` API, with a token scoped to one tenant |
+| Client data | The plugin's `clients/` folder and `clients.seed.json` never ship. Each tenant's shell and format spec load from that tenant's storage only |
+| Output | JSON on stdout, validated against a schema before it reaches the database |
+| Timeouts | Per tool. 240 seconds for a LibreOffice convert, as in `visual_gate.py`; 60 seconds for most others |
+| Cache | Same tool, same arguments, same input hashes: the toolrunner reuses the stored output |
+| Acceptance | `preflight.py --selftest` runs every script's self-test on each image build. A failure blocks the deploy |
+
+What each script needs:
+
+| Needs | Scripts |
+|---|---|
+| Standard library only | The seven skill-folder prose scripts and `prose_text.py`; `pipeline`, `scaffold_pursuit`, `content_gate`, `prose_deductions`, `page_cascade`, `lead_sentence`, `style_sheet`, `responsiveness`, `hot_buttons`, `shred_checks`, `assembly_artifacts`, `review_records`, `outcome_and_sweep`, `detector_risk`, `heading_differentiator`, `format_harden`, `client_shell`, `capture_ingest`, `preflight` |
+| python-docx 1.1 or later | `need_comments`, `placeholders`, `audit_format`, `visual_mix`, `caption_fields`, `compliance_check`, `client_spec`, `needs_register`, `agency_intel` (export) |
+| pdfplumber | `visual_gate`, `agency_intel` (PDF sources) |
+| LibreOffice and `pdftoppm` | `visual_gate` |
+| Network egress | `agency_intel` (allow list), the three ledger scripts (internal API only) |
+
+### 5.4 Fonts install
+
+Microsoft licenses its fonts with Windows and Windows Server. The render service runs on Linux, so it ships no Microsoft fonts. It uses metric-compatible open fonts instead. Fonts sit in the script image, in two layers.
+
+| Layer | Contents | Source |
+|---|---|---|
+| Base, metric-compatible | Liberation Serif (for Times New Roman), Liberation Sans (Arial), Liberation Mono (Courier New), Carlito (Calibri), Caladea (Cambria), Gelasio (Georgia) | Ubuntu packages where they exist, else upstream releases pinned by hash |
+| Base, open-licensed | Noto Sans and Serif, Source Sans and Serif, Roboto, Open Sans, Lato | Same |
+| Tenant | Fonts a tenant requested and uploaded with its license confirmation | That tenant's storage, mounted read-only into its own jobs only |
+
+- Each job builds its own fontconfig file: the base fonts plus that tenant's folder. No other tenant's fonts are visible.
+- Fontconfig cache per tenant, rebuilt once whenever the tenant adds a font. Jobs never share a writable cache.
+- Aliases map each Microsoft font name to its metric-compatible font, unless the tenant supplied its own licensed copy.
+- A metric-compatible font keeps line breaks and page count in most cases, but the glyphs look different. A Microsoft font with no metric-compatible match raises a NEED for the font request (06 s6).
+- The PDF export embeds every font used. The render log lists the fonts each volume used, and any substitutes.
+- The embedded font list names the substitute, for example Liberation Serif. 🟨 **OPEN:** how the package handles a solicitation that names Times New Roman or Arial outright. Proposed: the checklist names each substitute, and the tenant may supply its licensed font through a request (00 s7).
+
+### 5.5 Page verification on the server
+
+About 99% of submissions are PDF (04 s6).
+1. Render the volume to PDF.
+2. Rasterize every page with `pdftoppm`.
+3. Run the geometry checks from `visual_gate.py`.
+4. Send each page image to a vision model for layout: overflow, broken tables, cut-off graphics, orphan headings, margins.
+5. Count pages on that exact PDF with `pdfinfo`.
+
+For the about 1% that require Word files, the package carries a note telling the user to check the page limit in Word.
+
+The count holds for the PDF the tool produced. A PDF the tenant re-exports from Word after editing the DOCX may paginate differently. 🟨 **OPEN:** whether the package tells the user to submit the tool's PDF or re-check after any Word edit (04 s5.20).
+
+## 6. Model providers
+
+Every model and image call goes through the model gateway, service 7 (09 s4.7). No other service holds a provider key.
+
+### 6.1 Anthropic API
+
+| Item | Setting |
+|---|---|
+| Use | Drafting, every skill stage, vision checks, the portal agent |
+| Interface | The model gateway, built from PD's provider layer (PD 02 s5) and its Anthropic adapter. A settings table maps each task to a model |
+| Keys | One vendor key in the model gateway's root-only env file. Never in any other service, the sandbox, or the portal agent container |
+| Rate limits | A token bucket in Redis per model tracks requests, input tokens, and output tokens a minute, from the account's limits. Jobs wait for room before they call |
+| 429 and 529 | Wait for `retry-after`, then retry. Not counted as a stage failure (s4) |
+| Concurrency | Per-model setting plus per-tenant and per-run caps, set from the 10-RFP test (08 Phase 9) |
+| Prompt caching | Skill instructions go first, before the cache breakpoint. Tenant text comes after it. Cost plans do not assume cache hits |
+| Vision | Image tokens scale with pixel area, roughly width times height over 750. A letter page at the model's long-edge limit costs about 2,500 input tokens. 100 pages over 5 rounds is near 1.3 million tokens a run. 🟨 **OPEN:** confirm against current Anthropic docs before the 10-RFP test |
+| Logging | Every call writes PD's `ai_runs` row: tokens, cost, model, task, run, stage (PD 02 s5) |
+
+Zero-retention and no-training terms: decided and confirmed. The tool runs the 10-RFP test first on documents the Owner may send under standard terms. The terms then change, and only then does the tool ship (07 s9; 08 Phase 10).
+
+### 6.2 Separate reviewer
+
+The Red review runs on a different model from the drafter (04 s7.2). The model gateway selects it by setting. If it comes from another provider, that provider gets its own adapter, key, rate bucket, and `ai_runs` rows.
+
+🟨 **OPEN:** which reviewer model.
+
+### 6.3 Image provider
+
+| Item | Setting |
+|---|---|
+| Use | GPT Image 2, for illustrative art only. Diagrams, charts, and process graphics stay SVG from the model |
+| Call | From drafting through the model gateway's image adapter, work queue `modelgw.images`. Prompts never carry tenant names, contract numbers, or personal data |
+| Output | PNG stored in the run's files, then placed by the render service |
+| Cost | Every image call counts against the run's cost cap (s8) |
+
+The image provider follows the same terms path as Anthropic: the 10-RFP test, then zero-retention terms, then launch.
+
+## 7. Portal agent sandbox
+
+The portal agent, service 13, checks portals and downloads documents while the human approves each login and MFA prompt (02 s7.4).
 
 | Control | Setting |
 |---|---|
-| Network | None (`network_mode: none`) |
-| Secrets | No database credentials, no AI keys, no Stripe, Telnyx, or archive keys |
-| User | Non-root |
-| Files | Read-only mount of the one file for the job, plus an empty output folder |
-| Kernel | Docker's default seccomp profile plus an AppArmor profile |
-| Limits | Hard wall-clock, CPU, and memory limits per job. The wall-clock limit is a setting, set from Phase 1 OCR measurements |
-| Checks first | Encryption type and page count, before any OCR (04 s2) |
-| Output | JSON with page text, plus page images when needed. Nothing else leaves the sandbox |
+| Host | The portal agent role only (s2) |
+| Session | One container per portal session, started on request and destroyed at the end. No profile, cookie, or cache survives |
+| Human present | The user watches a live view of the browser. The user types credentials and MFA codes there. The agent waits on every login and MFA screen |
+| Credentials | Never stored. Not in the database, logs, model prompts, or screenshots kept after the session |
+| Screenshots | The model never sees a screen with a password or MFA field, and the session keeps none |
+| Network | Egress only to the portal's allow list for that session, through a proxy. The proxy blocks SAM.gov and any portal that bans automation outright |
+| Downloads | Go to a drop folder, then to the ingest service: scan, sandbox, extract (02 s5) |
+| Limits | Proposed: idle timeout 10 minutes, hard limit 60 minutes (🟨 **OPEN**, 07 s2). 1 vCPU and 1.5 GB per session, 2 sessions per host to start, one per tenant at a time |
+| Final submit | The agent never clicks a final submit button. A human does |
 
-- The sandbox runner is a small host service, not a container. It takes requests from the job queue and starts `docker compose run --rm sandbox` with a fixed command. The worker never holds the Docker socket.
-- The sandbox processes one file at a time to start. OCR inside it runs 2 pages in parallel (`ocrmypdf --jobs 2`) within the sandbox CPU limit. Both are settings, adjusted after the load test.
-- LibreOffice (headless, for DOCX to PDF) adds several hundred MB to the sandbox image. That is disk space. It uses memory only while it converts a file.
+🟨 **OPEN:** the portal agent implementation: Anthropic computer use, or Playwright driven by the model. Either fits this sandbox.
 
-### 2.2 Starting limits
+## 8. Cost cap per run
 
-On an 8 GB, 4 vCore server (adjust after the load test):
+| Rule | How |
+|---|---|
+| What counts | Every model call (drafter, reviewer, vision, portal agent) and every image call in the run |
+| Owner | The orchestrator owns the cap value and the pause. It pushes each run's budget to the model gateway with `orchestrator.run.budget_set` |
+| Ledger | The model gateway meters each call as it ends and emits `modelgw.usage.metered`. The orchestrator's cost ledger records it (03 s4) |
+| Check before a call | The model gateway estimates the call's cost against the run's budget. If that would pass the cap, the call does not start, and the gateway emits `modelgw.budget.exhausted` |
+| At 80% | Proposed: the run monitor shows a warning, and the vendor gets an alert |
+| At 100% | Proposed: the run pauses with its state saved. Nothing is lost. The vendor and the tenant Admin get an alert. It resumes once the cap is raised. 🟨 **OPEN:** who may raise it (06 s8) |
+| Estimate | The estimate shown before a run comes from page count and volume count (06 s7) |
+| Global caps | PD's monthly spend cap and per-tenant daily cap carry over (PD 04 s6) |
 
-| Container | CPU | Memory |
-|---|---|---|
-| api | 0.5 | 512 MB |
-| worker | 0.5 | 768 MB |
-| sandbox | 2.0 | 1.5 GB |
-| postgres | 0.5 | 1 GB |
-| redis | 0.15 | 256 MB |
-| clamav | 0.25 | 1.5 GB |
-| web | 0.1 | 64 MB |
-| **Total** | **4.0** | **about 5.6 GB** (5,696 MB) |
+Cap value: decided. The 10-RFP test measures cost per run, and the Owner sets the cap from it (08 Phase 9). Until then the cap is a high placeholder that only guards against runaway loops. 🟨 **OPEN:** whether a tenant may approve going past the cap, tied to the recharge rate (06 s5). 04 s12, 05 s4.3, and 06 s8 follow the behavior here.
 
-That leaves about 2.4 GB for the OS, nginx, the sandbox runner, and disk cache.
+## 9. Network, DNS, and inbound mail
 
-- The worker mostly waits on AI calls, so it needs little CPU now that file processing runs in the sandbox.
-- ClamAV needs about 1 GB for its signatures alone. `ConcurrentDatabaseReload no` stops it loading a second copy during signature reloads (scans pause briefly instead). The other option, ClamAV at 2 GB, does not fit this table.
-- clamd limits: `MaxFileSize`, `MaxScanSize`, and `StreamMaxLength` set to 300 MB or more, the largest allowed upload. The defaults are near 25 MB and silently skip larger files.
+- DNS on Cloudflare, proxied, with PD's rate limits, Full (strict) TLS, and chunked uploads (PD 01 s3).
+- Host firewall as in PD: 443 from Cloudflare only, SSH from the admin network.
+- The render role and the portal agent role take traffic only from the app role's private address.
+- Inbound mail: each tenant gets an address such as `tenantname@in.<tool domain>` (02 s7.3). MX for `in.<tool domain>` points at an inbound mail service. That service posts each message to the comms service through a signed webhook.
+- Outbound calls from the app role: Anthropic, the image and reviewer providers (model gateway only), Gmail, Microsoft Graph, Shaavir Drive, Stripe, the email provider, object storage, backups, and error tracking.
 
-**Concurrency:**
-- AI calls: a per-provider limit, starting value 3, set from the Phase 1 benchmark and the provider's concurrent-call limit (04 s5). A per-bid cap below it keeps one large bid from taking every slot. Both are settings.
-- File jobs: one at a time in the sandbox, with OCR 2 pages in parallel (section 2.1).
+Working product name: E2E Proposal. 🟨 **OPEN:** the final name and domain, after a trademark and domain check (00 s7). 🟨 **OPEN:** the inbound mail service (for example Cloudflare Email Routing to a webhook, or a mail provider's inbound parse). It becomes a subprocessor.
 
-## 3. Network and DNS
+## 10. Monitoring and alerts
 
-- DNS on Cloudflare, like the rest of shaavir.com.
-- Subdomain `pd.shaavir.com` (working name 🟨 **OPEN**), proxied (orange cloud) for DDoS protection and caching of static files.
-- Cloudflare rate limiting on `/api/auth/*` and on uploads (`/api/bids/*/uploads`, `/api/uploads/*`).
-- Cloudflare SSL mode "Full (strict)" with a Cloudflare Origin certificate on nginx. This avoids Let's Encrypt renewals, which would need port 80 open.
-- nginx serves HTTPS only. Request body limit 300 MB as an upper bound; in practice each request carries one 20 MB chunk.
-- Cloudflare's free plan caps each request at 100 MB, so the browser uploads files in 20 MB chunks through an upload session (02 s3). There is no flat per-file limit. A file may use whatever is left of the bid's MB cap: 50 MB per bid on Free, 300 MB per bid on Starter and Growth, all files on the bid added together (06 s3).
-- Server firewall: an nftables host firewall (`infra/server/host-firewall.nft`, table `inet pd_fw`): 443 from Cloudflare IP ranges only (`infra/server/cloudflare-ips.txt`), no port 80, and 22 from the admin network (Headscale, `tag:pd`) or optional office IPs (`[network] admin_ssh_cidrs`). SSH key login only, no passwords. SSH sessions are logged (07 s1). ufw is not used.
-- Outbound calls: DeepInfra, Anthropic (for comparison tests), Stripe, Telnyx, the email provider, the archive storage provider, the off-site backup target, and the error tracking service. The sandbox has no outbound access.
+PD's monitoring carries over (PD 01 s5): uptime, disk at 80%, backup age, error tracking with scrubbed bodies, 14-day logs with no document text.
 
-## 4. Backups and archive
+New checks:
+
+| Check | Alert when |
+|---|---|
+| Stuck stage | A stage runs past twice its expected time |
+| Event lag | A consumer falls more than 2 minutes behind its stream, or an outbox holds unsent events for 5 minutes |
+| Run cost | A run passes 80% of its cap |
+| Rate limits | 429 replies pass a set share of calls in an hour |
+| Render queue | Wait time passes 5 minutes, or a convert times out |
+| Render service | Down, or memory above 90% for 5 minutes |
+| Vision check | A page check fails to return twice |
+| Portal sessions | A session passes its hard limit, or the allow list blocks a request |
+| Inbound mail | The daily eBuy check finds an RFQ that no email announced |
+| Mailbox | A tenant's mailbox token expires or a send fails |
+| Drive sync | A sync to a tenant's Drive folder fails twice |
+| Spend | Daily model and image spend by tenant, with PD's monthly cap alert |
+
+Logs never hold document text, prompts, credentials, or personal data. Run and stage ids are enough to trace a problem.
+
+## 11. Backups
 
 | What | How | Kept |
 |---|---|---|
-| Database | Built: hourly `pg_dump -Fc` into encrypted Borg on `/mnt/pdbackup` (`borg create --content-from-command`: a failed dump leaves no archive; every new archive is read back through `pg_restore --file=/dev/null`, and a bad one is deleted before prune), then an rclone crypt copy to Backblaze B2 (`infra/scripts/backup.sh`, `ops/backup/`). WAL archiving is not built | 2 days hourly, 30 days daily |
-| Live files | Not backed up. Users hold the originals, and files past their live date go to the archive | n/a |
-| Archive | Originals and viewer copies past their live date, encrypted, in off-server object storage (03 s5, 07 s2). This is the only off-server copy of files | Archive lifetime (07 s2) |
-| Server | Provider backups and snapshots stay **off**: they would copy the LUKS keyfiles on the root disk | n/a |
+| Database | One cluster: all service schemas and Zitadel's database. PD's hourly `pg_dump` into encrypted Borg, then rclone crypt to Backblaze B2 (PD 01 s4) | 2 days hourly, 30 days daily |
+| Repository and final packages | Object storage with versioning, plus a nightly encrypted copy off-site | 🟨 **OPEN** (07 s7) |
+| Run working files | No backup. The orchestrator rebuilds a lost one from the stage record and the repository | Until the package ships |
+| Tenant fonts | In the repository backup | While the tenant is active |
+| Shaavir Drive | Drive's own backups. The tool keeps its own copy of each Pink and working document | Drive's terms |
+| Event streams | No backup. Outbox tables and stage records rebuild lost events | n/a |
+| Render and portal agent roles | No backups. Both rebuild from images | n/a |
 
-- 🟨 **OPEN:** backup method and recovery targets. Proposed: RPO 1 hour (at most 1 hour of database changes lost) and RTO 4 hours (service back within 4 hours of losing the server). WAL archiving meets the RPO with room; hourly dumps meet it only at the edge.
-- 🟨 **OPEN:** off-site backup target. Proposed and built: Backblaze B2 through rclone crypt (question Q-04). On a single-disk server the local Borg repository shares the disk with the data, so **the B2 copy is the only backup that survives losing the server**.
-- 🟨 **OPEN:** archive provider (for example another region of the hosting provider, or Backblaze B2). It becomes a subprocessor (07 s4).
-- Archive files are encrypted before they leave the server. The key is held outside the archive: in a root-only file on the server, plus an offline copy Amaan holds.
+Unlike PD, the tool must back up stored files. The repository holds years of a tenant's proposals, and users do not hold every original.
 
-Restore test, once a month: `ops/restore-drill/drill.sh run` restores the latest Borg archive (or the B2 copy, `--from-offsite`) into a throwaway Postgres container, times it against the RTO, and prints a log line. Restore one archived file the same day. CI runs the SQL half of it on every push (`ops/ci/restore-drill-ci.sh`, job `restore-drill`: a real `pg_dump -Fc` of the migrated schema through restore.sh's validation and SQL path into a second Postgres). The first real drill against a Borg archive from the server is the acceptance test of this section.
+PD's recovery targets apply: RPO 1 hour and RTO 4 hours, proposed and still 🟨 **OPEN** (PD 01 s4). PD's monthly restore drill also covers one repository restore.
 
-`restore.sh --archive latest` takes the newest **regular** archive (`pd-<UTC time>`), never a `-pre-restore` safety copy or a `.checkpoint`, and validates it before it stops anything or drops the database.
+## 12. Deployment
 
-Backup monitoring: `pd-backup-check.timer` (every 30 minutes, `ops/backup/backup-age-check.sh`) fails when the newest regular archive or `pd/last-offsite-ok` (written after a complete B2 sync) is older than `[backup] max_backup_age_hours`. A failure of it or of `pd-backup.service` starts `pd-alert@<unit>.service` (`OnFailure=`), which records `/var/lib/pd/alerts/<unit>.failed`, logs at priority err, and calls `/etc/pd/alert-hook` if present. The notifier behind that hook is HUMAN-TODO H-11.
+PD's pipeline carries over (PD 01 s6): GitHub Actions tests and builds images, and a manual deploy job runs `deploy.sh` over SSH.
 
-One server per B2 prefix: `pd/last-offsite-ok` names the machine that wrote it (`/etc/machine-id`), and `offsite-sync.sh` refuses to sync when B2's marker came from another machine. After a provider switch or a restore the new server takes the prefix over once with `backup.sh --adopt-offsite`, after `pd-backup.timer` is disabled on the old one (`infra/switch-provider.sh plan`, step 0).
+Added for E2E Proposal:
+- CI builds one image per service. Turbo builds only the services a change touches. The uv workspace builds the Python services.
+- Contract tests run on every PR (09 s2).
+- Each service deploys on its own. A service with a schema migration deploys its migration first, in its own schema only.
+- The render image builds once per release and runs `preflight.py --selftest`. The build pins every font file by hash.
+- The render role and the portal agent role pull their images by tag and restart. Only the model gateway holds model keys.
+- A render deploy drains `render.jobs` first, or lets running tool calls finish. Open runs resume on their own (s3).
+- Skill files ship with the code, versioned. A run records the skill versions it used (02 s4).
 
-### 4.1 Moving data off the old named volumes
-
-Servers deployed before the data moved to the encrypted volume keep Postgres and Redis in Docker named volumes (`<project>_postgres_data`, `<project>_redis_data`, on the root disk) and the uploaded files inside the api and worker containers (`/data/files` had no mount). `infra/scripts/deploy.sh` finds those by label (`com.docker.compose.volume=postgres_data` / `redis_data`, any project name) and refuses while they exist, or while an api/worker container has no bind mount on `/data/files`, because recreating the containers would delete the files. Move the data once, by hand, with the LUKS volumes mounted (`infra/luks/README.md`):
-
-```bash
-cd /opt/pd
-sudo infra/scripts/backup.sh --no-offsite          # only if this server already has the Borg repository; otherwise take a pg_dump first
-# 1. stop the whole stack first, so nothing writes to the files or the volumes while they are copied
-#    (stop, never down or rm: the stopped containers still hold the uploaded files in their layer)
-sudo docker compose --env-file .env -f infra/docker-compose.yml stop
-# 2. the uploaded files, from the stopped api container (docker cp works on a stopped container)
-sudo docker cp "$(sudo docker ps -aq --filter label=com.docker.compose.service=api | head -1)":/data/files/. /mnt/pddata/files/
-sudo chown -R 1000:1000 /mnt/pddata/files
-# 3. copy the volumes (names from: sudo docker volume ls --filter label=com.docker.compose.volume)
-sudo docker run --rm -v <project>_postgres_data:/from -v /mnt/pddata/postgres:/to alpine cp -a /from/. /to/
-sudo docker run --rm -v <project>_redis_data:/from -v /mnt/pddata/redis:/to alpine cp -a /from/. /to/
-# 4. check the copies (sizes, file counts), then record the move; the old volumes may stay as a fallback
-sudo du -sh /mnt/pddata/postgres /mnt/pddata/redis /mnt/pddata/files
-sudo touch /mnt/pddata/.migrated-from-named-volumes
-sudo infra/scripts/deploy.sh
-```
-
-If the worker ever wrote files the api did not see, copy its `/data/files` the same way. Remove the old volumes (`docker volume rm`) only after a successful deploy and a restore drill from the new place; log the move in `STATE.md`.
-
-## 5. Monitoring and alerts
-
-- Uptime check on `https://pd.shaavir.com/health` every minute.
-- Disk alert at 80% used. The per-organization storage quota (06 s3) keeps one organization from filling the disk.
-- Daily AI spend report from the usage table (see 04-ai-pipeline.md). Alert when spend passes 80% of the monthly cap.
-- Daily Telnyx SMS spend alert (06 s1).
-- Alert on failed archive moves, failed restores, and sandbox jobs stopped by a limit.
-- Built: backup age check and `OnFailure=` alerts for the backup units (s4, "Backup monitoring"); the notifier is HUMAN-TODO H-11.
-- Error tracking for api and worker. 🟨 **OPEN:** service choice. The service must scrub request bodies, headers, and cookies before sending, since request bodies can hold document text and phone numbers.
-- Logs: Docker logs rotated daily, kept 14 days. Logs never contain document text, resumes, or phone numbers.
-
-## 6. Deployment
-
-- Code in a private GitHub repository under the Shaavir organization.
-- GitHub Actions: run tests (including the offline infrastructure tests), build Docker images. Pushing images to GitHub Container Registry is available but off by default: manual dispatch, or the repository variable `PD_PUSH_IMAGES=true` (question Q-16).
-- Deploy: a manual `deploy` job (behind the `production` environment, inert without its secrets) SSHes to the server as the `pddeploy` user, whose key can only run `deploy.sh --ci` through a forced command (`infra/server/deploy-user.sh`). Only a dispatch from `master` deploys (the `production` environment's branch policy is `master` only, H-07), the job waits for `push-images`, and `deploy.sh --ci` accepts only `master` or a release tag `v<N>[.<N>[.<N>]]` (checked before any git command). `:master` images are tagged only from `refs/heads/master`. `deploy.sh` pulls images (`--pull-tag`) or builds them, then `docker compose up -d`. Database migrations run as the owner role `pd_owner` in a separate step before the api restarts. The running app uses `pd_app` (02 s4).
-- `infra/scripts/deploy.sh` does this in order: pull, build images (build context is the repo root), start `postgres` and `redis`, run `db:migrate` as `pd_owner` in the one-off `migrate` compose service, then `docker compose up -d`. A failed migration stops the deploy before the api and worker restart. The script never prints secrets; they come from `/opt/pd/.env` (root-only, mode 600).
-- **Setting the `pd_app` password (out of band, never in a script or a migration).** The migration creates `pd_app` with `LOGIN` and no password. After the first successful migration on a server, set it once from the server shell, reading the value from the root-only env file so it never lands in shell history or a process list:
-
-  ```
-  docker compose --env-file /opt/pd/.env -f /opt/pd/infra/docker-compose.yml exec -T postgres \
-    sh -c 'psql -U pd_owner -d pd -v ON_ERROR_STOP=1' <<< "ALTER ROLE pd_app PASSWORD '$(grep ^PD_APP_PASSWORD= /opt/pd/.env | cut -d= -f2-)';"
-  ```
-
-  Then run `deploy.sh` again (or restart `api` and `worker`). To rotate: change `PD_APP_PASSWORD` in `.env`, run the same `ALTER ROLE`, restart `api` and `worker`. `PD_APP_PASSWORD` must differ from `POSTGRES_PASSWORD`, and the value must not contain a single quote. Until it is set, the api and worker fail to log in and exit.
-- **Cut-over: migration 0008 (amendment key check).** Before 0008, classify sent an amendment straight to the `ai:amendment` queue; after it, the key check creates the `amendments` row and only then queues `ai:amendment`, and the `ai:amendment` step skips an amendment with no row. An amendment caught between the two (classified before the deploy, its `ai:amendment` job not yet run) would stay unprocessed. Do one of these:
-  1. Before deploying, stop new uploads and let the `ai:amendment` queue drain (no waiting or active jobs), then deploy.
-  2. After deploying, run the one-off `apps/worker/scripts/requeue-amendments.ts` with the worker's environment. For each organization named with `--org <uuid>` (row-level security shows one at a time; list the ids from a superuser `psql` session), it finds every amendment that is not deleted, finished extraction (`extract_status = 'ready'`), is not waiting on a marking confirmation, and has no `amendments` row. It is a dry run by default; with `--apply` it inserts a `classify` job row for each and queues it, so the key check runs. Rerunning it is safe: the key check is idempotent.
-- **Backfill: amendments applied before the added-rows run (PR #22, migration 0009).** An amendment that reached `applied` or `needs_confirmation` before #22 closed rows and wrote links, but the rows in its own text were never inserted: nothing is "Added by Amd N", its supersede links name no new row (so a proposed one cannot be confirmed, `new_row_missing`), the rows it superseded have no "replaced by" pointer, and its links have no quote. `apps/worker/scripts/list-applied-amendments.ts` lists them; `apps/worker/scripts/backfill-amendments.ts` fills them in. Run it once, after #22 is deployed, with the worker's environment (`DATABASE_URL` as `pd_app`, `AI_PROVIDER` and its key such as `DEEPINFRA_API_KEY`). The worker image holds only `dist/` (no `src/` or `scripts/`), so run it in one of two ways:
-  - From a repo checkout at the deployed commit, with that environment exported: `npx -y pnpm@9 install`, then `npx tsx apps/worker/scripts/backfill-amendments.ts ...`. The database must be reachable from that shell.
-  - In a one-off worker container, with the server's checkout (`/opt/pd`, the commit `deploy.sh` built) mounted: `docker compose --env-file /opt/pd/.env -f /opt/pd/infra/docker-compose.yml run --rm --no-deps -v /opt/pd/apps/worker:/app/backfill:ro -e AI_PROVIDER -e DEEPINFRA_API_KEY worker node --import tsx /app/backfill/scripts/backfill-amendments.ts ...`. It takes the worker service's `DATABASE_URL`; the image's `node_modules` resolves the imports, and tsx runs the mounted TypeScript. Pass the provider variables with `-e` if the service does not carry them. This form has not been verified: try it first as a dry run (no `--apply`) and check that it lists the amendments before running it with `--apply`.
-
-  Then:
-  1. Take a database backup (or confirm the hourly one is recent).
-  2. Dry run, per organization (row-level security shows one at a time; list the ids from a superuser `psql` session): `backfill-amendments.ts --org <uuid> [--org <uuid> ...]`. It reads in read-only transactions and makes no model call. One `key=value` line per amendment: `result=would-backfill` with its pages, links, supersede links without a new row, links without a quote, open proposals and `later_amendments`, or `result=skip` with the reason (already backfilled, not applied or needs_confirmation, deleted, the bid key changed, the bid's credit not consumed, rows, quotes or "check these" written by the post-#22 run, no links, a later amendment, or another amendment of the bid that ran after #22). A summary line ends it.
-  3. Try one: add `--bid <uuid> --limit 1 --apply`, and check that amendment's rows and links in the app.
-  4. The rest: the same command with `--apply` (keep `--limit N` to go in batches). Each amendment costs one amendment run of model tokens (an `ai_runs` row with task `amendment_backfill`) and no RFP credit; nothing is queued. Exit code 1 means any failure (a read, a model pass or a write; the line says why); the amendment is left as it was, so run the command again. Exit code 2 is a bad argument.
-
-  Only the bid's latest amendment can be backfilled. An amendment with a later one that is applied, needs_confirmation or processing is skipped (`later amendment N exists; rows could duplicate`): the later one diffed against rows without the earlier one's, so the earlier rows would sit active next to the later replacements of the same clauses. For the same reason a bid with another applied or needs_confirmation amendment that has rows from its own text, so ran after #22 (for example an earlier amendment that failed before #22 and was retried after it), is skipped (`amendment N ran after #22; rows could duplicate`). Both checks are made again under the bid lock. Backfilling those in number order, each diffed against the later amendments' rows, is a follow-up; until then their links stay as they are and the owner decides per amendment (delete and upload it again, or leave it).
-
-  For each amendment it runs passes 1 to 6 on the amendment's pages, with the diff offered only the rows the amendment's own links name, then in one transaction, under the amendment write's locks (`apps/api/src/credits.ts`), it inserts the rows (with the amendment as their document, its number and continued req ids), fills the empty new row and quote of its existing links (an auto, confirmed or rejected link needs the `amendment_link_confidence` setting, 0.80; a proposal takes the diff's best quoted match at any confidence, since the pre-#22 proposals were the ones below it), points a row an auto or confirmed supersede closed at its highest-confidence replacement, adds an `add` link for each other new row, and writes the document's "check these". The pre-#22 `add` links that name no row are left in place, as they were. It never closes or reopens a row, decides or creates a proposal, changes an amendment's status, or touches a credit. Running it while the worker runs is safe.
-
-  It writes an `audit_log` row (`amendment_backfill`, target the amendment) whose `detail` lists `insertedRowIds`, `addLinkIds`, `filledLinkIds` (their `new_row_id`, `source_page` and `source_quote` were null before) and `pointedRows` (`rowId` with its `prevChangedByAmendment`; its `superseded_by_row_id` was null). That row is what makes a rerun a no-op. To undo one amendment, in one transaction as the owner: set `new_row_id`, `source_page` and `source_quote` back to null on `filledLinkIds`, and `superseded_by_row_id` to null and `changed_by_amendment` to `prevChangedByAmendment` on `pointedRows`; delete the `addLinkIds`; delete the `insertedRowIds`; delete the document's open "check these" (`status = 'open'`); then delete the audit row. Undoing after users have acted on the new rows (confirmed a proposal, edited, merged or promoted) needs a case-by-case check first: a confirm closed a row against the new one, and edits and history point at it.
-- Two environments: `staging` and `production`. The 8 GB server already has about 5.6 GB allocated to production containers (section 2.2), so a staging copy does not fit on it. If there is a staging server, it is a separate small VPS. 🟨 **OPEN:** whether to run a separate staging VPS.
-
-## 7. Monthly running cost (estimate, provisional)
-
-Assumptions: 50 users, up to 100 RFPs a month, ₹97 per US dollar. One RFP is a solicitation set: the solicitation, its amendments, and its attachments (04 s2), up to 50 MB on Free and 300 MB on paid plans. Its token count is larger than the 200 pages of solicitation that the v1 estimate used, and amendment runs add more.
-
-🟨 **OPEN:** the AI figures on this page and in 04 s7 are provisional. Re-derive them from the providers' current price lists and Phase 1 measurements, with no provider caching assumed (04 s7 has the arithmetic).
+## 13. Monthly running cost (provisional)
 
 | Item | Monthly |
 |---|---|
-| Server at the chosen provider (HUMAN-TODO H-02), 8 GB | about ₹970 (an OVH US VPS price; provisional) |
-| AI, DeepInfra Qwen3.5-397B (first test model) | ₹6,000 to ₹11,300 (v1 estimate, provisional) |
-| Telnyx SMS for phone verification | Small; depends on signups, plus a monthly 10DLC campaign fee 🟨 **OPEN:** check Telnyx US SMS and 10DLC rates |
-| Email, monitoring, backups | ₹0 to ₹500 on free or low tiers |
-| Archive storage | Small; depends on the provider and volume (archive provider OPEN, section 4) |
-| If separate staging | A few dollars (🟨 **OPEN**, section 6) |
-| Domain, TLS, Cloudflare | ₹0 (existing) |
-| Buffer, 15% | about ₹1,050 to ₹1,900 |
-| **Total** | **about ₹8,000 to ₹14,700, plus archive and staging. Provisional** |
+| App role, 8 vCPU and 32 GB | 🟨 **OPEN** with the provider, chosen after the build (s1) |
+| Render role, 8 vCPU and 16 GB | about $30 to $60 (s5.2, provisional) |
+| Portal agent role, 2 vCPU and 4 GB | about $5 to $15 (provisional) |
+| Object storage and off-site backup | Small; grows with the repository |
+| Inbound mail service | Small; 🟨 **OPEN** with the service |
+| Anthropic, reviewer, and image calls | Per run, under the cap. Measured in the 10-RFP test (08 Phase 9) |
 
-AI cost changes with the model the test selects (v1 estimates, provisional; see 04 s7):
-
-| Model | 100 RFPs a month |
-|---|---|
-| Anthropic Haiku 5.5 | about ₹1,100 |
-| DeepInfra Qwen3.5-397B | about ₹6,000 to ₹11,300 |
-| DeepInfra DeepSeek V4 Pro | about ₹9,500 |
-| Anthropic Sonnet 5.5 | about ₹21,200 |
-
-Add 18% GST under reverse charge for foreign providers (claimable as input credit if Shaavir is GST-registered) and card forex fees. Confirm with the accountant.
-
-## 8. Stripe setup
-
-Billing (06 s5) works once these are done in the Stripe dashboard, in test mode first, then live. Prices exist only in Stripe; the app never shows or stores an amount.
-
-1. **Products and prices.** Two products, Starter and Growth, each with one recurring monthly USD price. Put the Price ids (`price_...`) in `STRIPE_PRICE_STARTER` and `STRIPE_PRICE_GROWTH`. A subscription on any other price is not applied: the webhook records it in `audit_log` (`billing.unknown_price`) and logs an error.
-2. **API key.** `STRIPE_SECRET_KEY`. A restricted key needs: Customers write (create, update, retrieve), Checkout Sessions write (create, list, expire), Customer Portal sessions write, and Subscriptions read (retrieve, list). Nothing else; the webhook signing secret comes from step 3, not from the key.
-3. **Webhook endpoint.** `https://<api host>/api/billing/webhook`, pinned to API version `2026-08-26.dahlia` (the version the `stripe` package in `apps/api` is written against). Events: `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`. Put its signing secret in `STRIPE_WEBHOOK_SECRET`.
-4. **Customer Portal.** Turn it on. Its product catalog must contain only the Starter and Growth prices from step 1. Allow switching between them with proration; downgrades take effect at the end of the billing period; cancellation at the end of the period, not immediately. Allow payment method updates and invoice history. Set the business name and the privacy and terms links.
-5. **Failed payments.** Under subscription settings, choose what happens after the last retry: cancel the subscription or mark it unpaid. Either moves the organization to Free (06 s5).
-6. **Stripe Tax.** Off. 🟨 **OPEN** (06 s5).
-7. **App URL.** `APP_URL` is the web app's public origin. Checkout returns to `APP_URL/#/org?billing=success` or `?billing=cancelled`; the Portal returns to `APP_URL/#/org`.
-8. **Check.** In test mode, forward events with `stripe listen --forward-to <api>/api/billing/webhook`, upgrade a test organization, change plan in the Portal, and cancel. `GET /api/org` shows `billingAvailable: true` only when the secret key, both price ids, and `APP_URL` are set.
-9. **Two live subscriptions.** If an error log or an `audit_log` row `billing.second_live_subscription` appears, one customer has two live subscriptions. The app keeps the first and never cancels anything itself; cancel the extra one in the dashboard and refund if needed.
-
-## 9. Hosting providers
-
-The server is built by one of three adapters in `infra/providers/`, chosen by `[infra] provider` in `config/tenant.toml`
-(mirrors Drive D-146; layout and names follow Drive PR #3):
-
-| Adapter | Key in the secrets file | Buys | Storage |
-|---|---|---|---|
-| `ovh-us` | `OS_APPLICATION_CREDENTIAL_ID` / `_SECRET` (OpenStack) | a Public Cloud instance and volumes | `volumes` |
-| `hetzner` | `HCLOUD_TOKEN` | a Cloud server (and volumes) | `volumes` or `root-container` |
-| `ssh` | none | nothing: probes a server you ordered by hand | `root-container` |
-
-`[infra] storage = "root-container"` (Drive D-147) keeps the two encrypted volumes as preallocated files on the root disk.
-`infra/switch-provider.sh plan|build|cutover --to NEW.toml` moves a running PD through the restore path (Drive D-149). Offline tests
-run against fakes (Drive D-150: executable fakes, `ops/ci/set-exec-bits.sh`). The runbook is `infra/README.md`; open questions are in
-`docs/overnight-questions.md`. Production default: `ssh` with `root-container` (Q-02).
+Model cost dwarfs server cost. The cost cap (s8) and the estimate before a run (06) carry the real control.
 
 ## Decision log
 
 | Date | Decision |
 |---|---|
-| 13 Oct 2026 | OVHcloud US, separate from shaavir-prod-01 |
-| 13 Oct 2026 | Chunked uploads to pass Cloudflare's 100 MB request cap |
-| 13 Oct 2026 | OVHcloud US account confirmed; no further check needed |
-| 13 Oct 2026 | Flat 200 MB per-file limit replaced: a file may use what is left of the bid's MB cap (50 MB Free, 300 MB paid). nginx upper bound 300 MB |
-| 13 Oct 2026 | File processing moved to a `sandbox` container with no network and no secrets; resource table rebalanced to about 5.6 GB and 4.0 CPU |
-| 13 Oct 2026 | clamd size limits raised to 300 MB or more; `ConcurrentDatabaseReload no` |
-| 13 Oct 2026 | AI concurrency is a per-provider setting (starting value 3, set from the Phase 1 benchmark) plus a per-bid cap; OCR runs 2 pages in parallel |
-| 13 Oct 2026 | Files past their live date move to an encrypted off-server archive; key held outside the archive |
-| 13 Oct 2026 | Database backups by WAL archiving or hourly dumps; RPO 1 hour and RTO 4 hours proposed (OPEN) |
-| 13 Oct 2026 | Root and SSH: Amaan only until decided. Staging stays OPEN; it does not fit on the 8 GB server |
-| 13 Oct 2026 | AI cost figures marked provisional until Phase 1 measurements |
-| 16 Oct 2026 | Hosting made pluggable (`[infra] provider`: ovh-us, hetzner, ssh), mirroring Drive D-146 to D-150; production provider stays OPEN (H-02). Data and Borg backups move to LUKS volumes; the host firewall admits 443 from Cloudflare only; images are not pushed to GHCR unless enabled (Q-16) |
-| 13 Oct 2026 | Error tracking service must scrub request bodies |
-| 15 Oct 2026 | Stripe dashboard setup recorded (section 8): two monthly prices, restricted-key permissions, webhook events and API version, Portal catalog limited to Starter and Growth, end-of-period downgrade and cancel, Stripe Tax off |
-| 15 Oct 2026 | Cut-over for migration 0008 (section 6): drain `ai:amendment` before the deploy, or run `requeue-amendments.ts` after it |
-| 16 Oct 2026 | Backfill for amendments applied before the added-rows run (section 6): `backfill-amendments.ts`, dry run by default, `--apply` per organization; only a bid's latest amendment, proposals paired at any confidence, how to run it outside the worker image, and the undo order |
+| 17 Oct 2026 | Hosting stays on PD's pluggable adapters; the production provider stays OPEN |
+| 17 Oct 2026 | Three server roles: app, render, and browser agent host. The tool gets its own servers, apart from PD's production server |
+| 17 Oct 2026 | Orchestrator runs as a container on the app server. Postgres holds stage state; BullMQ only delivers work |
+| 17 Oct 2026 | Render server starts at 8 vCPU and 16 GB, with 4 LibreOffice slots and 3 Python slots; the load test sets final values |
+| 17 Oct 2026 | Skill scripts run as tools in one container per call, one tenant per container, no network by default |
+| 17 Oct 2026 | Ledger scripts point at the tool's internal evidence API; the plugin's `clients/` data never ships |
+| 17 Oct 2026 | Fonts in two layers: base for every tenant, tenant fonts mounted only into that tenant's jobs |
+| 17 Oct 2026 | Word COM verify replaced by render, rasterize, vision check, and `pdfinfo` count on the submitted PDF |
+| 17 Oct 2026 | Browser agent on its own host, one throwaway container per session, credentials never stored, final submit always human |
+| 17 Oct 2026 | Cost cap checked before each call; the run pauses at 100% with state saved; the cap value stays OPEN |
+| 17 Oct 2026 | Repository and final packages get off-site backups, unlike PD's live files |
+| 17 Oct 2026 | Review pass: cost cap behavior marked Proposed and aligned across 04, 05, and 06; field refresh, fonts EULA, vision token cost, and Word re-export added as OPEN |
+| 17 Oct 2026 | Owner decision: hosting is chosen after the tool is built. Deploys use PD's adapters, so the choice changes no code |
+| 17 Oct 2026 | Owner decision: microservices. Server roles now group service containers: app role (8 vCPU, 32 GB), render role, portal agent role. Events on NATS JetStream, Proposed |
+| 17 Oct 2026 | Owner decision: E2E absorbs PD; PD's code becomes E2E services. The one-deployment-or-two question is closed |
+| 17 Oct 2026 | Owner decision: the per-run cost cap comes from the 10-RFP test. The orchestrator owns the cap; the model gateway enforces it per call |
+| 17 Oct 2026 | Owner decision: code computes the contents table, captions, and cross-references; LibreOffice headless renders DOCX to PDF. Field refresh closed |
+| 17 Oct 2026 | Owner decision: the Linux render service ships metric-compatible open fonts and no Microsoft fonts. The core fonts EULA question is closed |
+| 17 Oct 2026 | Owner decision: zero-retention terms follow the 10-RFP test and come before launch |
+| 17 Oct 2026 | Owner decision: events on Redis Streams, on the self-hosted Redis container that BullMQ already uses. NATS dropped. A hosted free tier is too small for production (item 60 closed) |
+| 17 Oct 2026 | Owner confirmed: the 10-RFP test runs under standard provider terms; terms move to zero retention before shipping |
+| 17 Oct 2026 | Owner decision: self-hosted Zitadel joins the app role with its own database in the cluster |
+| 17 Oct 2026 | Final review: Redis AOF loss window stated and the outbox named as the safety net; consumer acknowledgment and reclaim rules added; python-docx floor set to 1.1 |
