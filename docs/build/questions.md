@@ -11,6 +11,9 @@ One heading per chat. Each entry: question, options, choice made, why. Design ga
 - **Branch names.** The session note names `claude/fervent-ramanujan-4voegj`; BUILD-PLAN s6 names `e2e/c<chat>-<nn>-<slug>`. Chose the plan's names (one branch per PR is required by the loop). Asked the owner; unanswered.
 - **Hook registration blocked.** Even with `.claude/` writes allowed, the classifier refused `settings.json` with a `SessionStart` hook entry. `settings.json` was written without it; `.claude/hooks/session-start.sh` exists. Owner step: add the `hooks.SessionStart` entry (`bash "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"`). Until then the Proposed check "a new session loads plugins and rtk with no manual steps" is partly unverified.
 - **`.claude/` write block.** Lifted by the owner. Only the hook registration (above) remains an owner step, tracked as HUMAN-TODO H-12.
+- **Dark mode default.** Options: follow the OS, or stored choice only. Chose stored choice only (default light) because legacy screens have no dark styles. Revisit when they are retired.
+- **Product name in Atrium.** Atrium's page title says "Bidwright" (INVENTORY G13). Chose "E2E Proposal" in app text; no Atrium file is edited.
+- **Repository browser and Data and AI settings had no owning chat.** INVENTORY assigns them to chat 3 and chat 8.
 
 ## Chat 2
 

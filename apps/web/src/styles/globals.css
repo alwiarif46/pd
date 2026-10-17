@@ -20,5 +20,5 @@
 @source "../components/ui";
 @source "../lib";
 
-/* Dark styles apply only under a .dark class, which the app never sets. */
+/* Dark styles apply under a .dark class on <html>, set by src/lib/theme.ts. */
 @custom-variant dark (&:where(.dark, .dark *));
