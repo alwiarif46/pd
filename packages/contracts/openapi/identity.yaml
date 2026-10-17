@@ -1,10 +1,12 @@
 openapi: 3.1.0
 info:
   title: Identity and tenancy service
-  version: 0.2.0
+  version: 0.3.0
+  description: "Every secured route takes a bearer access token (Authorization header) or the e2e_session cookie. Either one works. CSRF: a request authenticated by the cookie must send the header X-Requested-With: e2e on POST, PATCH, PUT and DELETE, or it answers 403. Bearer requests may omit it. List routes accept limit and cursor and return X-Next-Cursor while more rows remain. The body stays a plain array."
 x-service: identity
 security:
   - bearerAuth: []
+  - sessionCookie: []
 tags:
   - name: tenants
     description: The tenant (organization) record.
@@ -39,7 +41,8 @@ paths:
         - tenants
       security:
         - bearerAuth: []
-      description: The caller becomes its owner. A user belongs to one tenant. The tenant comes from the verified token. No tenant id is sent.
+        - sessionCookie: []
+      description: "The caller has a token but no tenant yet, and becomes the owner. A user belongs to one tenant. The response sets a fresh e2e_session cookie and returns a fresh token that carries the new tenant. There is no separate refresh route: silent re-login covers expiry."
       requestBody:
         required: true
         content:
@@ -52,13 +55,23 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Tenant"
+                $ref: "#/components/schemas/CreateTenantResponse"
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: e2e_session, httpOnly, Secure, SameSite=Lax.
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
     get:
       operationId: getTenant
       summary: Get the caller's tenant
@@ -66,6 +79,7 @@ paths:
         - tenants
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: Returns the tenant, the caller's role and the plan limits that the identity service owns. The tenant comes from the verified token. No tenant id is sent.
       responses:
         "200":
@@ -85,6 +99,7 @@ paths:
         - tenants
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: Owner only. The tenant comes from the verified token. No tenant id is sent.
       requestBody:
         required: true
@@ -109,6 +124,9 @@ paths:
           $ref: "#/components/responses/NotFound"
       x-roles:
         - owner
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /members:
     get:
       operationId: listMembers
@@ -117,7 +135,11 @@ paths:
         - members
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: Members past the plan's seats carry seatLocked. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
           description: The members, oldest first.
@@ -127,8 +149,47 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Member"
+          headers:
+            X-Next-Cursor:
+              $ref: "#/components/headers/NextCursor"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /members/{userId}/owner:
+    post:
+      operationId: transferOwnership
+      summary: Make a member the owner
+      tags:
+        - members
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      description: The caller becomes a member. 400 when userId is the caller. A user id from another tenant answers 404. Emits identity.role.changed twice. Owner only. The tenant comes from the verified token. No tenant id is sent.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: Ownership moved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-roles:
+        - owner
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /members/{userId}:
     delete:
       operationId: removeMember
@@ -137,6 +198,7 @@ paths:
         - members
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: "The owner cannot remove themself: transfer ownership first. Emits identity.user.removed. Owner only. The tenant comes from the verified token. No tenant id is sent."
       parameters:
         - name: userId
@@ -145,6 +207,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/CsrfHeader"
       responses:
         "200":
           description: Removed.
@@ -162,6 +225,7 @@ paths:
           $ref: "#/components/responses/NotFound"
       x-roles:
         - owner
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /invites:
     post:
       operationId: createInvite
@@ -170,6 +234,7 @@ paths:
         - invites
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: Holds a seat until accepted or expired (7 days). 402 when the plan has no seat left. 409 invite_pending when the email has an open invite. The code goes out of band to the invitee, never in the response. Owner only. The tenant comes from the verified token. No tenant id is sent.
       requestBody:
         required: true
@@ -196,6 +261,9 @@ paths:
           $ref: "#/components/responses/Conflict"
       x-roles:
         - owner
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /invites/accept:
     post:
       operationId: acceptInvite
@@ -204,7 +272,8 @@ paths:
         - invites
       security:
         - bearerAuth: []
-      description: "The caller has a token but no tenant yet. Error codes: invite_invalid (404), invite_email_mismatch (403), invite_used, invite_expired, already_in_org, seats_full (409). A foreign or guessed code is invite_invalid. The tenant comes from the verified token. No tenant id is sent."
+        - sessionCookie: []
+      description: "The caller has a token but no tenant yet. On success it sets a fresh e2e_session cookie and returns a fresh token that carries the tenant (no separate refresh route; silent re-login covers expiry). Error codes: invite_invalid (404), invite_email_mismatch (403), invite_used, invite_expired, already_in_org, seats_full (409). A foreign or guessed code is invite_invalid."
       requestBody:
         required: true
         content:
@@ -218,6 +287,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AcceptInviteResponse"
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: e2e_session, httpOnly, Secure, SameSite=Lax.
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -228,6 +302,9 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /me:
     get:
       operationId: getMe
@@ -236,6 +313,7 @@ paths:
         - me
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: The tenant comes from the verified token. No tenant id is sent.
       responses:
         "200":
@@ -253,6 +331,7 @@ paths:
         - me
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: Only the name changes here. Zitadel owns credentials, MFA factors and passkeys. The tenant comes from the verified token. No tenant id is sent.
       requestBody:
         required: true
@@ -271,6 +350,11 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /auth/login:
     get:
       operationId: authLogin
@@ -285,7 +369,7 @@ paths:
           required: false
           schema:
             type: string
-            pattern: ^/
+            pattern: ^/(?![/\\])
           description: A path in the web app to return to. Absolute URLs are refused.
       responses:
         "302":
@@ -340,7 +424,7 @@ paths:
       security:
         - bearerAuth: []
         - sessionCookie: []
-      description: Clears the cookie and returns the Zitadel end-session URL for the browser to visit. The tenant comes from the verified token. No tenant id is sent.
+      description: Clears the cookie and returns the Zitadel end-session URL for the browser to visit.
       responses:
         "200":
           description: Signed out here.
@@ -350,6 +434,11 @@ paths:
                 $ref: "#/components/schemas/LogoutResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /tokens/verify:
     post:
       operationId: verifyToken
@@ -358,7 +447,7 @@ paths:
         - internal
       security:
         - serviceAuth: []
-      description: Private network only. The gateway calls it when it cannot check the signature itself. A bad, expired or revoked token is 401. The tenant comes from the verified token. No tenant id is sent.
+      description: Private network only. The gateway calls it when it cannot check the signature itself. A bad, expired or revoked token is 401.
       requestBody:
         required: true
         content:
@@ -372,6 +461,32 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenClaims"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /internal/zitadel/events:
+    post:
+      operationId: receiveZitadelEvent
+      summary: Receive a Zitadel event (internal)
+      tags:
+        - internal
+      security:
+        - zitadelSignature: []
+      description: "Private network only, and not on the gateway. Zitadel posts user and organization events here. The service checks the signature header and updates the user mirror. No tenant header: the event names its Zitadel organization."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ZitadelEvent"
+      responses:
+        "200":
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
   /.well-known/jwks.json:
@@ -405,6 +520,42 @@ components:
       type: http
       scheme: bearer
       description: A service token. Internal routes only, on the private network.
+    zitadelSignature:
+      type: apiKey
+      in: header
+      name: X-Zitadel-Signature
+      description: HMAC of the body with the shared webhook secret. Internal only.
+  parameters:
+    CsrfHeader:
+      name: X-Requested-With
+      in: header
+      required: false
+      schema:
+        type: string
+        const: e2e
+      description: Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token.
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+      description: Page size.
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+      description: The X-Next-Cursor value of the previous page.
+  headers:
+    NextCursor:
+      description: Present when more rows remain. Send it as cursor to get the next page.
+      schema:
+        type: string
   responses:
     BadRequest:
       description: The request body or a parameter is not valid.
@@ -438,6 +589,12 @@ components:
             $ref: "#/components/schemas/Error"
     Conflict:
       description: The current state does not allow this.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ServiceUnavailable:
+      description: The feature is not configured on this deployment (billing_unavailable).
       content:
         application/json:
           schema:
@@ -591,6 +748,32 @@ components:
         seatLocked:
           type: boolean
       description: orgId is the tenant id.
+    CreateTenantResponse:
+      type: object
+      required:
+        - id
+        - name
+        - plan
+        - token
+        - expiresAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        plan:
+          type: string
+        token:
+          type: string
+          description: A fresh access token that carries the new tenant.
+        expiresAt:
+          type: string
+          format: date-time
+    ZitadelEvent:
+      type: object
+      additionalProperties: true
+      description: Zitadel's event body, passed through. Identity reads aggregate_type, event_type, aggregate_id and resource_owner.
     CreateInviteRequest:
       type: object
       required:
@@ -615,6 +798,8 @@ components:
         - name
         - role
         - alreadyMember
+        - token
+        - expiresAt
       properties:
         orgId:
           type: string
@@ -625,6 +810,12 @@ components:
           $ref: "#/components/schemas/Role"
         alreadyMember:
           type: boolean
+        token:
+          type: string
+          description: A fresh access token that carries the tenant.
+        expiresAt:
+          type: string
+          format: date-time
     Me:
       type: object
       required:
@@ -686,6 +877,9 @@ components:
         userId:
           type: string
           format: uuid
+        zitadelUserId:
+          type: string
+          description: The Zitadel user id, when the mirror has it.
         tenantId:
           type:
             - string

@@ -11,7 +11,7 @@ type Operation = {
 type Doc = {
   paths: Record<string, Record<string, Operation>>;
   security?: unknown[];
-  components: { schemas: Record<string, unknown> };
+  components: Record<string, Record<string, unknown>>;
 };
 
 const METHODS = ['get', 'put', 'post', 'delete', 'patch'];
@@ -52,35 +52,91 @@ describe.each(FILLED)('%s OpenAPI file', (id) => {
     }
   });
 
+  it('defaults to bearer or cookie, and asks cookie writes for the CSRF header', () => {
+    expect(doc.security).toEqual([{ bearerAuth: [] }, { sessionCookie: [] }]);
+    for (const { method, path, op } of ops) {
+      const cookie = (op.security ?? []).some((x) => 'sessionCookie' in (x as object));
+      if (!cookie || method === 'GET') continue;
+      expect(JSON.stringify(op), `${method} ${path}`).toContain('#/components/parameters/CsrfHeader');
+    }
+  });
+
   it('has no password field in any schema', () => {
     expect(JSON.stringify(doc.components.schemas).toLowerCase()).not.toContain('password');
   });
 });
+
+/** Replaces every local $ref by the thing it points at, so two files compare by content. */
+function resolve(doc: Doc, node: unknown, seen: string[] = []): unknown {
+  if (Array.isArray(node)) return node.map((n) => resolve(doc, n, seen));
+  if (node && typeof node === 'object') {
+    const ref = (node as { $ref?: string }).$ref;
+    if (typeof ref === 'string') {
+      expect(seen, `circular ${ref}`).not.toContain(ref);
+      const [, , section, name] = ref.split('/');
+      const target = doc.components[section]?.[name];
+      expect(target, ref).toBeDefined();
+      return resolve(doc, target, [...seen, ref]);
+    }
+    return Object.fromEntries(Object.entries(node).map(([k, v]) => [k, resolve(doc, v, seen)]));
+  }
+  return node;
+}
+
+// Not proxied one to one: the gateway builds these, or keeps them private, or words them for its own callers.
+const INTERNAL = new Set(['/healthz', '/tokens/verify', '/.well-known/jwks.json', '/internal/zitadel/events']);
+const COMPOSED = new Set(['/bids/{id}/jobs']);
+const REWORDED = new Set(['/bids/{id}/jobs/{jobId}/retry']);
+const BILLING = ['POST /api/billing/checkout', 'POST /api/billing/portal', 'POST /api/billing/webhook'];
 
 describe('gateway OpenAPI file', () => {
   const gateway = load('gateway');
   const gatewayRoutes = new Set(operations(gateway).map(({ method, path }) => `${method} ${path}`));
 
   it('exposes every public service route under /api', () => {
-    // Internal routes stay private. The two job lists are replaced by one composed route.
-    const internal = new Set(['/healthz', '/tokens/verify', '/.well-known/jwks.json', '/bids/{id}/jobs']);
     for (const id of ['identity', 'ingest', 'intel']) {
       for (const { method, path } of operations(load(id))) {
-        if (internal.has(path)) continue;
+        if (INTERNAL.has(path) || COMPOSED.has(path)) continue;
         expect(gatewayRoutes.has(`${method} /api${path}`), `${id}: ${method} /api${path}`).toBe(true);
       }
     }
   });
 
   it('keeps internal routes off the public surface', () => {
+    for (const path of INTERNAL) {
+      if (path === '/healthz') continue;
+      expect([...gatewayRoutes].some((r) => r.endsWith(path) || r.includes('jwks') || r.includes('/internal/')), path).toBe(false);
+    }
     expect(gatewayRoutes.has('POST /api/tokens/verify')).toBe(false);
-    expect([...gatewayRoutes].some((r) => r.includes('jwks'))).toBe(false);
   });
 
-  it('has the composed routes and a public /healthz', () => {
+  it('has the composed and billing routes and a public /healthz', () => {
     expect(gatewayRoutes.has('GET /api/org')).toBe(true);
     expect(gatewayRoutes.has('GET /api/bids/{id}/jobs')).toBe(true);
     expect(gatewayRoutes.has('GET /api/about/processing')).toBe(true);
     expect(gatewayRoutes.has('GET /healthz')).toBe(true);
+    for (const r of BILLING) expect(gatewayRoutes.has(r), r).toBe(true);
+    const webhook = gateway.paths['/api/billing/webhook'].post as Operation & { parameters: Array<{ name: string; required: boolean }> };
+    expect(webhook.security).toEqual([]);
+    expect(webhook.parameters).toContainEqual(expect.objectContaining({ name: 'Stripe-Signature', required: true }));
+    expect((gateway.paths['/api/billing/checkout'].post as Operation & { 'x-upstream': string })['x-upstream']).toBe('billing');
+  });
+
+  it('proxies each service route with the same request, responses, parameters, security and operationId', () => {
+    const fields = ['operationId', 'parameters', 'requestBody', 'responses', 'security'] as const;
+    let compared = 0;
+    for (const id of ['identity', 'ingest', 'intel']) {
+      const service = load(id);
+      for (const { method, path, op } of operations(service)) {
+        if (INTERNAL.has(path) || COMPOSED.has(path)) continue;
+        const proxied = gateway.paths[`/api${path}`][method.toLowerCase()] as Record<string, unknown>;
+        for (const f of fields) {
+          expect(resolve(gateway, proxied[f]), `${id} ${method} ${path} ${f}`).toEqual(resolve(service, (op as Record<string, unknown>)[f]));
+        }
+        expect(proxied['x-upstream'], `${method} ${path}`).toBe(REWORDED.has(path) ? 'intel, ingest' : id);
+        compared += 1;
+      }
+    }
+    expect(compared).toBeGreaterThan(40);
   });
 });

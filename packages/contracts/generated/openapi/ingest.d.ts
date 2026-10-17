@@ -512,10 +512,29 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description The feature is not configured on this deployment (billing_unavailable). */
+        ServiceUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
     };
-    parameters: never;
+    parameters: {
+        /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+        CsrfHeader: "e2e";
+        /** @description Page size. */
+        Limit: number;
+        /** @description The X-Next-Cursor value of the previous page. */
+        Cursor: string;
+    };
     requestBodies: never;
-    headers: never;
+    headers: {
+        /** @description Present when more rows remain. Send it as cursor to get the next page. */
+        NextCursor: string;
+    };
     pathItems: never;
 }
 export type $defs = Record<string, never>;
@@ -543,7 +562,10 @@ export interface operations {
     createUpload: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
             path: {
                 /** @description The bid id. */
                 id: string;
@@ -577,6 +599,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             402: components["responses"]["PaymentRequired"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
         };
@@ -584,7 +607,10 @@ export interface operations {
     cancelUpload: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
             path: {
                 id: string;
             };
@@ -602,13 +628,17 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };
     putUploadChunk: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
             path: {
                 id: string;
                 /** @description Zero-based chunk number. */
@@ -633,13 +663,17 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };
     completeUpload: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
             path: {
                 id: string;
             };
@@ -658,13 +692,19 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
         };
     };
     listBidDocuments: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The X-Next-Cursor value of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
             header?: never;
             path: {
                 /** @description The bid id. */
@@ -677,6 +717,7 @@ export interface operations {
             /** @description The documents. */
             200: {
                 headers: {
+                    "X-Next-Cursor": components["headers"]["NextCursor"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -800,7 +841,10 @@ export interface operations {
     restoreDocument: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
             path: {
                 id: string;
             };
@@ -819,6 +863,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             402: components["responses"]["PaymentRequired"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
         };
@@ -826,7 +871,10 @@ export interface operations {
     confirmDocumentMarking: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
             path: {
                 id: string;
             };
@@ -844,6 +892,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
         };
@@ -851,7 +900,10 @@ export interface operations {
     deleteDocument: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
             path: {
                 id: string;
             };
@@ -869,12 +921,18 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };
     listIngestJobs: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The X-Next-Cursor value of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
             header?: never;
             path: {
                 /** @description The bid id. */
@@ -887,6 +945,7 @@ export interface operations {
             /** @description The jobs. */
             200: {
                 headers: {
+                    "X-Next-Cursor": components["headers"]["NextCursor"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -900,7 +959,10 @@ export interface operations {
     retryIngestJob: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token. */
+                "X-Requested-With"?: components["parameters"]["CsrfHeader"];
+            };
             path: {
                 id: string;
             };
@@ -919,6 +981,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             402: components["responses"]["PaymentRequired"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
         };

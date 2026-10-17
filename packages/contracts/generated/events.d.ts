@@ -107,6 +107,9 @@ export interface IdentityAuditRecordedEvent {
      */
     action: string;
     target_type: string;
+    /**
+     * The id of the thing acted on. Usually a uuid; a string so any target fits.
+     */
     target_id: string;
     /**
      * Small extra facts. Never a secret or file text.
@@ -235,7 +238,10 @@ export interface IngestDocumentClassifiedEvent {
   payload: {
     document_id: string;
     bid_id: string;
-    kind: "solicitation" | "amendment" | "attachment" | "resume" | "draft";
+    /**
+     * The file kind. Known values: solicitation, amendment, attachment, resume, draft. A new value is not a break.
+     */
+    kind: string;
     amendment_no?: number | null;
     /**
      * The number printed on the file, when the client sent it.
@@ -260,7 +266,10 @@ export interface IngestDocumentDeletedEvent {
   payload: {
     document_id: string;
     bid_id: string;
-    kind: "solicitation" | "amendment" | "attachment" | "resume" | "draft";
+    /**
+     * The file kind. Known values: solicitation, amendment, attachment, resume, draft. A new value is not a break.
+     */
+    kind: string;
     reason?: "user" | "bid_deleted" | "retention";
     [k: string]: unknown;
   };
@@ -288,6 +297,9 @@ export interface IngestAuditRecordedEvent {
      */
     action: string;
     target_type: string;
+    /**
+     * The id of the thing acted on. Usually a uuid; a string so any target fits.
+     */
     target_id: string;
     /**
      * Small extra facts. Never a secret or file text.
@@ -360,6 +372,9 @@ export interface IntelAuditRecordedEvent {
      */
     action: string;
     target_type: string;
+    /**
+     * The id of the thing acted on. Usually a uuid; a string so any target fits.
+     */
     target_id: string;
     /**
      * Small extra facts. Never a secret or file text.

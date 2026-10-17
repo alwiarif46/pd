@@ -2,9 +2,11 @@ openapi: 3.1.0
 info:
   title: Ingest service
   version: 0.2.0
+  description: "Every secured route takes a bearer access token (Authorization header) or the e2e_session cookie. Either one works. CSRF: a request authenticated by the cookie must send the header X-Requested-With: e2e on POST, PATCH, PUT and DELETE, or it answers 403. Bearer requests may omit it. List routes accept limit and cursor and return X-Next-Cursor while more rows remain. The body stays a plain array."
 x-service: ingest
 security:
   - bearerAuth: []
+  - sessionCookie: []
 tags:
   - name: uploads
     description: Chunked uploads under a bid.
@@ -33,6 +35,7 @@ paths:
         - uploads
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: "Checks the key, the bid size cap and the credit (through the billing bridge), then opens a session that lasts a day. An identical file already on the bid answers 200 with duplicate true and charges nothing. Errors: invalid_upload (400), out_of_credits (402), key_mismatch, key_required, solicitation_first, bid_cap_exceeded, amendment_no_taken (409). The bid must belong to the caller's tenant, else 404. The tenant comes from the verified token. No tenant id is sent."
       parameters:
         - name: id
@@ -42,6 +45,7 @@ paths:
             type: string
             format: uuid
           description: The bid id.
+        - $ref: "#/components/parameters/CsrfHeader"
       requestBody:
         required: true
         content:
@@ -67,10 +71,13 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "402":
           $ref: "#/components/responses/PaymentRequired"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /uploads/{id}:
     delete:
       operationId: cancelUpload
@@ -79,6 +86,7 @@ paths:
         - uploads
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: Releases the credit the session reserved and removes the chunks. Only an open session can be cancelled. The tenant comes from the verified token. No tenant id is sent.
       parameters:
         - name: id
@@ -87,6 +95,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/CsrfHeader"
       responses:
         "200":
           description: Cancelled.
@@ -96,8 +105,11 @@ paths:
                 $ref: "#/components/schemas/CancelUploadResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /uploads/{id}/chunks/{index}:
     put:
       operationId: putUploadChunk
@@ -106,6 +118,7 @@ paths:
         - uploads
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: One chunk of 1 byte to 20 MB. Sending a chunk twice is safe. An index past chunkCount is 400. The tenant comes from the verified token. No tenant id is sent.
       parameters:
         - name: id
@@ -121,6 +134,7 @@ paths:
             type: integer
             minimum: 0
           description: Zero-based chunk number.
+        - $ref: "#/components/parameters/CsrfHeader"
       requestBody:
         required: true
         content:
@@ -139,8 +153,11 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /uploads/{id}/complete:
     post:
       operationId: completeUpload
@@ -149,6 +166,7 @@ paths:
         - uploads
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: Joins the chunks, checks the size and the sha256, creates the document and queues the scan job. A second call answers 409. The tenant comes from the verified token. No tenant id is sent.
       parameters:
         - name: id
@@ -157,6 +175,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/CsrfHeader"
       responses:
         "201":
           description: The document exists and the scan is queued.
@@ -168,10 +187,13 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /bids/{id}/documents:
     get:
       operationId: listBidDocuments
@@ -180,6 +202,7 @@ paths:
         - documents
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: "Each document carries what the Documents tab shows from ingest: liveUntil, restoredUntil and markingPage. The key check and amendment status live in intel (GET /bids/{id}/amendments). The tenant comes from the verified token. No tenant id is sent."
       parameters:
         - name: id
@@ -189,6 +212,8 @@ paths:
             type: string
             format: uuid
           description: The bid id.
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
           description: The documents.
@@ -198,6 +223,9 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Document"
+          headers:
+            X-Next-Cursor:
+              $ref: "#/components/headers/NextCursor"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -210,6 +238,7 @@ paths:
         - documents
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: The tenant comes from the verified token. No tenant id is sent.
       parameters:
         - name: id
@@ -237,6 +266,7 @@ paths:
         - documents
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: Returns the document the token names. An unknown or expired token is 404. The tenant comes from the verified token. No tenant id is sent.
       parameters:
         - name: token
@@ -263,6 +293,7 @@ paths:
         - documents
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: Page text stays after the file is deleted, so source quotes keep resolving. The tenant comes from the verified token. No tenant id is sent.
       parameters:
         - name: id
@@ -304,6 +335,7 @@ paths:
         - documents
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: Streams the viewer copy. 410 when the file was deleted, 409 while it is archived or being restored. The tenant comes from the verified token. No tenant id is sent.
       parameters:
         - name: id
@@ -340,6 +372,7 @@ paths:
         - documents
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: Moves archived to restore_requested. A second call while a restore is pending answers with the current status. 402 plan_required when the plan does not allow restores. 409 no_archive_copy or not archived. The tenant comes from the verified token. No tenant id is sent.
       parameters:
         - name: id
@@ -348,6 +381,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/CsrfHeader"
       responses:
         "200":
           description: The status after the request.
@@ -359,10 +393,13 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "402":
           $ref: "#/components/responses/PaymentRequired"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /documents/{id}/confirm-marking:
     post:
       operationId: confirmDocumentMarking
@@ -371,6 +408,7 @@ paths:
         - documents
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: A file the marking check blocked waits for this. It queues the classify job and writes an audit record. 409 when classified or not waiting. The tenant comes from the verified token. No tenant id is sent.
       parameters:
         - name: id
@@ -379,6 +417,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/CsrfHeader"
       responses:
         "200":
           description: Confirmed.
@@ -388,10 +427,13 @@ paths:
                 $ref: "#/components/schemas/Ok"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /documents/{id}:
     delete:
       operationId: deleteDocument
@@ -400,6 +442,7 @@ paths:
         - documents
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: Removes the stored file and keeps page text. Emits ingest.document.deleted, which intel uses to drop rows and to settle the credit. Deleting twice is fine. The tenant comes from the verified token. No tenant id is sent.
       parameters:
         - name: id
@@ -408,6 +451,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/CsrfHeader"
       responses:
         "200":
           description: Deleted.
@@ -417,8 +461,11 @@ paths:
                 $ref: "#/components/schemas/DeleteDocumentResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /bids/{id}/jobs:
     get:
       operationId: listIngestJobs
@@ -427,6 +474,7 @@ paths:
         - jobs
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: Scan, convert, extract and classify jobs, with queue position and a time estimate for unfinished ones. The tenant comes from the verified token. No tenant id is sent.
       parameters:
         - name: id
@@ -436,6 +484,8 @@ paths:
             type: string
             format: uuid
           description: The bid id.
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
           description: The jobs.
@@ -445,6 +495,9 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/IngestJob"
+          headers:
+            X-Next-Cursor:
+              $ref: "#/components/headers/NextCursor"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -457,6 +510,7 @@ paths:
         - jobs
       security:
         - bearerAuth: []
+        - sessionCookie: []
       description: Only a failed job retries, and only the newest step of its file (409 retry_superseded). A solicitation that lost its credit reserves one again (402 out_of_credits). The tenant comes from the verified token. No tenant id is sent.
       parameters:
         - name: id
@@ -465,6 +519,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/CsrfHeader"
       responses:
         "200":
           description: The new job.
@@ -476,10 +531,13 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "402":
           $ref: "#/components/responses/PaymentRequired"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+      x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
 components:
   securitySchemes:
     bearerAuth:
@@ -496,6 +554,37 @@ components:
       type: http
       scheme: bearer
       description: A service token. Internal routes only, on the private network.
+  parameters:
+    CsrfHeader:
+      name: X-Requested-With
+      in: header
+      required: false
+      schema:
+        type: string
+        const: e2e
+      description: Required with the value e2e on a write request that the cookie authenticates. Not needed with a bearer token.
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+      description: Page size.
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+      description: The X-Next-Cursor value of the previous page.
+  headers:
+    NextCursor:
+      description: Present when more rows remain. Send it as cursor to get the next page.
+      schema:
+        type: string
   responses:
     BadRequest:
       description: The request body or a parameter is not valid.
@@ -529,6 +618,12 @@ components:
             $ref: "#/components/schemas/Error"
     Conflict:
       description: The current state does not allow this.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ServiceUnavailable:
+      description: The feature is not configured on this deployment (billing_unavailable).
       content:
         application/json:
           schema:
