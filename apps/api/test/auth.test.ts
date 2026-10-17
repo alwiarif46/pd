@@ -377,6 +377,56 @@ describe.skipIf(Boolean(unavailable))('auth routes', () => {
     });
   });
 
+  describe('reset request caps', () => {
+    const resetsTo = (email: string) => sent.filter((item) => item.purpose === 'reset_password' && item.to === email).length;
+
+    it('caps requests per address at 5 a day, the same for a known and an unknown address', async () => {
+      const known = await signUp();
+      const unknown = uniqueEmail('nobody');
+      for (const email of [known.email, unknown]) {
+        resetSendCaps();
+        const statuses: number[] = [];
+        for (let i = 0; i < 6; i += 1) {
+          ip = `10.1.${randomInt(0, 255)}.${randomInt(1, 255)}`;
+          statuses.push((await call('POST', '/api/auth/reset', { email })).statusCode);
+        }
+        expect(statuses, email).toEqual([200, 200, 200, 200, 200, 429]);
+      }
+    });
+
+    it('caps requests per IP at 10 a day, shared with the other email sends', async () => {
+      const statuses: number[] = [];
+      for (let i = 0; i < 11; i += 1) {
+        statuses.push((await call('POST', '/api/auth/reset', { email: uniqueEmail('ipcap') })).statusCode);
+      }
+      expect(statuses.slice(0, 10).every((status) => status === 200)).toBe(true);
+      expect(statuses[10]).toBe(429);
+    });
+
+    it('sends at most 3 reset links an hour per account, silently', async () => {
+      const user = await signUp();
+      for (let i = 0; i < 4; i += 1) {
+        ip = `10.2.${randomInt(0, 255)}.${randomInt(1, 255)}`;
+        const response = await call('POST', '/api/auth/reset', { email: user.email });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual({ ok: true });
+      }
+      expect(resetsTo(user.email)).toBe(3);
+    });
+
+    it('holds the hourly limit under parallel requests', async () => {
+      const user = await signUp();
+      const results = await Promise.all(Array.from({ length: 5 }, (_, i) => app.inject({
+        method: 'POST',
+        url: '/api/auth/reset',
+        remoteAddress: `10.3.${i}.${randomInt(1, 255)}`,
+        payload: { email: user.email },
+      })));
+      expect(results.map((result) => result.statusCode)).toEqual([200, 200, 200, 200, 200]);
+      expect(resetsTo(user.email)).toBe(3);
+    });
+  });
+
   describe('password changes and racing logins', () => {
     it('a login that races a password reset does not leave a live session', async () => {
       const user = await verifiedUser();

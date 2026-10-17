@@ -29,6 +29,8 @@ const CODE_ATTEMPTS = 5;
 const CODES_PER_HOUR = 3;
 /** The same hourly limit for verification emails per account. */
 const EMAILS_PER_HOUR = 3;
+/** And for password reset links per account. */
+const RESETS_PER_HOUR = 3;
 
 /**
  * The resend routes answer no sooner than this, whether or not an account exists, so the
@@ -511,21 +513,43 @@ export async function registerAuth(app: FastifyInstance, options: AuthOptions = 
     if (!email) {
       return reply.code(400).send({ error: 'Enter your email address' });
     }
-    await atLeast(RESEND_MIN_MS, async () => {
+    // The caps per IP and per address count every request, known address or not, so a 429
+    // says nothing about the account; the hourly limit per account is silent.
+    const outcome = await atLeast(RESEND_MIN_MS, async () => {
+      const cap = recordEmailSend(request.ip, [`reset:${email}`]);
+      if (!cap.ok) {
+        return { code: 429, body: { error: cap.reason } } as const;
+      }
       const [user] = await db.select().from(schema.users).where(eq(schema.users.email, email));
       if (!user) {
-        return;
+        return { code: 200, body: { ok: true } } as const;
       }
       const token = newToken();
-      await db.insert(schema.authTokens).values({
-        userId: user.id,
-        purpose: 'reset_password',
-        tokenHash: hashToken(token),
-        expiresAt: new Date(Date.now() + HOUR),
+      const issued = await db.transaction(async (tx) => {
+        // Serialize reset requests for one account so the hourly count holds under parallel requests.
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`reset:${user.id}`}, 0))`);
+        const recent = await tx.select({ id: schema.authTokens.id }).from(schema.authTokens).where(and(
+          eq(schema.authTokens.userId, user.id),
+          eq(schema.authTokens.purpose, 'reset_password'),
+          gt(schema.authTokens.createdAt, new Date(Date.now() - HOUR)),
+        ));
+        if (recent.length >= RESETS_PER_HOUR) {
+          return false;
+        }
+        await tx.insert(schema.authTokens).values({
+          userId: user.id,
+          purpose: 'reset_password',
+          tokenHash: hashToken(token),
+          expiresAt: new Date(Date.now() + HOUR),
+        });
+        return true;
       });
-      void sendOutOfBand({ channel: 'email', purpose: 'reset_password', to: user.email, secret: token });
+      if (issued) {
+        void sendOutOfBand({ channel: 'email', purpose: 'reset_password', to: user.email, secret: token });
+      }
+      return { code: 200, body: { ok: true } } as const;
     });
-    return reply.send({ ok: true });
+    return reply.code(outcome.code).send(outcome.body);
   });
 
   app.get('/api/me', { preHandler: requireUser }, async (request) => {
