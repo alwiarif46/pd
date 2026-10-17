@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/evidence.item.staged",
+  "title": "evidence.item.staged",
+  "x-owner": "evidence",
+  "x-stream": "e2e.evidence.item.staged",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "evidence.item.staged"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of evidence.item.staged. Open for now. The chat that builds the owning service (evidence) tightens it."
+    }
+  }
+}

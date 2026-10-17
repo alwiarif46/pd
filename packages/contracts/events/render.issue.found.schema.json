@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/render.issue.found",
+  "title": "render.issue.found",
+  "x-owner": "render",
+  "x-stream": "e2e.render.issue.found",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "render.issue.found"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of render.issue.found. Open for now. The chat that builds the owning service (render) tightens it."
+    }
+  }
+}

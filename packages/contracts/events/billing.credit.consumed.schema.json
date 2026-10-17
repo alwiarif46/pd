@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/billing.credit.consumed",
+  "title": "billing.credit.consumed",
+  "x-owner": "billing",
+  "x-stream": "e2e.billing.credit.consumed",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "billing.credit.consumed"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of billing.credit.consumed. Open for now. The chat that builds the owning service (billing) tightens it."
+    }
+  }
+}

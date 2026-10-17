@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/ingest.document.ingested",
+  "title": "ingest.document.ingested",
+  "x-owner": "ingest",
+  "x-stream": "e2e.ingest.document.ingested",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "ingest.document.ingested"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of ingest.document.ingested. Open for now. The chat that builds the owning service (ingest) tightens it."
+    }
+  }
+}

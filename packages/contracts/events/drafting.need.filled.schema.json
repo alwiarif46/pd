@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/drafting.need.filled",
+  "title": "drafting.need.filled",
+  "x-owner": "drafting",
+  "x-stream": "e2e.drafting.need.filled",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "drafting.need.filled"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of drafting.need.filled. Open for now. The chat that builds the owning service (drafting) tightens it."
+    }
+  }
+}

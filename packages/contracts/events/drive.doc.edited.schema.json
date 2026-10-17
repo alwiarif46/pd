@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/drive.doc.edited",
+  "title": "drive.doc.edited",
+  "x-owner": "drive",
+  "x-stream": "e2e.drive.doc.edited",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "drive.doc.edited"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of drive.doc.edited. Open for now. The chat that builds the owning service (drive) tightens it."
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/comms.attachment.received",
+  "title": "comms.attachment.received",
+  "x-owner": "comms",
+  "x-stream": "e2e.comms.attachment.received",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "comms.attachment.received"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of comms.attachment.received. Open for now. The chat that builds the owning service (comms) tightens it."
+    }
+  }
+}

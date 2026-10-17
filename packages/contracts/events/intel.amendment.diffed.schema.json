@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/intel.amendment.diffed",
+  "title": "intel.amendment.diffed",
+  "x-owner": "intel",
+  "x-stream": "e2e.intel.amendment.diffed",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "intel.amendment.diffed"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of intel.amendment.diffed. Open for now. The chat that builds the owning service (intel) tightens it."
+    }
+  }
+}

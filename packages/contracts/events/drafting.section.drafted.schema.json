@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/drafting.section.drafted",
+  "title": "drafting.section.drafted",
+  "x-owner": "drafting",
+  "x-stream": "e2e.drafting.section.drafted",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "drafting.section.drafted"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of drafting.section.drafted. Open for now. The chat that builds the owning service (drafting) tightens it."
+    }
+  }
+}

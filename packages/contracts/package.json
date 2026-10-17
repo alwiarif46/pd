@@ -1,0 +1,34 @@
+{
+  "name": "@pd/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint . --max-warnings 0",
+    "generate": "tsx scripts/generate.ts",
+    "check": "tsx scripts/check.ts",
+    "clean": "rm -rf dist"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "ajv": "8",
+    "ajv-formats": "3",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@readme/openapi-parser": "^9.1.0",
+    "@types/node": "22",
+    "json-schema-to-typescript": "^16.0.0",
+    "openapi-typescript": "^7.13.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "2.1.9"
+  }
+}

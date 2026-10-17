@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/identity.user.removed",
+  "title": "identity.user.removed",
+  "x-owner": "identity",
+  "x-stream": "e2e.identity.user.removed",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "identity.user.removed"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of identity.user.removed. Open for now. The chat that builds the owning service (identity) tightens it."
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/evidence.repo.item_added",
+  "title": "evidence.repo.item_added",
+  "x-owner": "evidence",
+  "x-stream": "e2e.evidence.repo.item_added",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "evidence.repo.item_added"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of evidence.repo.item_added. Open for now. The chat that builds the owning service (evidence) tightens it."
+    }
+  }
+}
