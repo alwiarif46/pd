@@ -312,6 +312,7 @@ type Queryable = Pick<PoolClient, 'query'>;
 export interface AssertRlsOptions {
   /** A pool or a connection that logs in as the app role. A superuser or BYPASSRLS role skips RLS and will fail the check. */
   pool?: Pick<Pool, 'connect'>;
+  /** One connection (a `PoolClient` or `pg.Client`). A `pg.Pool` given here is detected and used as `pool`. */
   client?: Queryable;
   /** Table name, with an optional schema, such as `bids` or `identity.outbox`. */
   table: string;
@@ -398,9 +399,13 @@ export async function assertRlsIsolation(opts: AssertRlsOptions): Promise<RlsIso
     });
   };
 
-  if (opts.client) return run(opts.client);
-  if (!opts.pool) throw new Error('assertRlsIsolation needs a pool or a client');
-  const client = await opts.pool.connect();
+  // `client` must be one connection: BEGIN, the statements and ROLLBACK have to share it. A pool passed
+  // there by mistake (it has `query` too) would spread them over connections, so check one out instead.
+  const given = opts.client as (Queryable & { totalCount?: unknown; connect?: unknown }) | undefined;
+  if (given && !(typeof given.totalCount === 'number' && typeof given.connect === 'function')) return run(given);
+  const pool = opts.pool ?? (given as unknown as Pick<Pool, 'connect'> | undefined);
+  if (!pool) throw new Error('assertRlsIsolation needs a pool or a client');
+  const client = await pool.connect();
   try {
     return await run(client);
   } finally {

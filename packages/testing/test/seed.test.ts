@@ -155,6 +155,52 @@ describe.skipIf(SKIP_DB)('pnpm seed against a scratch database', () => {
     }
   });
 
+  it('assertRlsIsolation given a pool as `client` still runs on one connection and changes nothing', async () => {
+    const idsA = listSampleRfpFiles().map((f) => sampleDocumentId(TENANT_A.id, f.relPath));
+    // A superuser skips RLS, so the check must throw; a pool that spread BEGIN, DELETE and ROLLBACK
+    // over several connections would have autocommitted the DELETE first.
+    const pool = new pg.Pool({ connectionString: db().adminUrl, max: 3, idleTimeoutMillis: 1 });
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        await expect(
+          assertRlsIsolation({ client: pool, table: 'documents', tenantColumn: 'org_id', idsA, tenantA: TENANT_A.id, tenantB: TENANT_B.id }),
+        ).rejects.toBeInstanceOf(RlsLeakError);
+      }
+      expect((await pool.query('select count(*)::int as n from documents')).rows[0].n).toBe(idsA.length);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('assertRlsIsolation does not spread its transaction over a pool that rotates connections', async () => {
+    const idsA = listSampleRfpFiles().map((f) => sampleDocumentId(TENANT_A.id, f.relPath));
+    const real = new pg.Pool({ connectionString: db().adminUrl, max: 2 });
+    let turn = 0;
+    // Looks like a pool (totalCount, connect) and sends each query to the next connection.
+    const rotating = {
+      totalCount: 0,
+      query: async (...args: unknown[]) => {
+        const c = await real.connect();
+        try {
+          turn += 1;
+          return await (c.query as (...a: unknown[]) => Promise<unknown>)(...args);
+        } finally {
+          c.release();
+        }
+      },
+      connect: () => real.connect(),
+    };
+    try {
+      await expect(
+        assertRlsIsolation({ client: rotating as never, table: 'documents', tenantColumn: 'org_id', idsA, tenantA: TENANT_A.id, tenantB: TENANT_B.id }),
+      ).rejects.toBeInstanceOf(RlsLeakError);
+      expect(turn).toBe(0); // everything went through connect(), one connection
+      expect((await real.query('select count(*)::int as n from documents')).rows[0].n).toBe(idsA.length);
+    } finally {
+      await real.end();
+    }
+  });
+
   describe('as the app role', () => {
     const appUrl = () => db().appUrl;
 
