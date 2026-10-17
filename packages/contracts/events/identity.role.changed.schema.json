@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://e2e.local/contracts/events/identity.role.changed.schema.json",
+  "title": "identity.role.changed",
+  "type": "object",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "payload": {
+      "type": "object",
+      "required": ["user_id","role"],
+      "properties": { "user_id": { "type": "string", "format": "uuid" }, "role": { "type": "string" } },
+      "additionalProperties": false
+    }
+  }
+}

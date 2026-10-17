@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://e2e.local/contracts/events/identity.user.removed.schema.json",
+  "title": "identity.user.removed",
+  "type": "object",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "payload": {
+      "type": "object",
+      "required": ["user_id"],
+      "properties": { "user_id": { "type": "string", "format": "uuid" } },
+      "additionalProperties": false
+    }
+  }
+}

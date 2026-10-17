@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://e2e.local/contracts/events/envelope.schema.json",
+  "title": "Event envelope",
+  "description": "Fields every event carries (09 s2, event rules). Each event schema extends this envelope.",
+  "type": "object",
+  "required": ["event_id", "tenant_id", "schema_version", "occurred_at", "payload"],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "tenant_id": { "type": "string", "format": "uuid" },
+    "schema_version": { "type": "integer", "minimum": 1 },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object" }
+  }
+}

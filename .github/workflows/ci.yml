@@ -47,6 +47,8 @@ jobs:
       - run: pnpm install
       - run: pnpm lint
       - run: pnpm --filter @pd/web v0:check
+      - run: pnpm --filter @pd/contracts contracts:check
+      - run: pnpm --filter @pd/contracts --filter @pd/stage-interface test
 
   build:
     runs-on: ubuntu-latest

@@ -18,6 +18,7 @@
     "test": "turbo run test",
     "test:infra": "bash infra/tests/run-tests.sh && bash ops/tests/run-tests.sh",
     "lint": "turbo run lint",
+    "contracts:check": "pnpm --filter @pd/contracts contracts:check",
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean && rm -rf node_modules",
     "db:generate": "drizzle-kit generate",

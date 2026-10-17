@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://e2e.local/contracts/events/identity.tenant.created.schema.json",
+  "title": "identity.tenant.created",
+  "type": "object",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "payload": {
+      "type": "object",
+      "required": ["name"],
+      "properties": { "name": { "type": "string" } },
+      "additionalProperties": false
+    }
+  }
+}
