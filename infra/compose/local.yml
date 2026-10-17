@@ -164,9 +164,9 @@ services:
     restart: unless-stopped
     volumes:
       - clamav_data:/var/lib/clamav
-      # No clamd.conf mount on purpose. The image ships a config with TCP 3310 and the unix socket that its own startup
-      # and healthcheck wait for. Production's infra/clamav/clamd.conf has no LocalSocket: with it, clamd never became
-      # healthy in CI. See docs/build/questions.md (Chat 1) for the production follow-up.
+      # Production's config, so CI proves it. It sets LocalSocket (the image's startup waits for it), binds TCP on all
+      # addresses (its healthcheck pings localhost:3310), and logs to the image's log file. See docs/build/questions.md (Chat 1).
+      - ../clamav/clamd.conf:/etc/clamav/clamd.conf:ro
     ports:
       - "127.0.0.1:${CLAMAV_PORT:-3310}:3310"
     healthcheck:
