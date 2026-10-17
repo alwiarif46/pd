@@ -46,7 +46,7 @@ function ep(path: string, ...methods: string[]): Endpoint[] {
 
 describe('endpointsOf', () => {
   it('reads the OpenAPI file of a service and marks the public endpoints', () => {
-    const e = endpointsOf('identity');
+    const e = endpointsOf('billing');
     expect(e).toEqual([{ method: 'GET', path: '/healthz', params: [], public: true }]);
     expect(PUBLIC_ENDPOINTS).toEqual(['GET /healthz']);
   });
@@ -129,7 +129,7 @@ describe('runCrossTenant with a fake service', () => {
   });
 
   it('says there is nothing to check when the service has only /healthz', async () => {
-    const report = await runCrossTenant({ serviceId: 'identity', inject: async () => { throw new Error('no request expected'); }, ids: {}, headersFor });
+    const report = await runCrossTenant({ serviceId: 'billing', inject: async () => { throw new Error('no request expected'); }, ids: {}, headersFor });
     expect(report.summary).toBe('no non-public endpoints; nothing to check');
     expect(report.checked).toEqual([]);
   });
