@@ -77,7 +77,7 @@ Notes: `signal` (amber) is Atrium's own addition, used for the Q&A card. `sideba
 | Base layer | `* { border-border outline-ring/50 }`, `body { bg-background text-foreground font-sans }`. Imports: `tailwindcss`, `tw-animate-css`, `shadcn/tailwind.css` |
 | Theme switch | Atrium toggles `.dark` through React state only. No system preference follow, no storage. Build work for the web app (see gaps) |
 
-### 3.3 PD's old tokens (`apps/web/src/styles/tokens.css`)
+### 3.3 PD's old tokens (`services/gateway/web/src/styles/tokens.css`)
 
 Atrium's tokens replace PD's shadcn mapping. PD's domain tokens stay.
 
