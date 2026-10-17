@@ -60,9 +60,9 @@ function parseSkillMarkdown(content: string, skillName: string): Skill {
   let status = 'draft';
   for (const line of lines) {
     if (line.startsWith('**Version:**')) {
-      version = line.split(':').slice(1).join(':').trim();
+      version = line.slice('**Version:**'.length).trim();
     } else if (line.startsWith('**Status:**')) {
-      status = line.split(':').slice(1).join(':').trim();
+      status = line.slice('**Status:**'.length).trim();
     }
   }
   return {
