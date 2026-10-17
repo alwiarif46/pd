@@ -22,7 +22,7 @@ No Docker (a cloud session, for example)? Use the native stack: `pnpm dev:stack 
 | `zitadel` | `ghcr.io/zitadel/zitadel:v4.19.5` | 8080 | OIDC issuer. `start-from-init`, external domain `localhost`, plain HTTP. |
 | `s3` | `chrislusf/seaweedfs:4.48` | 8333 | S3 API (path-style). |
 | `s3-init` | same | none | One-shot: creates `S3_BUCKET`, then exits. |
-| `clamav` | `clamav/clamav:1.5.4` | 3310 | clamd with the image's own config (TCP 3310 and its unix socket). Production's `infra/clamav/clamd.conf` is not mounted; see questions.md. |
+| `clamav` | `clamav/clamav:1.5.4` | 3310 | clamd with production's `infra/clamav/clamd.conf` mounted (TCP 3310, unix socket `/tmp/clamd.sock`, log file `/var/log/clamav/clamd.log`). |
 | `sandbox` | built from `services/ingest/sandbox/Dockerfile` | none | PD's file sandbox image. Idles so the image, its tools and its hardening are checked. |
 
 All ports bind to 127.0.0.1. Every service has a healthcheck, and `depends_on` waits on `service_healthy`. Data lives in named volumes (`postgres_data`, `redis_data`, `s3_data`, `clamav_data`, `zitadel_bootstrap`), not on the host.
