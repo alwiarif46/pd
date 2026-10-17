@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { SERVICES } from '@pd/contracts';
 import { CrossTenantError, endpointsOf, runCrossTenant, type Endpoint, type Inject } from '../src/cross-tenant';
+import type { TenantFixture } from '../src/fixtures';
 import { repoRoot } from '../src/paths';
 
 /**
@@ -12,8 +13,8 @@ import { repoRoot } from '../src/paths';
  */
 const IDS_BY_SERVICE: Record<string, Record<string, string>> = {};
 
-/** Skeleton credentials: none exist yet, so tenant B sends a placeholder bearer value. */
-const headersFor = () => ({ authorization: 'Bearer tenant-b-placeholder' });
+/** Skeleton credentials: none exist yet. A placeholder header carries the tenant id, so A and B differ. */
+const headersFor = (tenant: TenantFixture) => ({ 'x-test-tenant': tenant.id });
 
 async function loadApp(folder: string): Promise<FastifyInstance> {
   const file = join(repoRoot(), folder, 'src', 'app.ts');
@@ -75,7 +76,8 @@ describe.each(tsSkeletons.map((s) => [s.id, s.folder] as const))('%s skeleton', 
       // The skeleton has no such route, so it answers 404 to everyone, including a caller with no credentials.
       const gained: Endpoint[] = [{ method: 'GET', path: '/things/{thing_id}', params: ['thing_id'], public: false }];
       const err = await runCrossTenant({ serviceId: id, endpoints: gained, inject: injectOn(app), ids: { thing_id: 'a-id' }, headersFor }).catch((e: unknown) => e);
-      expect((err as CrossTenantError).report.failures.map((f) => f.kind)).toEqual(['anonymous-leak']);
+      // Fastify's default 404 body echoes the url, so body-leak joins the two kinds under test.
+      expect((err as CrossTenantError).report.failures.map((f) => f.kind)).toEqual(expect.arrayContaining(['anonymous-leak', 'broken-control']));
     } finally {
       await app.close();
     }
