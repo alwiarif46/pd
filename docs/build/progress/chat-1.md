@@ -27,7 +27,8 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 | 1 Tooling | e2e/c1-01-tooling | building | Agents, hook script, .mcp.json, Playwright dep, CLAUDE.md done. Hook entry in settings.json denied by classifier (owner step). PR #49 open; Fable review done (no majors); minors fixed |
 | 2 Design source | e2e/c1-02-design | merged (#50) | Opus review: 1 major (legacy var collision) fixed and browser-verified |
 | 3 to 6 | - | already merged | none |
-| 7 Restructure | e2e/c1-07-restructure | building | Folder moves only; code split is chat 2 |
+| 7 Restructure | e2e/c1-07-restructure | merged (#51, by owner) | Fable: no majors. Minor fixes follow in 7b |
+| 7b Review fixes | e2e/c1-07b-restructure-fixes | in review | turbo inputs, CODEOWNERS, AGENTS.md, CLAUDE.md accuracy |
 | 8 Contracts | e2e/c1-08-contracts | planned | |
 | 9 Skeletons | e2e/c1-09-skeletons | planned | |
 | 10 Testing | e2e/c1-10-testing | planned | |
