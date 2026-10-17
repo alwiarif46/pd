@@ -4,7 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Workspace } from '@/screens/Workspace';
 import { jsonResponse } from '@/test/fetch';
-import { bidDto, docDto, orgPayload } from '@/test/fixtures';
+import { bidDto, docDto, orgPayload, organizationDto } from '@/test/fixtures';
 import type { TabsStatus } from '@/api';
 
 function stubApi() {
@@ -23,9 +23,9 @@ function workspace(refreshKey: string) {
     <Workspace
       embedded
       bidId="bid-1"
-      tab="compliance"
+      tab="outline"
       bids={[]}
-      org={orgPayload()}
+      org={orgPayload({ org: organizationDto({ plan: 'growth' }) })}
       onTab={() => undefined}
       onSwitch={() => undefined}
       refreshKey={refreshKey}

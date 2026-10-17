@@ -35,6 +35,11 @@ export interface RowDetailContainerProps<T extends DetailTable> {
   onJumpToRow: (id: string) => void;
   /** Closes the slider (clears `?row=`). Focus has already been returned to the row (focus-return.ts). */
   onClose: () => void;
+  /**
+   * Finds the focusable element of a row (its ID button) in the tab, for a tab whose rows carry no `data-row`,
+   * `data-row-id` or `data-activity`. Used when the opener is gone (the tab reloaded) or the slider jumped rows.
+   */
+  findRowElement?: (rowId: string) => HTMLElement | null;
   /** Test seam; defaults to the typed client. */
   api?: RowDetailApi;
 }
@@ -62,6 +67,7 @@ export function RowDetailContainer<T extends DetailTable>({
   onSaved,
   onJumpToRow,
   onClose,
+  findRowElement,
   api = rowDetailApi,
 }: RowDetailContainerProps<T>) {
   const key = keyOf(bidId, table, rowId);
@@ -74,8 +80,10 @@ export function RowDetailContainer<T extends DetailTable>({
   const savingRef = useRef(new Set<string>());
   // The latest onClose, for a load that fails after a re-render; written only in an effect.
   const closeRef = useRef(onClose);
+  const findRef = useRef(findRowElement);
   useEffect(() => {
     closeRef.current = onClose;
+    findRef.current = findRowElement;
   });
   /**
    * The element that had focus when the slider opened. Read in a layout effect on mount, before v0's RowDetail
@@ -102,7 +110,7 @@ export function RowDetailContainer<T extends DetailTable>({
         toast.error(messageOf(error));
         // A failed first load closes the slider; a failed reload keeps the row shown.
         if (shownRef.current !== loadKey) {
-          returnTarget(openerRef.current, rowId)?.focus();
+          returnTarget(openerRef.current, rowId, findRef.current)?.focus();
           closeRef.current();
         }
       },
@@ -154,7 +162,7 @@ export function RowDetailContainer<T extends DetailTable>({
   };
 
   const close = () => {
-    returnTarget(openerRef.current, rowId)?.focus();
+    returnTarget(openerRef.current, rowId, findRowElement)?.focus();
     onClose();
   };
 

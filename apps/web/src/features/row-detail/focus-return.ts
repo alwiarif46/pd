@@ -28,10 +28,15 @@ export function currentOpener(rowId: string): Opener | null {
 /**
  * Where focus goes when the slider closes (09 s5.17: "the container returns it to the row"): the opener, when
  * it is still on the page and the slider still shows the row it was opened for; otherwise the shown row's
- * element (after a jump to another row, or when the opener is gone); otherwise the opener if it is still there.
+ * element (after a jump to another row, or when the opener is gone), found by the tab's `findRowElement` when it
+ * supplies one, else by the data attributes; otherwise the opener if it is still there.
  */
-export function returnTarget(opener: Opener | null, rowId: string): HTMLElement | null {
+export function returnTarget(
+  opener: Opener | null,
+  rowId: string,
+  findRowElement?: (rowId: string) => HTMLElement | null,
+): HTMLElement | null {
   const live = opener?.element.isConnected ? opener.element : null;
   if (live && opener?.rowId === rowId) return live;
-  return rowElement(rowId) ?? live;
+  return findRowElement?.(rowId) ?? rowElement(rowId) ?? live;
 }
