@@ -100,6 +100,20 @@ Calls to `withStubSkills(fn)` must not overlap: it sets one process-wide environ
 
 `STUB_SKILLS_DIR` and `STUB_SKILL_NAMES` are exported. `@pd/stage-interface` keeps its own fixtures for its own tests.
 
+## Test doubles for the native stack (`E2E_STACK=native`)
+
+`src/doubles/` holds three small servers behind the protocols of the real things. They exist so the stack can run without Docker (BUILD-PLAN s8, stub rule). `pnpm dev:stack start` runs them with real Postgres and Redis (`infra/local/native-stack.sh`). Production code never imports them: `test/no-prod-imports.test.ts` and an ESLint rule fail if it does.
+
+| Double | Stands in for | What it speaks |
+|---|---|---|
+| `startMockOidc()` | Zitadel | Discovery, `/jwks`, `/authorize` (logs in at once as tenant A's or B's admin: `?user=a` or `?user=b`, default `a`), `/token` (authorization code with PKCE, and refresh), `/userinfo`. RS256 tokens signed with a key made at start; the tenant id is in the `urn:zitadel:iss:org:id` claim. |
+| `startMockS3()` | The S3 store (SeaweedFS in Compose) | Path-style CreateBucket, PutObject, GetObject (Range), HeadObject, DeleteObject, ListObjectsV2 (prefix, delimiter, paging). Needs an `Authorization` header; the signature is not checked. |
+| `startMockClamd()` | ClamAV | `zPING`, `zVERSION`, `zINSTREAM` (and the `n` forms). Replies `stream: OK`, or `stream: Eicar-Test-Signature FOUND` when the stream holds the EICAR string. |
+
+`stackMode()` reads `E2E_STACK` (`compose` by default, or `native`). Each double has a unit test that uses a real protocol client.
+
+`test/stack-migrate.test.ts` runs `pnpm migrate`'s command against a scratch database and asserts the 09 s9.3 order. `test/stack-env.test.ts` checks `infra/compose/stack.env.example` against the table in 09 s9.2.
+
 ## Tests
 
 `pnpm --filter @pd/testing test`. The database tests need `TEST_DATABASE_URL` (a superuser on a throwaway cluster). Each file makes a scratch database, migrates and seeds it (`--migrate`), and drops it. They create `pd_app` and `pd_system` through PD's migration and drop afterward only the ones they created (a role that was already there is left alone), holding Postgres advisory lock 7450902 so runs on one cluster do not overlap (the gateway API tests and service-kit use the same key).
