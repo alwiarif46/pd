@@ -64,7 +64,8 @@ export default tseslint.config(
   {
     // Production code never imports the test package or its doubles (BUILD-PLAN s8, stub rule).
     // packages/testing/test/no-prod-imports.test.ts checks the same thing without ESLint.
-    files: ['services/*/src/**/*.ts', 'services/gateway/web/src/**/*.{ts,tsx}', 'services/ingest/sandbox/src/**/*.ts'],
+    files: ['services/*/src/**/*.ts', 'services/gateway/web/src/**/*.{ts,tsx}', 'services/ingest/sandbox/src/**/*.ts', 'packages/*/src/**/*.ts', 'infra/sandbox-runner/src/**/*.ts'],
+    ignores: ['packages/testing/**'],
     rules: {
       'no-restricted-imports': ['error', {
         patterns: [{ group: ['@pd/testing', '@pd/testing/*'], message: '@pd/testing is for tests and local runs; production code must not import it.' }],
