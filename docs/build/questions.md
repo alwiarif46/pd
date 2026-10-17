@@ -18,6 +18,13 @@ One heading per chat. Each entry: question, options, choice made, why. Design ga
 - **No version bump enforcement in contracts:check.** contracts:check does not enforce a version bump; PR 12 adds a CI step comparing against the merge base. Chose: defer to PR 12 because it needs git history in CI.
 - **Major bump needs the previous-major file.** Options: enforce it in contracts:check now, or in PR 12. Chose PR 12: its version-bump check must also require the previous-major file `<event>.v<old>.schema.json` on a major bump.
 
+- **Outbox relay needs to read across tenants (PR 9).** Each `outbox` has FORCE ROW LEVEL SECURITY keyed on `app.tenant_id`, so a service role sees one tenant at a time. A relay that publishes with `XADD` must see every tenant's unpublished rows. Option A: a separate relay role with BYPASSRLS, granted only SELECT and UPDATE (published_at) on the outbox tables. Option B: the relay loops per tenant and sets `app.tenant_id` for each, which needs a tenant list from the identity service and scales badly. Chose A for chats 2 and 3 to build: one query per schema, no tenant list, and the blast radius is the outbox tables only. Not built in PR 9; each service README carries a TODO.
+- **Gateway `skeleton` flag stays false (PR 9).** The gateway exposes PD's real routes, which are not in `openapi/gateway.yaml` yet, so `contracts:check` would fail on drift. PR 9 added `GET /healthz` (standard shape) next to PD's `/health` and left the flag false.
+- **Ports for the Python services (PR 9).** The brief said 4101 to 4112 for the new services, but there are 14 of them (12 TypeScript, 2 Python). Chose 4101 to 4114 in `services.json` order, gateway excluded (render 4109, portal 4112). Table in `packages/service-kit/src/config.ts`.
+- **Service role may only read its own `schema_migrations` (PR 9).** The brief grants DML on "its tables". Chose SELECT only on the ledger so a service cannot rewrite migration history; DML on every other table, including future ones through default privileges.
+- **`REVOKE ALL ON SCHEMA public FROM PUBLIC` (PR 9).** Done as the brief says. PD's own migration `0001_tenant_rls.sql` already does this and grants `pd_app` explicitly, so PD keeps working.
+- **Roles are cluster-wide (PR 9).** The DB tests create a throwaway database but the `<schema>_svc` roles live in the cluster, so the tests hold an advisory lock on the cluster and reset the role passwords each run. Two runs on one cluster wait for each other.
+
 ## Chat 2
 
 ## Chat 3
