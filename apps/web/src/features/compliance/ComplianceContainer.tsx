@@ -72,18 +72,21 @@ export function ComplianceContainer({ bidId, selectedRowId, api = complianceApi,
   useEffect(() => {
     const abort = new AbortController();
     const opts = { signal: abort.signal };
-    Promise.all([api.getTab(bidId, 'compliance', opts), api.listCheckThese(bidId, opts)]).then(
-      ([payload, checkThese]) => {
-        if (abort.signal.aborted) return;
-        shownRef.current = bidId;
-        setLoad({ bidId, state: { kind: 'ready', rows: payload.rows, checkThese } });
-      },
-      (error: unknown) => {
-        if (abort.signal.aborted || isAbortError(error)) return;
-        if (shownRef.current === bidId) toast.error(messageOf(error));
-        else setLoad({ bidId, state: { kind: 'error', message: messageOf(error) } });
-      },
-    );
+    // The rows decide the tab; the pre-scan list is an extra: its failure leaves the list empty, with a toast.
+    void Promise.allSettled([api.getTab(bidId, 'compliance', opts), api.listCheckThese(bidId, opts)]).then(([tab, check]) => {
+      if (abort.signal.aborted) return;
+      if (tab.status === 'rejected') {
+        if (isAbortError(tab.reason)) return;
+        if (shownRef.current === bidId) toast.error(messageOf(tab.reason));
+        else setLoad({ bidId, state: { kind: 'error', message: messageOf(tab.reason) } });
+        return;
+      }
+      let checkThese: CheckTheseDto[] = [];
+      if (check.status === 'fulfilled') checkThese = check.value;
+      else if (!isAbortError(check.reason)) toast.error(messageOf(check.reason));
+      shownRef.current = bidId;
+      setLoad({ bidId, state: { kind: 'ready', rows: tab.value.rows, checkThese } });
+    });
     return () => abort.abort();
   }, [api, bidId, version, jobKey]);
 
@@ -144,13 +147,30 @@ export function ComplianceContainer({ bidId, selectedRowId, api = complianceApi,
     else exporter.xlsx(name, sheet);
   };
 
+  // v0's rows carry no data-row, and requirement IDs repeat (a split names its new row `${reqId}-b`, and users
+  // type any ID), so a row is found by its place among the shown rows, which are the table's body rows in order.
+  const shownIds = useMemo(() => shown.map((r) => r.id), [shown]);
+  const shownIdsRef = useRef(shownIds);
+  useEffect(() => {
+    shownIdsRef.current = shownIds;
+  });
+  const matrixRegion = () => wrapRef.current?.querySelector<HTMLElement>('[role="region"][aria-label="Compliance matrix"]') ?? null;
+  /** The ID button of the shown row at `index`: the row's first button that is not its select checkbox. */
+  const idButtonAt = (index: number): HTMLElement | null => {
+    const tr = matrixRegion()?.querySelectorAll('tbody tr')[index];
+    return tr?.querySelector<HTMLElement>('button:not([role="checkbox"])') ?? null;
+  };
   // The ID button of a row, for returning focus when the slider closes and the opener is gone (a reload
-  // remounted it) or the slider moved to another row: v0's rows carry no data-row.
+  // remounted it) or the slider moved to another row. A row the filters hide gives the table region.
   const findRowElement = (rowId: string): HTMLElement | null => {
-    const reqId = dtos.find((d) => d.id === rowId)?.reqId;
-    if (!reqId || !wrapRef.current) return null;
-    const buttons = wrapRef.current.querySelectorAll<HTMLElement>('tr button');
-    return Array.from(buttons).find((b) => b.textContent?.trim() === reqId) ?? null;
+    const index = shownIdsRef.current.indexOf(rowId);
+    return (index >= 0 ? idButtonAt(index) : null) ?? matrixRegion();
+  };
+  // After the shown row is deleted: the next row's ID button, else the previous one, else the table region.
+  const focusNeighbour = (rowId: string) => {
+    const index = shownIdsRef.current.indexOf(rowId);
+    if (index < 0) return;
+    (idButtonAt(index + 1) ?? (index > 0 ? idButtonAt(index - 1) : null) ?? matrixRegion())?.focus();
   };
 
   let body;
@@ -198,7 +218,10 @@ export function ComplianceContainer({ bidId, selectedRowId, api = complianceApi,
           mutate(
             () => api.deleteComplianceRow(bidId, id),
             () => {
-              if (selectedRowId === id) shell.openRow(null);
+              if (selectedRowId === id) {
+                focusNeighbour(id);
+                shell.openRow(null);
+              }
               afterSave();
             },
           )
@@ -234,6 +257,7 @@ export function ComplianceContainer({ bidId, selectedRowId, api = complianceApi,
           onJumpToRow={(id) => shell.openRow(id)}
           onClose={() => shell.openRow(null)}
           findRowElement={findRowElement}
+          reloadKey={`${version}/${jobKey}`}
           api={rowApi}
         />
       )}

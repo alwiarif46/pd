@@ -158,6 +158,14 @@ async function pick(user: ReturnType<typeof userEvent.setup>, label: string, opt
   await user.click(await screen.findByRole('option', { name: option }));
 }
 
+/** Swaps the table for the check these list and back: every row remounts, as after a bid switch. */
+async function remountRows(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('checkbox', { name: 'Check these' }));
+  await screen.findByRole('button', { name: 'Add as requirement' });
+  await user.click(screen.getByRole('checkbox', { name: 'Check these' }));
+  await ready();
+}
+
 function withHost() {
   const host = document.createElement('div');
   document.body.appendChild(host);
@@ -201,6 +209,25 @@ describe('ComplianceContainer: loading', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not load.'));
     expect(screen.getByRole('region', { name: 'Compliance matrix' })).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows the rows, an empty check these list and a toast when only the check these call fails', async () => {
+    const api = mockApi(ROWS, { listCheckThese: vi.fn(async () => Promise.reject(new ApiError('Pre-scan list unavailable.', 500))) });
+    const { user } = renderContainer({ api });
+    await ready();
+    await showing(5, 5);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Pre-scan list unavailable.'));
+    expect(screen.queryByRole('alert')).toBeNull();
+    await user.click(screen.getByRole('checkbox', { name: 'Check these' }));
+    expect(screen.queryByRole('button', { name: 'Add as requirement' })).toBeNull();
+  });
+
+  it('still shows the error state when the rows fail to load, even if check these loads', async () => {
+    const api = mockApi(ROWS, { getTab: vi.fn(async () => Promise.reject(new ApiError('Could not load rows.', 500))) as unknown as ComplianceApi['getTab'] });
+    renderContainer({ api });
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.getByText('Could not load rows.')).toBeTruthy();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('reloads when a job changes', async () => {
@@ -577,7 +604,8 @@ describe('ComplianceContainer: row detail', () => {
     const rows = rowApi();
     const { api, user, shell, select } = renderContainer({ rowApi: rows, shell: { detailHost: host } });
     await ready();
-    await user.click(idButton('L.4.2'));
+    const opener = idButton('L.4.2');
+    await user.click(opener);
     expect(shell.openRow).toHaveBeenCalledWith('req-1');
     select('req-1');
     await within(host).findByRole('heading', { name: 'L.4.2', level: 2 });
@@ -587,8 +615,108 @@ describe('ComplianceContainer: row detail', () => {
     expect(rows.updateRow).toHaveBeenCalledWith('bid-1', 'compliance_rows', 'req-1', { owner: 'Pat' });
     await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
     expect(shell.refresh).toHaveBeenCalled();
+    // A reload keeps the rows mounted, so remount them (the check these list swaps the table out and back):
+    // the opener is gone and the finder has to find the row.
+    await remountRows(user);
+    expect(opener.isConnected).toBe(false);
     await user.click(within(host).getByRole('button', { name: 'Close row detail' }));
     expect(document.activeElement).toBe(idButton('L.4.2'));
+    expect(document.activeElement).not.toBe(opener);
+    host.remove();
+  });
+
+  it('returns focus to the right ID button when two rows share a requirement ID', async () => {
+    const host = withHost();
+    const dupA = complianceRowDto({ id: 'dup-1', reqId: 'D.1', requirementText: 'First.', sectionRef: 'Section D', instrRef: null });
+    const dupB = complianceRowDto({ id: 'dup-2', reqId: 'D.1', requirementText: 'Second.', sectionRef: 'Section D', instrRef: null });
+    const rows = [dupA, dupB];
+    const { api, user, select } = renderContainer({ api: mockApi(rows), rowApi: rowApi(rows), shell: { detailHost: host } });
+    await ready();
+    const buttons = screen.getAllByRole('button', { name: 'D.1' });
+    expect(buttons).toHaveLength(2);
+    await user.click(buttons[1]!);
+    select('dup-2');
+    await within(host).findByRole('heading', { name: 'D.1', level: 2 });
+    await user.click(within(host).getByRole('button', { name: 'Edit' }));
+    await user.type(within(host).getByLabelText('Owner'), 'Pat');
+    await user.click(within(host).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(api.getTab).toHaveBeenCalledTimes(2));
+    await remountRows(user);
+    expect(buttons[1]!.isConnected).toBe(false);
+    await user.click(within(host).getByRole('button', { name: 'Close row detail' }));
+    const fresh = screen.getAllByRole('button', { name: 'D.1' });
+    expect(document.activeElement).toBe(fresh[1]);
+    expect(document.activeElement).not.toBe(fresh[0]);
+    host.remove();
+  });
+
+  it('reloads the slider when the row is edited inline in the matrix', async () => {
+    const host = withHost();
+    const rows = rowApi();
+    vi.mocked(rows.getRow)
+      .mockResolvedValueOnce({ row: r2, history: [] } as never)
+      .mockResolvedValue({ row: { ...r2, owner: null }, history: [] } as never);
+    const { api, user } = renderContainer({ selectedRowId: 'req-2', rowApi: rows, shell: { detailHost: host } });
+    await within(host).findByRole('heading', { name: 'L.4.3', level: 2 });
+    await within(host).findByText('Sam');
+    await ready();
+    await user.click(screen.getByRole('combobox', { name: 'Owner for L.4.3' }));
+    await user.click(await screen.findByRole('option', { name: 'Unassigned' }));
+    expect(api.updateComplianceRow).toHaveBeenCalledWith('bid-1', 'req-2', { owner: null });
+    await waitFor(() => expect(rows.getRow).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(within(host).queryByText('Sam')).toBeNull());
+    host.remove();
+  });
+
+  it('gives an AI row with no origin the unverified-quote flag in the slider, as in the matrix', async () => {
+    const host = withHost();
+    const bare = complianceRowDto({ id: 'req-9', reqId: 'N.1', origin: null, quoteVerified: false, flags: null });
+    const rows = [bare];
+    renderContainer({ api: mockApi(rows), selectedRowId: 'req-9', rowApi: rowApi(rows), shell: { detailHost: host } });
+    await within(host).findByRole('heading', { name: 'N.1', level: 2 });
+    expect(await within(host).findByText('Quote not verified')).toBeTruthy();
+    expect(within(host).getByText('AI')).toBeTruthy();
+    host.remove();
+  });
+
+  it('after deleting the row shown in the slider, focus goes to the next row’s ID button', async () => {
+    const host = withHost();
+    const { user, shell } = renderContainer({ selectedRowId: 'req-2', rowApi: rowApi(), shell: { detailHost: host } });
+    await within(host).findByRole('heading', { name: 'L.4.3', level: 2 });
+    await ready();
+    await user.click(screen.getByRole('button', { name: 'Actions for L.4.3' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete row' }));
+    await user.click(await screen.findByRole('button', { name: 'Delete row' }));
+    await waitFor(() => expect(shell.openRow).toHaveBeenCalledWith(null));
+    expect(document.activeElement).toBe(idButton('C.1'));
+    host.remove();
+  });
+
+  it('after deleting the last shown row, focus goes to the previous row’s ID button', async () => {
+    const host = withHost();
+    const { user, shell } = renderContainer({ selectedRowId: 'req-5', rowApi: rowApi(), shell: { detailHost: host } });
+    await within(host).findByRole('heading', { name: 'U-1', level: 2 });
+    await ready();
+    await user.click(screen.getByRole('button', { name: 'Actions for U-1' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete row' }));
+    await user.click(await screen.findByRole('button', { name: 'Delete row' }));
+    await waitFor(() => expect(shell.openRow).toHaveBeenCalledWith(null));
+    expect(document.activeElement).toBe(idButton('C.1a'));
+    host.remove();
+  });
+
+  it('after deleting the only shown row, focus goes to the matrix region', async () => {
+    const host = withHost();
+    const { user, shell } = renderContainer({ selectedRowId: 'req-2', rowApi: rowApi(), shell: { detailHost: host } });
+    await within(host).findByRole('heading', { name: 'L.4.3', level: 2 });
+    await ready();
+    await user.type(screen.getByLabelText('Search requirements'), 'pricing');
+    await showing(1, 5);
+    await user.click(screen.getByRole('button', { name: 'Actions for L.4.3' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete row' }));
+    await user.click(await screen.findByRole('button', { name: 'Delete row' }));
+    await waitFor(() => expect(shell.openRow).toHaveBeenCalledWith(null));
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Compliance matrix' }));
     host.remove();
   });
 

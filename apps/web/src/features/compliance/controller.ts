@@ -51,7 +51,7 @@ export function toComplianceRow(dto: ComplianceRowDto, rowIds: ReadonlySet<strin
     sourceQuote: dto.sourceQuote,
     quoteVerified: dto.quoteVerified,
     origin: dto.origin ?? 'ai',
-    flags: toFlags(dto),
+    flags: toFlags({ ...dto, origin: dto.origin ?? 'ai' }),
     amendment: amendmentMark(dto, rowIds),
   };
 }
