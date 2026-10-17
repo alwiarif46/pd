@@ -10,6 +10,7 @@ import { RowDetailContainer } from '@/features/row-detail/RowDetailContainer';
 import { amendmentTabsNotice } from '@/features/shared/amendment-tabs-status';
 import { messageOf, noticeFor } from '@/features/shared/messages';
 import { useRequiredShell } from '@/features/shell/bid-context';
+import { jobsKey } from '@/features/shell/controller';
 import { tabHref } from '@/features/shell/routes';
 import type { TabScreenProps } from '@/features/shell/registry';
 import type { SourceApi, SourceRef } from '@/features/source-viewer/controller';
@@ -60,6 +61,7 @@ export function DocumentsContainer({ bidId, selectedRowId, api = documentsApi, r
   /** Files and documents with a call in flight: a second click on the same action is ignored. */
   const busyRef = useRef(new Set<string>());
   const wrapRef = useRef<HTMLDivElement>(null);
+  const jobKey = jobsKey({ jobs: shell.jobs });
 
   // The notices the new-bid screen stashed for this bid (once). Set after a microtask: React forbids a
   // synchronous setState in an effect, and StrictMode runs the effect twice (the second take finds nothing).
@@ -85,6 +87,7 @@ export function DocumentsContainer({ bidId, selectedRowId, api = documentsApi, r
    */
   const runUpload = async (forBid: string, bidName: string, files: File[], kind: FileKind, amendmentNo: number | undefined) => {
     let number = amendmentNo;
+    let failed = 0;
     for (const file of files) {
       seqRef.current += 1;
       const id = `${forBid}:upload:${seqRef.current}`;
@@ -103,13 +106,17 @@ export function DocumentsContainer({ bidId, selectedRowId, api = documentsApi, r
       } finally {
         setPercent(forBid, file.name, null);
       }
+      if (notice?.tone === 'error') failed += 1;
       if (notice) {
         const shown = liveRef.current.mounted && liveRef.current.bidId === forBid;
         if (shown) addNotice(forBid, notice);
-        else toast.error(`${notice.fileName}: ${notice.message}`);
+        else (notice.tone === 'info' ? toast.info : toast.error)(`${notice.fileName}: ${notice.message}`);
       }
     }
-    if (!(liveRef.current.mounted && liveRef.current.bidId === forBid)) toast.success(`Finished uploading to ${bidName}.`);
+    if (!(liveRef.current.mounted && liveRef.current.bidId === forBid)) {
+      if (failed > 0) toast.error(`Finished uploading to ${bidName}: ${failed} of ${files.length} failed.`);
+      else toast.success(`Finished uploading to ${bidName}.`);
+    }
     shell.refresh();
   };
 
@@ -250,6 +257,7 @@ export function DocumentsContainer({ bidId, selectedRowId, api = documentsApi, r
           onJumpToRow={(id) => shell.openRow(id)}
           onClose={() => shell.openRow(null)}
           findRowElement={findRowElement}
+          reloadKey={jobKey}
           api={rowApi}
         />
       )}

@@ -332,10 +332,49 @@ describe('DocumentsContainer: upload', () => {
     await act(async () => finishFirst());
     await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(2));
     expect(uploadFile.mock.calls[0][3]).not.toHaveProperty('signal');
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('Alpha bid')));
-    expect(toast.error).toHaveBeenCalledWith('one.pdf: Already uploaded.');
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Finished uploading to Alpha bid: 1 of 2 failed.'));
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.info).toHaveBeenCalledWith('one.pdf: Already uploaded.');
+    expect(toast.error).not.toHaveBeenCalledWith('one.pdf: Already uploaded.');
     expect(toast.error).toHaveBeenCalledWith('two.pdf: Upload an unlocked copy.');
     expect(shell.refresh).toHaveBeenCalled();
+  });
+
+  it('reports a finished background upload as a success when no file failed (a duplicate is not a failure)', async () => {
+    let finish: () => void = () => undefined;
+    const uploadFile = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ duplicate: true }); }))
+      .mockResolvedValueOnce({ duplicate: false, sessionId: 's', documentId: 'd', jobId: 'j' });
+    const { user, unmount } = renderContainer({
+      api: mockApi({ uploadFile: uploadFile as unknown as DocumentsApi['uploadFile'] }),
+      shell: { bid: bidDto({ name: 'Alpha bid', keyOverridesLeft: 2 }) },
+    });
+    await user.upload(picker(), [pdf('one.pdf'), pdf('two.pdf')]);
+    await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(1));
+    unmount();
+    await act(async () => finish());
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Finished uploading to Alpha bid.'));
+    expect(toast.info).toHaveBeenCalledWith('one.pdf: Already uploaded.');
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('counts every failed file in the finished toast of a background upload', async () => {
+    let fail: () => void = () => undefined;
+    const uploadFile = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = () => reject(new ApiError('Upload an unlocked copy.', 422)); }))
+      .mockRejectedValue(new ApiError('Upload an unlocked copy.', 422));
+    const { user, unmount } = renderContainer({
+      api: mockApi({ uploadFile: uploadFile as unknown as DocumentsApi['uploadFile'] }),
+      shell: { bid: bidDto({ name: 'Alpha bid', keyOverridesLeft: 2 }) },
+    });
+    await user.upload(picker(), [pdf('one.pdf'), pdf('two.pdf'), pdf('three.pdf')]);
+    await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(1));
+    unmount();
+    await act(async () => fail());
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Finished uploading to Alpha bid: 3 of 3 failed.'));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it('toasts instead of adding a notice when another bid is shown', async () => {
@@ -345,7 +384,8 @@ describe('DocumentsContainer: upload', () => {
     await user.upload(picker(), pdf('one.pdf'));
     update({ bidId: 'bid-2', bid: bidDto({ id: 'bid-2' }), docs: [] });
     await act(async () => finish());
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('one.pdf: Already uploaded.'));
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith('one.pdf: Already uploaded.'));
+    expect(toast.error).not.toHaveBeenCalledWith('one.pdf: Already uploaded.');
     expect(screen.queryByText('Already uploaded.')).toBeNull();
   });
 });
