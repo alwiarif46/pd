@@ -62,6 +62,16 @@ export default tseslint.config(
     },
   },
   {
+    // Production code never imports the test package or its doubles (BUILD-PLAN s8, stub rule).
+    // packages/testing/test/no-prod-imports.test.ts checks the same thing without ESLint.
+    files: ['services/*/src/**/*.ts', 'services/gateway/web/src/**/*.{ts,tsx}', 'services/ingest/sandbox/src/**/*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{ group: ['@pd/testing', '@pd/testing/*'], message: '@pd/testing is for tests and local runs; production code must not import it.' }],
+      }],
+    },
+  },
+  {
     // api: a reply sent inside a withOrg/inOrg callback goes out before COMMIT. Use inOrg's
     // `respond(code, body)` or return a value instead (services/gateway/src/scope.ts).
     files: ['services/gateway/src/**/*.ts'],

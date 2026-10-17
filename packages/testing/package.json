@@ -22,6 +22,7 @@
     "@pd/core": "workspace:*",
     "@pd/stage-interface": "workspace:*",
     "drizzle-orm": "^0.33.0",
+    "jose": "^6.2.12",
     "pg": "^8.12.0",
     "pg-connection-string": "^2.14.1",
     "yaml": "^2.9.1"
