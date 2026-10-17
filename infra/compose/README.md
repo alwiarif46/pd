@@ -71,7 +71,7 @@ Secrets have no defaults in `local.yml` (`${VAR:?}`); only ports, names and othe
 
 ## What only CI can check
 
-No Docker daemon runs in the build session, so these have not run anywhere yet. CI (PR 12, job `compose-stack`, checks in `infra/compose/ci/stack-smoke.py`) runs them. You can run the same script by hand after `up --wait`: `python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env all` (after `pnpm migrate`).
+No Docker daemon runs in the build session. CI job `compose-stack` (checks in `infra/compose/ci/stack-smoke.py`) runs all of this and passed on the PR 12b run and on master (run 39056933350). You can run the same script by hand after `up --wait`: `python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env all` (after `pnpm migrate`).
 
 - `docker compose up` itself: the boot, every healthcheck, the `depends_on` order, volume permissions.
 - Zitadel: start-from-init against the `zitadel` database, the machine key file, and `/app/zitadel ready` (it calls `/debug/ready`). The variable names (`ZITADEL_EXTERNALDOMAIN`, `EXTERNALPORT`, `EXTERNALSECURE`, `TLS_ENABLED`, `DATABASE_POSTGRES_*`, `FIRSTINSTANCE_*`, `DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED`) were confirmed against the v4.19.5 source. Still unverified: the actual boot. Zitadel resolves the instance by Host, so clients use `localhost:8080`, not `127.0.0.1:8080`.

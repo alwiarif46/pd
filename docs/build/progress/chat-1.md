@@ -1,7 +1,8 @@
 # Chat 1 progress
 
 ## Session log
-- 2026-10-17 session 1: started. Prerequisites checked (below). Blocked on PR 1 (see PR 1 status).
+- 2026-10-17 session 1: started. Prerequisites checked (below). PR 1 was blocked on `.claude/` writes until the owner allowed them.
+- 2026-10-17 session 1 (continued): PRs 1 to 13 built and merged with subagents (builder, reviewers) in git worktrees; final Fable review; owner questions next. No second session was needed.
 
 ## Prerequisite checks
 - `docs/plans/00` to `09` and `docs/build/` exist on master (commit c627f6b). OK.
@@ -24,7 +25,7 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 
 | # | Branch | Status | Next step |
 |---|---|---|---|
-| 1 Tooling | e2e/c1-01-tooling | building | Agents, hook script, .mcp.json, Playwright dep, CLAUDE.md done. Hook entry in settings.json denied by classifier (owner step). PR #49 open; Fable review done (no majors); minors fixed |
+| 1 Tooling | e2e/c1-01-tooling | merged (#49) | Fable: no majors, minors fixed. Owner step H-12: register the SessionStart hook (the classifier refused that one entry) |
 | 2 Design source | e2e/c1-02-design | merged (#50) | Opus review: 1 major (legacy var collision) fixed and browser-verified |
 | 3 to 6 | - | already merged | none |
 | 7 Restructure | e2e/c1-07-restructure | merged (#51, by owner) | Fable: no majors. Minor fixes follow in 7b |
@@ -33,12 +34,13 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 | 9 Skeletons | e2e/c1-09-skeletons | merged (#57) | Fable: no majors; 11 minors fixed incl. a racy test guard found on a fresh cluster |
 | 10 Testing | e2e/c1-10-testing | merged (#58) | Fable: 4 majors fixed over 3 rounds (positive control, CI-vacuous RLS tests, seed guard x2); follow-ups logged |
 | 11 Local stack | e2e/c1-11-stack | merged (#59) | Fable: no majors; 4 minors fixed (JWKS host, clamd double O(n), native chown scope, TCP healthcheck) |
-| 12 CI | e2e/c1-12-ci | merged (#60). Fable: no majors; compose-stack split into a manual workflow after three CI fix rounds |
+| 12 CI | e2e/c1-12-ci | merged (#60) | Fable: no majors. Used three CI fix rounds on compose-stack, which was split out; it came back in #61 |
 | 12b Compose job | e2e/c1-12b-compose-ci | merged (#61) | compose-stack passed first time: boot, bucket, pgvector, migrate x2, isolation, ClamAV EICAR, S3 round trip, Zitadel, sandbox |
-| 13 Rename notice | e2e/c1-13-notices | in progress | HUMAN-TODO H-13 posted; repo still named pd |
+| 13 Rename notice | e2e/c1-13-notices | merged (#62) | HUMAN-TODO H-13 posted; the repo is still named pd, so the redirect check is unverified |
+| 14 Final docs | e2e/c1-14-final-docs | in review | review file, doc truth fixes after the final Fable review |
 
 ## PR 12 CI: which Done-when check which job verifies
-Verified by GitHub runs of `.github/workflows/ci.yml`, except the Compose rows, which belong to the manual `compose-stack.yml` workflow and stay unverified until it passes. "Local" marks what also ran in the session.
+Verified by GitHub runs of `.github/workflows/ci.yml`, including the `compose-stack` job (green on the PR 12b run and on master 2848bbe, run 39056933350). "Local" marks what also ran in the session.
 
 | Done-when / check | CI job and step | Local evidence |
 |---|---|---|
