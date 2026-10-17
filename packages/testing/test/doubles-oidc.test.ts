@@ -114,3 +114,24 @@ describe('mock OIDC issuer', () => {
     expect((await token({ grant_type: 'password' })).status).toBe(400);
   });
 });
+
+describe('mock OIDC issuer, expiry', () => {
+  it('userinfo refuses an access token after its lifetime', async () => {
+    const short = await startMockOidc({ accessTokenTtlSeconds: 1 });
+    try {
+      const q = new URLSearchParams({ client_id: 'c', redirect_uri: REDIRECT, response_type: 'code' });
+      const cb = new URL((await fetch(`${short.url}/authorize?${q}`, { redirect: 'manual' })).headers.get('location') as string);
+      const t = (await (await fetch(`${short.url}/token`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ grant_type: 'authorization_code', code: cb.searchParams.get('code') as string, redirect_uri: REDIRECT, client_id: 'c' }),
+      })).json()) as Record<string, string>;
+      const call = (): Promise<Response> => fetch(`${short.url}/userinfo`, { headers: { authorization: `Bearer ${t.access_token}` } });
+      expect((await call()).status).toBe(200);
+      await new Promise((r) => setTimeout(r, 1100));
+      expect((await call()).status).toBe(401);
+    } finally {
+      await short.close();
+    }
+  });
+});

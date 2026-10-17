@@ -113,10 +113,59 @@ describe('clamd double', () => {
     s.destroy();
   });
 
-  it('reports a size error over the stream limit, and counts scans', async () => {
+  it('reports a size error over the stream limit and ends the connection', async () => {
     const before = clamd.scans();
     expect(await scan([Buffer.alloc(600 * 1024), Buffer.alloc(600 * 1024)])).toBe('INSTREAM size limit exceeded. ERROR');
-    expect(clamd.scans()).toBe(before + 1);
+    expect(clamd.scans()).toBe(before); // a refused stream is not a finished scan
+  });
+
+  it('rejects a declared chunk length above the limit from the header alone, without buffering', async () => {
+    const s = await open();
+    s.write('zINSTREAM\0');
+    const head = Buffer.alloc(4);
+    head.writeUInt32BE(0xfffffff0);
+    s.write(head); // no data follows
+    expect(await readReply(s, 0)).toBe('INSTREAM size limit exceeded. ERROR');
+    s.destroy();
+  });
+
+  it('scans a 48 MiB stream in a few seconds', async () => {
+    const big = await startMockClamd(); // default limit, 300 MiB
+    try {
+      const s = await new Promise<Socket>((resolve, reject) => {
+        const c = connect({ host: big.host, port: big.port }, () => resolve(c));
+        c.once('error', reject);
+      });
+      const started = Date.now();
+      const one = chunk(Buffer.alloc(1024 * 1024, 0x61));
+      s.write('zINSTREAM\0');
+      for (let i = 0; i < 48; i++) s.write(one);
+      s.write(END);
+      expect(await readReply(s, 0)).toBe('stream: OK');
+      expect(Date.now() - started).toBeLessThan(3000);
+      s.destroy();
+    } finally {
+      await big.close();
+    }
+  });
+
+  it('handles a header split across TCP writes and a command after the terminator in the same write', async () => {
+    const s = await open();
+    const data = Buffer.from('clean');
+    const frame = Buffer.concat([chunk(data), END, Buffer.from('zPING\0')]);
+    s.write('zINSTREAM\0');
+    s.write(frame.subarray(0, 2));
+    await new Promise((r) => setTimeout(r, 20));
+    s.write(frame.subarray(2));
+    const got = await new Promise<string>((resolve) => {
+      let buf = '';
+      s.on('data', (d: Buffer) => {
+        buf += d.toString('latin1');
+        if (buf.includes('PONG')) resolve(buf);
+      });
+    });
+    expect(got).toBe('stream: OK\0PONG\0');
+    s.destroy();
   });
 
   it('rejects an unknown command', async () => {

@@ -37,83 +37,110 @@ export async function startMockClamd(options: MockClamdOptions = {}): Promise<Mo
     socket.on('close', () => sockets.delete(socket));
     socket.on('error', () => socket.destroy());
 
-    let buf = Buffer.alloc(0);
+    // Command mode keeps a small buffer. Stream mode keeps only the 4-byte chunk header, the bytes left in the current
+    // chunk, and a short tail for EICAR detection across chunk edges, so a stream costs O(n) time and O(1) memory.
+    let cmdBuf = Buffer.alloc(0);
     let mode: 'command' | 'stream' = 'command';
     let terminator = 0; // 0 for the z form, 10 for the n form
     let streamed = 0;
-    let tail = Buffer.alloc(0); // last bytes seen, to find EICAR across chunk edges
+    let remaining = 0; // bytes left in the current chunk
+    const header = Buffer.alloc(4);
+    let headerLen = 0;
+    let tail = Buffer.alloc(0);
     let infected = false;
-    let tooLong = false;
 
     const reply = (text: string): void => {
       socket.write(Buffer.concat([Buffer.from(text, 'latin1'), Buffer.from([terminator])]));
     };
 
-    function parse(): void {
-      for (;;) {
-        if (mode === 'command') {
-          if (buf.length === 0) return;
-          // The first byte is the form: `z` ends the command with NUL, `n` with a newline.
-          const form = buf[0];
-          if (form !== 0x7a && form !== 0x6e) {
-            terminator = 0;
-            reply('UNKNOWN COMMAND');
-            return void socket.end();
+    /** Reads commands from `input`. Returns what is left after an INSTREAM command, for stream mode. */
+    function consumeCommand(input: Buffer): Buffer {
+      cmdBuf = Buffer.concat([cmdBuf, input]);
+      if (cmdBuf.length === 0) return cmdBuf;
+      // The first byte is the form: `z` ends the command with NUL, `n` with a newline.
+      const form = cmdBuf[0];
+      if (form !== 0x7a && form !== 0x6e) {
+        terminator = 0;
+        reply('UNKNOWN COMMAND');
+        socket.end();
+        cmdBuf = Buffer.alloc(0);
+        return cmdBuf;
+      }
+      terminator = form === 0x7a ? 0 : 10;
+      const end = cmdBuf.indexOf(terminator);
+      if (end < 0) {
+        if (cmdBuf.length > 4096) socket.destroy();
+        return Buffer.alloc(0);
+      }
+      const cmd = cmdBuf.subarray(1, end).toString('latin1').toUpperCase();
+      const rest = cmdBuf.subarray(end + 1);
+      cmdBuf = Buffer.alloc(0);
+      if (cmd === 'PING' || cmd === 'VERSION') {
+        reply(cmd === 'PING' ? 'PONG' : version);
+        if (terminator === 10) socket.end();
+      } else if (cmd === 'INSTREAM') {
+        mode = 'stream';
+        streamed = 0;
+        remaining = 0;
+        headerLen = 0;
+        tail = Buffer.alloc(0);
+        infected = false;
+      } else {
+        reply('UNKNOWN COMMAND');
+        socket.end();
+        return Buffer.alloc(0);
+      }
+      return rest;
+    }
+
+    /** Reads chunk data from `input`. Returns what is left after the zero-length terminator. */
+    function consumeStream(input: Buffer): Buffer {
+      let off = 0;
+      while (off < input.length) {
+        if (remaining === 0) {
+          const take = Math.min(4 - headerLen, input.length - off);
+          input.copy(header, headerLen, off, off + take);
+          headerLen += take;
+          off += take;
+          if (headerLen < 4) break;
+          headerLen = 0;
+          const len = header.readUInt32BE(0);
+          if (len === 0) {
+            scanCount += 1;
+            reply(infected ? `stream: ${EICAR_SIGNATURE} FOUND` : 'stream: OK');
+            mode = 'command';
+            if (terminator === 10) socket.end();
+            return input.subarray(off);
           }
-          terminator = form === 0x7a ? 0 : 10;
-          const end = buf.indexOf(terminator);
-          if (end < 0) {
-            if (buf.length > 4096) socket.destroy();
-            return;
+          // Like clamd: refuse at the header, before any of the chunk arrives.
+          if (streamed + len > maxLen) {
+            reply('INSTREAM size limit exceeded. ERROR');
+            socket.end();
+            mode = 'command';
+            return Buffer.alloc(0);
           }
-          const cmd = buf.subarray(1, end).toString('latin1').toUpperCase();
-          buf = buf.subarray(end + 1);
-          if (cmd === 'PING') {
-            reply('PONG');
-            if (terminator === 10) return void socket.end();
-          } else if (cmd === 'VERSION') {
-            reply(version);
-            if (terminator === 10) return void socket.end();
-          } else if (cmd === 'INSTREAM') {
-            mode = 'stream';
-            streamed = 0;
-            tail = Buffer.alloc(0);
-            infected = false;
-            tooLong = false;
-          } else {
-            reply('UNKNOWN COMMAND');
-            return void socket.end();
-          }
+          remaining = len;
           continue;
         }
-        // Stream mode: [4-byte big-endian length][data] chunks, ended by a zero length.
-        if (buf.length < 4) return;
-        const len = buf.readUInt32BE(0);
-        if (len === 0) {
-          buf = buf.subarray(4);
-          scanCount += 1;
-          if (tooLong) reply('INSTREAM size limit exceeded. ERROR');
-          else reply(infected ? `stream: ${EICAR_SIGNATURE} FOUND` : 'stream: OK');
-          mode = 'command';
-          if (terminator === 10) return void socket.end();
-          continue;
-        }
-        if (buf.length < 4 + len) return;
-        const chunk = buf.subarray(4, 4 + len);
-        buf = buf.subarray(4 + len);
-        streamed += len;
-        if (streamed > maxLen) tooLong = true;
-        if (!infected && !tooLong) {
-          const window = Buffer.concat([tail, chunk]);
+        const n = Math.min(remaining, input.length - off);
+        const slice = input.subarray(off, off + n);
+        off += n;
+        remaining -= n;
+        streamed += n;
+        if (!infected) {
+          const window = Buffer.concat([tail, slice]);
           if (window.includes(EICAR_BYTES)) infected = true;
           tail = window.subarray(Math.max(window.length - (EICAR_BYTES.length - 1), 0));
         }
       }
+      return Buffer.alloc(0);
     }
 
     socket.on('data', (d: Buffer) => {
-      buf = Buffer.concat([buf, d]);
-      parse();
+      let input = d;
+      while (input.length > 0 && !socket.destroyed) {
+        input = mode === 'command' ? consumeCommand(input) : consumeStream(input);
+      }
     });
   });
 

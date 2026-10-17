@@ -43,6 +43,10 @@ export function fixtureUser(t: TenantFixture): MockOidcUser {
   return { sub: t.admin.id, email: t.admin.email, name: t.admin.name, tenantId: t.id };
 }
 
+interface AccessGrant {
+  user: MockOidcUser;
+  expires: number;
+}
 interface CodeGrant {
   user: MockOidcUser;
   clientId: string;
@@ -89,7 +93,7 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
 
   const codes = new Map<string, CodeGrant>();
   const refreshTokens = new Map<string, RefreshGrant>();
-  const accessTokens = new Map<string, MockOidcUser>();
+  const accessTokens = new Map<string, AccessGrant>();
   let issuer = options.issuer ?? '';
 
   async function sign(key: Parameters<SignJWT['sign']>[0], claims: Record<string, unknown>, aud: string, sub: string): Promise<string> {
@@ -103,12 +107,20 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
       .sign(key);
   }
 
+  /** Drops expired codes and access tokens, so a long local run does not grow without bound. */
+  function sweep(): void {
+    const now = Date.now();
+    for (const [k, g] of codes) if (g.expires < now) codes.delete(k);
+    for (const [k, g] of accessTokens) if (g.expires < now) accessTokens.delete(k);
+  }
+
   async function tokensFor(user: MockOidcUser, clientId: string, nonce: string | undefined, scope: string): Promise<Record<string, unknown>> {
     const common = { email: user.email, email_verified: true, name: user.name, [ORG_CLAIM]: user.tenantId };
     const idToken = await sign(privateKey, { ...common, ...(nonce ? { nonce } : {}) }, clientId, user.sub);
     const accessToken = await sign(privateKey, { ...common, scope }, clientId, user.sub);
     const refreshToken = randomBytes(24).toString('base64url');
-    accessTokens.set(accessToken, user);
+    sweep();
+    accessTokens.set(accessToken, { user, expires: Date.now() + ttl * 1000 });
     refreshTokens.set(refreshToken, { user, clientId });
     return { access_token: accessToken, token_type: 'Bearer', expires_in: ttl, id_token: idToken, refresh_token: refreshToken, scope };
   }
@@ -157,6 +169,7 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
         res.writeHead(302, { location: back.toString() });
         return void res.end();
       }
+      sweep();
       const code = randomBytes(16).toString('base64url');
       codes.set(code, {
         user,
@@ -202,7 +215,8 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
 
     if ((req.method === 'GET' || req.method === 'POST') && path === '/userinfo') {
       const m = /^Bearer (.+)$/.exec(String(req.headers.authorization ?? ''));
-      const user = m ? accessTokens.get(m[1] as string) : undefined;
+      const grant = m ? accessTokens.get(m[1] as string) : undefined;
+      const user = grant && grant.expires >= Date.now() ? grant.user : undefined;
       if (!user) {
         res.setHeader('www-authenticate', 'Bearer error="invalid_token"');
         return oauthError(res, 401, 'invalid_token', 'missing or unknown access token');
