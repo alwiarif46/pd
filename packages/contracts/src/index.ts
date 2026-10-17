@@ -27,6 +27,16 @@ function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(path, 'utf8')) as T;
 }
 
+/** Major.minor with no leading zeros. Used for x-schema-version, documents and the envelope pattern. */
+export const VERSION_PATTERN = '^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$';
+const VERSION_RE = new RegExp(VERSION_PATTERN);
+
+let schemaFileReads = 0;
+/** How many event schema files this module instance has read. For tests of the cache. */
+export function schemaReads(): number {
+  return schemaFileReads;
+}
+
 export const SERVICES: ReadonlyArray<ServiceInfo> = readJson<ServiceInfo[]>(join(PACKAGE_ROOT, 'services.json'));
 
 export interface EventEnvelope<P = Record<string, unknown>> {
@@ -57,22 +67,41 @@ export function loadEventSchema(name: string, major?: number): EventSchema {
   return readJson<EventSchema>(path);
 }
 
+interface EventInfo {
+  schema: EventSchema;
+  version: string;
+  previous: number[];
+}
+
+// Per module instance. The current version and the previous-major file list are read once per event.
+const infoCache = new Map<string, EventInfo>();
+
+function infoFor(name: string): EventInfo {
+  let info = infoCache.get(name);
+  if (info) return info;
+  const schema = loadEventSchema(name);
+  schemaFileReads += 1;
+  const version = schema['x-schema-version'];
+  if (typeof version !== 'string') throw new Error(`Event ${name} has no x-schema-version`);
+  const prefix = `${name}.v`;
+  const previous: number[] = [];
+  for (const file of readdirSync(join(PACKAGE_ROOT, 'events'))) {
+    const m = file.startsWith(prefix) ? /^([1-9]\d*)\.schema\.json$/.exec(file.slice(prefix.length)) : null;
+    if (m) previous.push(Number(m[1]));
+  }
+  info = { schema, version, previous: previous.sort((a, b) => a - b) };
+  infoCache.set(name, info);
+  return info;
+}
+
 /** The majors that have a `<name>.v<N>.schema.json` file, ascending. */
 export function previousMajorsOf(name: string): number[] {
-  const prefix = `${name}.v`;
-  const majors: number[] = [];
-  for (const file of readdirSync(join(PACKAGE_ROOT, 'events'))) {
-    const m = file.startsWith(prefix) ? /^(\d+)\.schema\.json$/.exec(file.slice(prefix.length)) : null;
-    if (m) majors.push(Number(m[1]));
-  }
-  return majors.sort((a, b) => a - b);
+  return [...infoFor(name).previous];
 }
 
 /** The exact current version of an event, from the `x-schema-version` of its current schema. */
 export function currentVersionOf(name: string): string {
-  const version = loadEventSchema(name)['x-schema-version'];
-  if (typeof version !== 'string') throw new Error(`Event ${name} has no x-schema-version`);
-  return version;
+  return infoFor(name).version;
 }
 
 /** A strict Ajv instance that knows the contract keywords. Used by the package and by the check script. */
@@ -94,7 +123,13 @@ function validatorFor(name: string, major?: number): ValidateFunction {
   let fn = compiled.get(key);
   if (!fn) {
     sharedAjv ??= createAjv();
-    fn = sharedAjv.compile(loadEventSchema(name, major));
+    let schema: EventSchema;
+    if (major === undefined) schema = infoFor(name).schema;
+    else {
+      schema = loadEventSchema(name, major);
+      schemaFileReads += 1;
+    }
+    fn = sharedAjv.compile(schema);
     compiled.set(key, fn);
   }
   return fn;
@@ -109,8 +144,6 @@ function versionError(message: string): ValidationResult {
   };
 }
 
-const DOC_VERSION = /^\d+\.\d+$/;
-
 /**
  * Check a document against the event's schema. The schema is chosen by the document's major:
  * the current schema for the current major, `<name>.v<N>.schema.json` for the previous one (BUILD-PLAN s5).
@@ -121,13 +154,13 @@ export function validateEvent(name: string, doc: unknown): ValidationResult {
   const currentMajor = parseVersion(current).major;
   const version = typeof doc === 'object' && doc !== null ? (doc as Record<string, unknown>).schema_version : undefined;
   let major = currentMajor;
-  if (typeof version === 'string' && DOC_VERSION.test(version)) {
+  if (typeof version === 'string' && VERSION_RE.test(version)) {
     if (!acceptsSchemaVersion(version, supportedMajorsFor(current))) {
       return versionError(`schema_version ${version} is not supported for ${name}: current is ${current}, supported majors are ${supportedMajorsFor(current).join(', ')}`);
     }
     major = parseVersion(version).major;
   }
-  if (major !== currentMajor && !previousMajorsOf(name).includes(major)) {
+  if (major !== currentMajor && !infoFor(name).previous.includes(major)) {
     return versionError(`schema_version ${String(version)} is not supported for ${name}: there is no ${name}.v${major}.schema.json`);
   }
   const fn = validatorFor(name, major === currentMajor ? undefined : major);
@@ -141,7 +174,7 @@ export interface Version {
 }
 
 export function parseVersion(text: string): Version {
-  const m = /^(\d+)\.(\d+)(?:\.\d+)?$/.exec(text);
+  const m = /^(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.\d+)?$/.exec(text);
   if (!m) throw new Error(`Bad version: ${JSON.stringify(text)}`);
   return { major: Number(m[1]), minor: Number(m[2]) };
 }

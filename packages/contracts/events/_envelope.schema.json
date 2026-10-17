@@ -23,7 +23,7 @@
     },
     "schema_version": {
       "type": "string",
-      "pattern": "^\\d+\\.\\d+$"
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$"
     },
     "occurred_at": {
       "type": "string",

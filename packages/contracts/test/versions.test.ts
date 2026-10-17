@@ -109,3 +109,26 @@ describe('validateEvent versions', () => {
     expect(api.validateEvent(NAME, one).valid).toBe(false);
   });
 });
+
+describe('version strictness and caching', () => {
+  it('rejects leading zeros in a document schema_version', () => {
+    const good = makeEvent(NAME, TENANT, {});
+    for (const v of ['01.0', '1.00', '1.01', '001.0']) {
+      expect(validateEvent(NAME, { ...good, schema_version: v }).valid).toBe(false);
+    }
+    expect(validateEvent(NAME, { ...good, schema_version: '1.10' }).valid).toBe(true);
+  });
+
+  it('reads the schema file once across validateEvent calls', async () => {
+    const dir = copyContracts();
+    const api = await load(dir);
+    const doc = api.makeEvent(NAME as never, TENANT, {});
+    expect(api.validateEvent(NAME, doc).valid).toBe(true);
+    const after = api.schemaReads();
+    expect(after).toBeGreaterThan(0);
+    expect(api.validateEvent(NAME, doc).valid).toBe(true);
+    expect(api.validateEvent(NAME, { ...doc, schema_version: '1.3' }).valid).toBe(true);
+    expect(api.schemaReads()).toBe(after);
+  });
+});
+

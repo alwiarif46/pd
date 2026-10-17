@@ -4,7 +4,7 @@ import { join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { validate } from '@readme/openapi-parser';
 import { parse as parseYaml } from 'yaml';
-import { ENVELOPE_FIELDS, ENVELOPE_ID, PACKAGE_ROOT, SERVICES, createAjv, eventNames, eventSchemaPath, loadEnvelopeSchema, loadEventSchema, type ServiceInfo } from '../src/index';
+import { ENVELOPE_FIELDS, ENVELOPE_ID, PACKAGE_ROOT, SERVICES, VERSION_PATTERN, createAjv, eventNames, eventSchemaPath, loadEnvelopeSchema, loadEventSchema, type ServiceInfo } from '../src/index';
 import { buildGenerated, listFiles, openapiPath } from './lib';
 
 const REPO_ROOT = process.env.CONTRACTS_REPO_ROOT ?? resolve(PACKAGE_ROOT, '..', '..');
@@ -55,7 +55,16 @@ async function checkOpenApi(): Promise<Map<string, Set<string>>> {
 }
 
 const EVENT_NAME = /^[a-z]+(\.[a-z_]+){1,2}$/;
-const EVENT_FILE = /^(.+?)(?:\.v(\d+))?\.schema\.json$/;
+const EVENT_FILE = /^(.+?)(?:\.v(0|[1-9]\d*))?\.schema\.json$/;
+const VERSION_RE = new RegExp(VERSION_PATTERN);
+const ENVELOPE_PROP_SHAPES: Record<string, Record<string, unknown>> = {
+  event_id: { type: 'string', format: 'uuid' },
+  tenant_id: { type: 'string', format: 'uuid' },
+  schema_version: { type: 'string', pattern: VERSION_PATTERN },
+  occurred_at: { type: 'string', format: 'date-time' },
+  type: { type: 'string' },
+  payload: { type: 'object' },
+};
 
 function sameList(a: unknown, b: readonly string[]): boolean {
   return Array.isArray(a) && a.length === b.length && [...a].sort().join('\n') === [...b].sort().join('\n');
@@ -74,8 +83,13 @@ function checkEnvelope(): void {
   if (!sameList(env.required, ENVELOPE_FIELDS)) {
     fail(`${label}: envelope required must be exactly ${ENVELOPE_FIELDS.join(', ')}, got ${JSON.stringify(env.required)}`);
   }
-  const props = Object.keys((env.properties ?? {}) as object);
-  for (const f of ENVELOPE_FIELDS) if (!props.includes(f)) fail(`${label}: envelope has no property ${f}`);
+  const props = (env.properties ?? {}) as Record<string, unknown>;
+  for (const f of ENVELOPE_FIELDS) {
+    if (!(f in props)) fail(`${label}: envelope has no property ${f}`);
+    else if (JSON.stringify(props[f]) !== JSON.stringify(ENVELOPE_PROP_SHAPES[f])) {
+      fail(`${label}: envelope property ${f} must be ${JSON.stringify(ENVELOPE_PROP_SHAPES[f])}, got ${JSON.stringify(props[f])}`);
+    }
+  }
 }
 
 /** Checks shared by a current schema and a previous-major schema. */
@@ -97,8 +111,12 @@ function checkEventSchema(name: string, major: number | undefined, ajv: ReturnTy
   const svc = SERVICES.find((s) => s.id === owner);
   if (!svc) fail(`${label}: x-owner ${JSON.stringify(owner)} is not a known service id`);
   if (major !== undefined) {
-    const baseOwner = loadEventSchema(name)['x-owner'];
-    if (owner !== baseOwner) fail(`${label}: x-owner ${JSON.stringify(owner)} must match ${name}.schema.json (${JSON.stringify(baseOwner)})`);
+    try {
+      const baseOwner = loadEventSchema(name)['x-owner'];
+      if (owner !== baseOwner) fail(`${label}: x-owner ${JSON.stringify(owner)} must match ${name}.schema.json (${JSON.stringify(baseOwner)})`);
+    } catch (err) {
+      fail(`${label}: cannot read ${name}.schema.json to compare x-owner: ${(err as Error).message}`);
+    }
   }
   if (schema['x-stream'] !== `e2e.${name}`) {
     fail(`${label}: x-stream is ${JSON.stringify(schema['x-stream'])}, expected "e2e.${name}"`);
@@ -111,12 +129,20 @@ function checkEventSchema(name: string, major: number | undefined, ajv: ReturnTy
     fail(`${label}: allOf must be exactly [{ "$ref": "${ENVELOPE_ID}" }], got ${JSON.stringify(allOf)}`);
   }
   if (schema.unevaluatedProperties !== false) fail(`${label}: unevaluatedProperties must be false at the top level`);
+  for (const key of ['required', 'additionalProperties', 'patternProperties']) {
+    if (key in schema) fail(`${label}: top-level ${key} is not allowed; the envelope owns the top-level shape`);
+  }
   const props = schema.properties as Record<string, { const?: unknown; type?: unknown; pattern?: unknown }> | undefined;
+  for (const key of Object.keys(props ?? {})) {
+    if (!(ENVELOPE_FIELDS as ReadonlyArray<string>).includes(key)) {
+      fail(`${label}: properties.${key} is not an envelope field (${ENVELOPE_FIELDS.join(', ')}); put event data under payload`);
+    }
+  }
   if (props?.type?.const !== name) fail(`${label}: properties.type.const must be "${name}"`);
 
   const version = schema['x-schema-version'];
-  if (typeof version !== 'string' || !/^\d+\.\d+$/.test(version)) {
-    fail(`${label}: x-schema-version must match ^\\d+\\.\\d+$, got ${JSON.stringify(version)}`);
+  if (typeof version !== 'string' || !VERSION_RE.test(version)) {
+    fail(`${label}: x-schema-version must match ${VERSION_PATTERN} (no leading zeros), got ${JSON.stringify(version)}`);
     return;
   }
   const versionMajor = Number(version.split('.')[0]);
@@ -152,7 +178,13 @@ function checkEvents(): void {
     if (m?.[2] !== undefined) previous.set(name, [...(previous.get(name) ?? []), Number(m[2])]);
   }
   checkEnvelope();
-  const ajv = createAjv();
+  let ajv: ReturnType<typeof createAjv>;
+  try {
+    ajv = createAjv();
+  } catch (err) {
+    fail(`events/_envelope.schema.json: cannot build the validator: ${(err as Error).message}`);
+    return;
+  }
   for (const name of eventNames) {
     if (!existsSync(eventSchemaPath(name))) continue;
     checkEventSchema(name, undefined, ajv);
@@ -164,7 +196,9 @@ function checkEvents(): void {
       currentMajor = undefined;
     }
     for (const major of prev) {
-      if (currentMajor !== undefined && major !== currentMajor - 1) {
+      if (currentMajor !== undefined && currentMajor < 2) {
+        fail(`events/${name}.v${major}.schema.json: majors 0 and 1 have no previous-major window, current is major ${currentMajor}`);
+      } else if (currentMajor !== undefined && major !== currentMajor - 1) {
         fail(`events/${name}.v${major}.schema.json: only the previous major (${currentMajor - 1}) may be kept, current is major ${currentMajor}`);
       }
       checkEventSchema(name, major, ajv);

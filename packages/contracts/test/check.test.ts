@@ -223,6 +223,122 @@ describe('contracts:check', () => {
     expect(r.out).toContain('GET /healthz');
   });
 
+  describe('malformed JSON', () => {
+    it('reports a broken event file as one line, no stack trace', () => {
+      const dir = copyPackage();
+      writeFileSync(join(dir, 'events', 'render.done.schema.json'), '{ not json');
+      const r = runCheck(dir);
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('events/render.done.schema.json');
+      expect(r.out).not.toMatch(/\n\s+at /);
+    });
+
+    it('reports a broken envelope as one line, no stack trace', () => {
+      const dir = copyPackage();
+      writeFileSync(join(dir, 'events', '_envelope.schema.json'), '{ not json');
+      const r = runCheck(dir);
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('events/_envelope.schema.json');
+      expect(r.out).not.toMatch(/\n\s+at /);
+    });
+  });
+
+  describe('versions and file names', () => {
+    it('rejects a leading zero in x-schema-version', () => {
+      const dir = copyPackage();
+      editJson(join(dir, 'events', 'render.done.schema.json'), (d) => {
+        d['x-schema-version'] = '01.0';
+        d.properties.schema_version = { type: 'string', pattern: '^01\\.\\d+$' };
+      });
+      const r = runCheck(dir);
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain('x-schema-version');
+    });
+
+    it('rejects a leading zero in the envelope schema_version pattern', () => {
+      const dir = copyPackage();
+      editJson(join(dir, 'events', '_envelope.schema.json'), (d) => {
+        d.properties.schema_version.pattern = '^\\d+\\.\\d+$';
+      });
+      runGenerate(dir);
+      const r = runCheck(dir);
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain('schema_version');
+    });
+
+    it('gives a clear file-name error for render.done.v01.schema.json', () => {
+      const dir = copyPackage();
+      writeFileSync(join(dir, 'events', 'render.done.v01.schema.json'), '{}');
+      const r = runCheck(dir);
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain('events/render.done.v01.schema.json: file name must be');
+    });
+
+    it('fails a .v1 file when the current major is 1', () => {
+      const dir = copyPackage();
+      writeFileSync(join(dir, 'events', 'render.done.v1.schema.json'), '{}');
+      const r = runCheck(dir);
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain('majors 0 and 1 have no previous-major window');
+    });
+
+    it('fails a .v0 file', () => {
+      const dir = copyPackage();
+      writeFileSync(join(dir, 'events', 'render.done.v0.schema.json'), '{}');
+      const r = runCheck(dir);
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain('events/render.done.v0.schema.json');
+      expect(r.out).toContain('majors 0 and 1 have no previous-major window');
+    });
+  });
+
+  describe('envelope pinning', () => {
+    it('fails when the envelope tenant_id loses its shape', () => {
+      const dir = copyPackage();
+      editJson(join(dir, 'events', '_envelope.schema.json'), (d) => {
+        d.properties.tenant_id = {};
+      });
+      runGenerate(dir);
+      const r = runCheck(dir);
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain('tenant_id');
+    });
+
+    it('fails when an event adds a property and requires it', () => {
+      const dir = copyPackage();
+      editJson(join(dir, 'events', 'render.done.schema.json'), (d) => {
+        d.properties.foo = { type: 'string' };
+        d.required = ['foo'];
+      });
+      const r = runCheck(dir);
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain('properties.foo');
+      expect(r.out).toContain('required');
+    });
+
+    it('fails when an event declares tenantId in properties', () => {
+      const dir = copyPackage();
+      editJson(join(dir, 'events', 'render.done.schema.json'), (d) => {
+        d.properties.tenantId = { type: 'string' };
+      });
+      const r = runCheck(dir);
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain('properties.tenantId');
+    });
+
+    it('fails on top-level additionalProperties and patternProperties', () => {
+      const dir = copyPackage();
+      editJson(join(dir, 'events', 'render.done.schema.json'), (d) => {
+        d.additionalProperties = true;
+        d.patternProperties = { '^x': {} };
+      });
+      const r = runCheck(dir);
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain('additionalProperties');
+      expect(r.out).toContain('patternProperties');
+    });
+  });
+
   describe('previous major event schemas', () => {
     function withV1(): string {
       const dir = copyPackage();
