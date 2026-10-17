@@ -9,7 +9,7 @@ export function isUuid(value: unknown): value is string {
 }
 
 /**
- * Runs `fn` in a transaction whose `app.org_id` setting is local to that
+ * Runs `fn` in a transaction whose `app.tenant_id` and `app.org_id` settings are local to that
  * transaction (`set_config` third argument `true`). A pooled connection cannot
  * carry one organization's setting into the next request.
  *
@@ -26,7 +26,9 @@ export async function withOrg<T>(
   const client = await getPool().connect();
   try {
     await client.query('BEGIN');
-    await client.query("select set_config('app.org_id', $1, true)", [orgId]);
+    // Both settings carry the same uuid: PD's policies read app.org_id, the E2E services' read
+    // app.tenant_id (09 s2, PD mapping). Same statement as withTenant in @pd/service-kit.
+    await client.query("select set_config('app.tenant_id', $1, true), set_config('app.org_id', $1, true)", [orgId]);
     const tx = drizzle(client, { schema });
     const result = await fn(tx);
     await client.query('COMMIT');
@@ -67,7 +69,8 @@ export async function userMemberships(userId: string): Promise<UserMembership[]>
 
 /**
  * Throws if the connected role skips row-level security (a superuser or a BYPASSRLS role).
- * The api and worker must connect as `pd_app`; any other role defeats tenant isolation.
+ * The api and worker connect as `pd_app`; each E2E service connects as its own `<schema>_svc`
+ * role. Any role that skips row-level security defeats tenant isolation.
  */
 export async function assertTenantRole(): Promise<void> {
   const result = await getPool().query<{ rolname: string; rolsuper: boolean; rolbypassrls: boolean }>(
@@ -76,7 +79,7 @@ export async function assertTenantRole(): Promise<void> {
   const role = result.rows[0];
   if (!role || role.rolsuper || role.rolbypassrls) {
     throw new Error(
-      `Database role ${role?.rolname ?? '(unknown)'} skips row-level security. Connect as pd_app.`,
+      `Database role ${role?.rolname ?? '(unknown)'} skips row-level security. Connect as pd_app or a per-service <schema>_svc role.`,
     );
   }
 }
