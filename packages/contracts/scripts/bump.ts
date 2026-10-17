@@ -9,7 +9,11 @@
 //     must exist at HEAD (already there at the merge base, or added in this diff).
 //   - A deleted file fails. The one exception is a previous-major file events/<name>.v<N>.schema.json: the README says
 //     the follow-up PR after a breaking change deletes it.
-//   - events/_envelope.schema.json has no version. A change to it only prints a warning.
+//   - events/_envelope.schema.json carries its own x-schema-version. A changed envelope must raise it in the same diff.
+//     A major bump of the envelope needs no per-event files. Deleting the envelope fails.
+//   - A modified file whose merge-base copy cannot be read (git error) or parsed fails. Only a parsed old file that has no
+//     version field at all is let through (the version was added in this diff).
+//   - A pre-release is never a bump: 0.2.0 to 0.2.0-rc1 fails. Going from 0.2.0-rc1 to 0.2.0 passes.
 import { execFileSync } from 'node:child_process';
 import { parse as parseYaml } from 'yaml';
 
@@ -55,7 +59,10 @@ function existsAt(repoRoot: string, rev: string, path: string): boolean {
   return tryGit(repoRoot, ['cat-file', '-e', `${rev}:${path}`]) !== undefined;
 }
 
-/** Numeric compare of dotted versions; a pre-release suffix is ignored, build metadata too. */
+/**
+ * Orders dotted versions: 1 when a is higher than b, -1 when lower, 0 when neither is higher.
+ * Equal numbers: a release is higher than a pre-release of the same numbers, never the other way round.
+ */
 function compare(a: string, b: string): number {
   const num = (v: string) => v.split(/[-+]/)[0]!.split('.').map(Number);
   const x = num(a);
@@ -64,20 +71,23 @@ function compare(a: string, b: string): number {
     const d = (x[i] ?? 0) - (y[i] ?? 0);
     if (d !== 0) return d < 0 ? -1 : 1;
   }
-  // Same numbers: a different pre-release suffix still counts as a change, but not an increase we can order.
+  const pre = (v: string) => v.split('+')[0]!.includes('-');
+  if (pre(b) && !pre(a)) return 1;
+  if (pre(a) && !pre(b)) return -1;
   return 0;
 }
 
-function versionOf(kind: 'openapi' | 'event', text: string): string | undefined {
+/** parsed false: the text did not parse. version undefined with parsed true: a valid file without the field. */
+function versionOf(kind: 'openapi' | 'event', text: string): { parsed: boolean; version?: string } {
   try {
     if (kind === 'openapi') {
       const v = (parseYaml(text) as { info?: { version?: unknown } } | null)?.info?.version;
-      return typeof v === 'string' ? v : undefined;
+      return { parsed: true, version: typeof v === 'string' ? v : undefined };
     }
     const v = (JSON.parse(text) as Record<string, unknown>)['x-schema-version'];
-    return typeof v === 'string' ? v : undefined;
+    return { parsed: true, version: typeof v === 'string' ? v : undefined };
   } catch {
-    return undefined;
+    return { parsed: false };
   }
 }
 
@@ -106,15 +116,12 @@ export function checkBump(opts: BumpOptions): BumpResult {
   for (const { status, path } of changes) {
     const isOpenApi = OPENAPI_FILE.test(path);
     const ev = EVENT_FILE.exec(path);
-    if (path === 'events/_envelope.schema.json') {
-      warnings.push(`${path} changed: it has no version, so review every event schema against the new envelope.`);
-      continue;
-    }
+    const isEnvelope = path === 'events/_envelope.schema.json';
     if (!isOpenApi && !ev) continue; // not a contract file (a README, say)
     const label = `${dir}/${path}`;
     if (status === 'A') continue; // new files need no bump
     if (status === 'D') {
-      if (ev?.[2] !== undefined) continue; // the follow-up PR deletes a previous-major file
+      if (ev?.[2] !== undefined && !isEnvelope) continue; // the follow-up PR deletes a previous-major file
       messages.push(`${label}: deleted. Contracts are not deleted in a normal PR (only a previous-major .v<N> file may be).`);
       continue;
     }
@@ -127,22 +134,45 @@ export function checkBump(opts: BumpOptions): BumpResult {
     const field = isOpenApi ? 'info.version' : 'x-schema-version';
     const oldText = showAt(repoRoot, mergeBase, label);
     const newText = showAt(repoRoot, 'HEAD', label);
-    const oldV = oldText === undefined ? undefined : versionOf(kind, oldText);
-    const newV = newText === undefined ? undefined : versionOf(kind, newText);
+    if (oldText === undefined) {
+      messages.push(`${label}: git could not read this file at the merge base ${mergeBase.slice(0, 10)} (git show failed)`);
+      continue;
+    }
+    if (newText === undefined) {
+      messages.push(`${label}: git could not read this file at HEAD (git show failed)`);
+      continue;
+    }
+    const oldParsed = versionOf(kind, oldText);
+    const newParsed = versionOf(kind, newText);
+    if (!oldParsed.parsed) {
+      messages.push(`${label}: the copy at the merge base does not parse, so its ${field} cannot be compared`);
+      continue;
+    }
+    if (!newParsed.parsed) {
+      messages.push(`${label}: the copy at HEAD does not parse`);
+      continue;
+    }
+    const oldV = oldParsed.version;
+    const newV = newParsed.version;
     if (newV === undefined) {
       messages.push(`${label}: no ${field} at HEAD`);
       continue;
     }
-    if (oldV === undefined) continue; // the old file had no version: nothing to compare with, contracts:check judges the new one
+    if (oldV === undefined) continue; // a parsed old file without the field: the version is added in this diff, contracts:check judges it
     if (oldV === newV) {
       messages.push(`${label}: changed but ${field} is still ${newV}. Bump it in the same diff (minor for a compatible change, major for a break).`);
       continue;
     }
-    if (compare(newV, oldV) < 0) {
+    const order = compare(newV, oldV);
+    if (order < 0) {
       messages.push(`${label}: ${field} went down, ${oldV} to ${newV}`);
       continue;
     }
-    if (kind === 'event' && ev && ev[2] === undefined) {
+    if (order === 0) {
+      messages.push(`${label}: ${field} ${oldV} to ${newV} is not a bump (a pre-release of the same numbers is not higher)`);
+      continue;
+    }
+    if (kind === 'event' && ev && ev[2] === undefined && !isEnvelope) {
       const oldMajor = Number(oldV.split('.')[0]);
       const newMajor = Number(newV.split('.')[0]);
       if (newMajor > oldMajor) {

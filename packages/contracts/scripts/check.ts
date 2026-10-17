@@ -14,7 +14,8 @@ const failures: string[] = [];
 const fail = (msg: string): void => {
   failures.push(msg);
 };
-const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+// Plain x.y.z only: a pre-release or build suffix is never a version bump (scripts/bump.ts), so contracts do not use one.
+const SEMVER = /^\d+\.\d+\.\d+$/;
 const METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
 const serviceIds = SERVICES.map((s) => s.id);
 
@@ -82,6 +83,10 @@ function checkEnvelope(): void {
     return;
   }
   if (env.$id !== ENVELOPE_ID) fail(`${label}: $id is ${JSON.stringify(env.$id)}, expected ${ENVELOPE_ID}`);
+  const envVersion = env['x-schema-version'];
+  if (typeof envVersion !== 'string' || !VERSION_RE.test(envVersion)) {
+    fail(`${label}: x-schema-version must be present and match ${VERSION_PATTERN} (for example "1.0"), got ${JSON.stringify(envVersion)}`);
+  }
   if (!sameList(env.required, ENVELOPE_FIELDS)) {
     fail(`${label}: envelope required must be exactly ${ENVELOPE_FIELDS.join(', ')}, got ${JSON.stringify(env.required)}`);
   }
