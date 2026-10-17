@@ -1,0 +1,137 @@
+[
+  {
+    "id": "gateway",
+    "name": "Gateway and web",
+    "language": "ts",
+    "folder": "services/gateway",
+    "schema": null,
+    "stream_prefix": null,
+    "skeleton": false
+  },
+  {
+    "id": "identity",
+    "name": "Identity and tenancy",
+    "language": "ts",
+    "folder": "services/identity",
+    "schema": "identity",
+    "stream_prefix": "e2e.identity",
+    "skeleton": false
+  },
+  {
+    "id": "billing",
+    "name": "Billing",
+    "language": "ts",
+    "folder": "services/billing",
+    "schema": "billing",
+    "stream_prefix": "e2e.billing",
+    "skeleton": false
+  },
+  {
+    "id": "ingest",
+    "name": "Ingest",
+    "language": "ts",
+    "folder": "services/ingest",
+    "schema": "ingest",
+    "stream_prefix": "e2e.ingest",
+    "skeleton": false
+  },
+  {
+    "id": "intel",
+    "name": "Solicitation intel",
+    "language": "ts",
+    "folder": "services/intel",
+    "schema": "intel",
+    "stream_prefix": "e2e.intel",
+    "skeleton": false
+  },
+  {
+    "id": "orchestrator",
+    "name": "Orchestrator",
+    "language": "ts",
+    "folder": "services/orchestrator",
+    "schema": "orchestrator",
+    "stream_prefix": "e2e.orchestrator",
+    "skeleton": false
+  },
+  {
+    "id": "modelgw",
+    "name": "Model gateway",
+    "language": "ts",
+    "folder": "services/modelgw",
+    "schema": "modelgw",
+    "stream_prefix": "e2e.modelgw",
+    "skeleton": false
+  },
+  {
+    "id": "drafting",
+    "name": "Drafting",
+    "language": "ts",
+    "folder": "services/drafting",
+    "schema": "drafting",
+    "stream_prefix": "e2e.drafting",
+    "skeleton": false
+  },
+  {
+    "id": "review",
+    "name": "Review",
+    "language": "ts",
+    "folder": "services/review",
+    "schema": "review",
+    "stream_prefix": "e2e.review",
+    "skeleton": false
+  },
+  {
+    "id": "render",
+    "name": "Render",
+    "language": "py",
+    "folder": "python/render",
+    "schema": "render",
+    "stream_prefix": "e2e.render",
+    "skeleton": false
+  },
+  {
+    "id": "evidence",
+    "name": "Evidence and repository",
+    "language": "ts",
+    "folder": "services/evidence",
+    "schema": "evidence",
+    "stream_prefix": "e2e.evidence",
+    "skeleton": false
+  },
+  {
+    "id": "comms",
+    "name": "Comms",
+    "language": "ts",
+    "folder": "services/comms",
+    "schema": "comms",
+    "stream_prefix": "e2e.comms",
+    "skeleton": false
+  },
+  {
+    "id": "portal",
+    "name": "Portal agent",
+    "language": "py",
+    "folder": "python/portal-agent",
+    "schema": "portal",
+    "stream_prefix": "e2e.portal",
+    "skeleton": false
+  },
+  {
+    "id": "drive",
+    "name": "Drive",
+    "language": "ts",
+    "folder": "services/drive",
+    "schema": "drive",
+    "stream_prefix": "e2e.drive",
+    "skeleton": false
+  },
+  {
+    "id": "notify",
+    "name": "Notifications and audit",
+    "language": "ts",
+    "folder": "services/notify",
+    "schema": "notify",
+    "stream_prefix": "e2e.notification",
+    "skeleton": false
+  }
+]

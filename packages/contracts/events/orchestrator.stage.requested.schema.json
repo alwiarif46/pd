@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/orchestrator.stage.requested",
+  "title": "orchestrator.stage.requested",
+  "x-owner": "orchestrator",
+  "x-stream": "e2e.orchestrator.stage.requested",
+  "x-schema-version": "1.0",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "unevaluatedProperties": false,
+  "properties": {
+    "type": {
+      "const": "orchestrator.stage.requested"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of orchestrator.stage.requested. Open for now. The chat that builds the owning service (orchestrator) tightens it."
+    }
+  }
+}

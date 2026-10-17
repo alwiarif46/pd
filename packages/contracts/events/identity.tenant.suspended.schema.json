@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/identity.tenant.suspended",
+  "title": "identity.tenant.suspended",
+  "x-owner": "identity",
+  "x-stream": "e2e.identity.tenant.suspended",
+  "x-schema-version": "1.0",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "unevaluatedProperties": false,
+  "properties": {
+    "type": {
+      "const": "identity.tenant.suspended"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of identity.tenant.suspended. Open for now. The chat that builds the owning service (identity) tightens it."
+    }
+  }
+}

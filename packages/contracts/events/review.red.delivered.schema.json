@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.e2e.local/events/review.red.delivered",
+  "title": "review.red.delivered",
+  "x-owner": "review",
+  "x-stream": "e2e.review.red.delivered",
+  "x-schema-version": "1.0",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://contracts.e2e.local/events/_envelope"
+    }
+  ],
+  "unevaluatedProperties": false,
+  "properties": {
+    "type": {
+      "const": "review.red.delivered"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Payload of review.red.delivered. Open for now. The chat that builds the owning service (review) tightens it."
+    }
+  }
+}

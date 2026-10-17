@@ -28,8 +28,8 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 | 2 Design source | e2e/c1-02-design | merged (#50) | Opus review: 1 major (legacy var collision) fixed and browser-verified |
 | 3 to 6 | - | already merged | none |
 | 7 Restructure | e2e/c1-07-restructure | merged (#51, by owner) | Fable: no majors. Minor fixes follow in 7b |
-| 7b Review fixes | e2e/c1-07b-restructure-fixes | in review | turbo inputs, CODEOWNERS, AGENTS.md, CLAUDE.md accuracy |
-| 8 Contracts | e2e/c1-08-contracts | planned | |
+| 7b Review fixes | e2e/c1-07b-restructure-fixes | merged (#55) | |
+| 8 Contracts | e2e/c1-08-contracts | in review | contracts + stage-interface; CI wiring of contracts:check is PR 12 |
 | 9 Skeletons | e2e/c1-09-skeletons | planned | |
 | 10 Testing | e2e/c1-10-testing | planned | |
 | 11 Local stack | e2e/c1-11-stack | planned | |

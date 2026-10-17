@@ -1,0 +1,30 @@
+openapi: 3.1.0
+info:
+  title: Drafting service
+  version: 0.1.0
+x-service: drafting
+paths:
+  /healthz:
+    get:
+      operationId: healthz
+      summary: Liveness and schema migration level
+      responses:
+        '200':
+          description: The service is up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [service, version, schemaMigration]
+      properties:
+        service:
+          type: string
+        version:
+          type: string
+        schemaMigration:
+          type: string
+          description: Name of the last applied migration for this service's schema.

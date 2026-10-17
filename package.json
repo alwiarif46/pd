@@ -22,7 +22,8 @@
     "clean": "turbo run clean && rm -rf node_modules",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "contracts:check": "pnpm --filter @pd/contracts check"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
