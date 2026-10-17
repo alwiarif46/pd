@@ -311,6 +311,81 @@ jobs:
         # mypy is not a dependency of the workspace; --with adds it for this command only (pinned to the version that passed when this job was written).
         run: uv run --frozen --with mypy==2.4.0 mypy python/render/src python/portal-agent/src
 
+  compose-stack:
+    # The Compose local stack (infra/compose/local.yml) for real: Postgres with pgvector, Redis, Zitadel, SeaweedFS, ClamAV,
+    # and the sandbox image. The first run of this stack was in CI, so every step prints what it needs to be debugged.
+    # local.env is made from the example (dev-only placeholders, not secrets) and is deleted with the stack.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      COMPOSE: docker compose -f infra/compose/local.yml --env-file infra/compose/local.env
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install
+      - name: Create local.env from the example
+        run: cp infra/compose/local.env.example infra/compose/local.env
+      - name: Validate the Compose file
+        run: $COMPOSE config --quiet
+      - name: Boot the stack (build the sandbox, wait for every healthcheck)
+        # 600 s: the ClamAV healthcheck allows a 180 s start period plus 10 tries of 30 s while freshclam downloads signatures.
+        # s3-init is a one-shot that exits 0 by design. `up --wait` counts any exited container as a failure, so it is
+        # left out of the wait set and run in the next step, where a non-zero exit fails the job.
+        run: $COMPOSE up -d --build --wait --wait-timeout 600 postgres redis s3 clamav zitadel sandbox
+      - name: Create the S3 bucket (one-shot)
+        run: $COMPOSE run --rm --no-deps s3-init
+      - name: Container state
+        if: always()
+        run: $COMPOSE ps -a
+      - name: ClamAV diagnostics (OOM kill, processes, health check output)
+        if: failure()
+        run: |
+          docker inspect pd-local-clamav-1 --format '{{json .State}}' || true
+          $COMPOSE exec -T clamav ps aux || true
+          $COMPOSE exec -T clamav /usr/local/bin/clamdcheck.sh || echo "clamdcheck exit $?"
+          $COMPOSE exec -T clamav sh -c 'cat /usr/local/bin/clamdcheck.sh; echo ---; ls -l /tmp/*.sock /run/clamav 2>&1; echo ---; tail -n 40 /var/log/clamav/clamd.log 2>&1; echo ---; grep -E "^(TCP|Local|Log)" /etc/clamav/clamd.conf' || true
+          free -m || true
+      - name: pgvector and the databases
+        run: python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env postgres
+      - name: pnpm migrate applies the 15 schemas in order (twice, the second run must change nothing)
+        run: |
+          set -euo pipefail
+          # Read single values: the env file is for Compose, not for sourcing (a value such as PD Local has a space).
+          envval() { sed -n "s/^$1=\([^ ]*\).*/\1/p" infra/compose/local.env; }
+          export PD_ADMIN_DATABASE_URL="postgres://$(envval POSTGRES_USER):$(envval POSTGRES_PASSWORD)@127.0.0.1:$(envval POSTGRES_PORT)/$(envval E2E_DB_NAME)"
+          pnpm migrate
+          pnpm migrate
+          python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env schemas
+      - name: 'Schema isolation against the Compose cluster (a service role cannot read another service schema)'
+        # The cluster is fresh and the migrate step above gave no service role a login password, so the guard passes without the opt-in.
+        run: |
+          set -euo pipefail
+          envval() { sed -n "s/^$1=\([^ ]*\).*/\1/p" infra/compose/local.env; }
+          export CI=true TEST_DATABASE_URL="postgres://$(envval POSTGRES_USER):$(envval POSTGRES_PASSWORD)@127.0.0.1:$(envval POSTGRES_PORT)/postgres"
+          pnpm --filter @pd/service-kit exec vitest run test/isolation.test.ts test/owner-rls.test.ts
+      - name: ClamAV scans the EICAR test string as infected
+        run: python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env clamav
+      - name: SeaweedFS S3 put and get roundtrip (signed request, path-style)
+        run: python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env s3
+      - name: Zitadel is ready and wrote the machine key
+        run: python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env zitadel
+      - name: The sandbox runs hardened and has no network
+        run: python3 infra/compose/ci/stack-smoke.py --env-file infra/compose/local.env sandbox
+      - name: Compose logs (on failure)
+        if: failure()
+        run: $COMPOSE logs --no-color --tail 200
+      - name: Stop the stack and delete its volumes
+        if: always()
+        run: |
+          $COMPOSE down -v --remove-orphans
+          rm -f infra/compose/local.env
+
   e2e-web:
     # Playwright smoke test of the built web app (services/gateway/web/e2e), served by vite preview.
     runs-on: ubuntu-latest
@@ -435,9 +510,9 @@ jobs:
       && needs.typecheck.result == 'success' && needs.lint.result == 'success' && needs.build.result == 'success'
       && needs.test-web.result == 'success' && needs.test-api.result == 'success' && needs.test-infra.result == 'success'
       && needs.restore-drill.result == 'success' && needs.contracts.result == 'success' && needs.test-services.result == 'success'
-      && needs.test-python.result == 'success' && needs.e2e-web.result == 'success'
+      && needs.test-python.result == 'success' && needs.compose-stack.result == 'success' && needs.e2e-web.result == 'success'
       && needs.push-images.result == 'success'
-    needs: [typecheck, lint, build, test-web, test-api, test-infra, restore-drill, contracts, test-services, test-python, e2e-web, push-images]
+    needs: [typecheck, lint, build, test-web, test-api, test-infra, restore-drill, contracts, test-services, test-python, compose-stack, e2e-web, push-images]
     timeout-minutes: 20
     runs-on: ubuntu-latest
     environment: production
