@@ -55,16 +55,21 @@ function sectionBody(lines: string[], heading: string): string {
 }
 
 function parseSkillMarkdown(content: string, skillName: string): Skill {
-  const lines = content.split('\n');
-  let version = '1.0.0';
-  let status = 'draft';
+  const lines = content.split(/\r?\n/);
+  let version = '';
+  let status = '';
   for (const line of lines) {
-    if (line.startsWith('**Version:**')) {
+    if (line.startsWith('## ')) {
+      break;
+    }
+    if (!version && line.startsWith('**Version:**')) {
       version = line.slice('**Version:**'.length).trim();
-    } else if (line.startsWith('**Status:**')) {
+    } else if (!status && line.startsWith('**Status:**')) {
       status = line.slice('**Status:**'.length).trim();
     }
   }
+  version ||= '1.0.0';
+  status ||= 'draft';
   return {
     name: skillName,
     version,

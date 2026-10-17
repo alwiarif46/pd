@@ -40,4 +40,21 @@ describe('loadSkill', () => {
     write('demo', '## Instructions\nx\n');
     expect(loadSkill('demo').version).toBe('1.0.0');
   });
+
+  it('handles CRLF files and a missing space after the label', () => {
+    write('crlf', '**Version:** 2.0.0\r\n\r\n## Instructions\r\nx\r\n');
+    write('tight', '**Version:**3.0.0\n\n## Instructions\nx\n');
+    expect(loadSkill('crlf').version).toBe('2.0.0');
+    expect(loadSkill('tight').version).toBe('3.0.0');
+  });
+
+  it('falls back to 1.0.0 for a blank value', () => {
+    write('demo', '**Version:**\n\n## Instructions\nx\n');
+    expect(loadSkill('demo').version).toBe('1.0.0');
+  });
+
+  it('ignores Version lines inside the body', () => {
+    write('demo', '**Version:** 1.2.0\n\n## Instructions\n**Version:** 9.9.9\n');
+    expect(loadSkill('demo').version).toBe('1.2.0');
+  });
 });
