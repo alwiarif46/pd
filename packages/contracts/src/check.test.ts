@@ -1,16 +1,20 @@
-import { mkdtempSync, mkdirSync, writeFileSync, cpSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
-import { checkContracts, contractsRoot } from './check.js';
+import { checkContracts, checkServiceDrift, contractsRoot } from './check.js';
 
 function copyRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), 'contracts-'));
-  cpSync(join(contractsRoot, 'openapi'), join(dir, 'openapi'), { recursive: true });
-  cpSync(join(contractsRoot, 'events'), join(dir, 'events'), { recursive: true });
+  cpSync(join(contractsRoot, 'openapi'), join(dir, 'openapi'), {
+    recursive: true,
+  });
+  cpSync(join(contractsRoot, 'events'), join(dir, 'events'), {
+    recursive: true,
+  });
   return dir;
 }
 
@@ -22,7 +26,6 @@ describe('checkContracts', () => {
   it('reports a service with no OpenAPI file', () => {
     const dir = copyRoot();
     writeFileSync(join(dir, 'openapi/billing.yaml'), '');
-    mkdirSync(join(dir, 'x'), { recursive: true });
     expect(checkContracts(dir).map((p) => p.file)).toContain('openapi/billing.yaml');
   });
 
@@ -57,5 +60,18 @@ describe('event schemas', () => {
   it('rejects an event without tenant_id', () => {
     const { tenant_id: _omit, ...rest } = event;
     expect(validate(rest)).toBe(false);
+  });
+});
+
+describe('checkServiceDrift', () => {
+  it('passes when routes match the contract', () => {
+    expect(checkServiceDrift('identity', ['GET /health'])).toEqual([]);
+  });
+
+  it('reports a route missing from the contract and one missing from the code', () => {
+    expect(checkServiceDrift('identity', ['GET /tenants']).map((p) => p.message)).toEqual([
+      'route GET /tenants is not in the contract',
+      'contract route GET /health is not implemented',
+    ]);
   });
 });

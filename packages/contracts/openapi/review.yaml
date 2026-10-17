@@ -8,7 +8,7 @@ paths:
       operationId: reviewHealth
       summary: Liveness check
       responses:
-        "200":
+        '200':
           description: The service is up
           content:
             application/json:

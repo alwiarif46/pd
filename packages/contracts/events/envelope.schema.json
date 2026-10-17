@@ -4,7 +4,13 @@
   "title": "Event envelope",
   "description": "Fields every event carries (09 s2, event rules). Each event schema extends this envelope.",
   "type": "object",
-  "required": ["event_id", "tenant_id", "schema_version", "occurred_at", "payload"],
+  "required": [
+    "event_id",
+    "tenant_id",
+    "schema_version",
+    "occurred_at",
+    "payload"
+  ],
   "properties": {
     "event_id": { "type": "string", "format": "uuid" },
     "tenant_id": { "type": "string", "format": "uuid" },

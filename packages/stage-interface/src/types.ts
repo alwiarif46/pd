@@ -18,7 +18,7 @@ export interface SkillLoader {
 export interface StageContext {
   tenantId: string;
   runId: string;
-  skills: SkillLoader;
+  skillLoader: SkillLoader;
   signal?: AbortSignal;
 }
 
@@ -30,7 +30,8 @@ export interface GateResult {
 
 export interface StageResult<Output> {
   output: Output;
-  skill: SkillRef;
+  /** Every skill the handler ran, stored on the stage record. */
+  skills: SkillRef[];
 }
 
 /**
@@ -39,8 +40,8 @@ export interface StageResult<Output> {
  */
 export interface StageHandler<Input = unknown, Output = unknown> {
   readonly key: StageKey;
-  /** Name of the skill this handler loads through the interface. */
-  readonly skill: string;
+  /** Names of the skills this handler loads through the interface. */
+  readonly skills: readonly string[];
   /** Throws on malformed input. */
   parseInput(raw: unknown): Input;
   run(input: Input, ctx: StageContext): Promise<StageResult<Output>>;

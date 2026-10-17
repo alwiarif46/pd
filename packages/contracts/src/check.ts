@@ -93,3 +93,36 @@ export function checkContracts(root: string = contractsRoot): ContractProblem[] 
   }
   return problems;
 }
+
+/**
+ * Drift check for one service: compares the routes its code registers with the paths in its OpenAPI file.
+ * A service test calls this with its own route list, as `"GET /health"`. Path parameters use the
+ * OpenAPI form, `/tenants/{id}`.
+ */
+export function checkServiceDrift(
+  service: Service,
+  registeredRoutes: readonly string[],
+  root: string = contractsRoot,
+): ContractProblem[] {
+  const file = `openapi/${service}.yaml`;
+  const doc = parse(readFileSync(join(root, file), 'utf8')) as {
+    paths?: Record<string, Record<string, unknown>>;
+  };
+  const declared = new Set<string>();
+  for (const [path, item] of Object.entries(doc.paths ?? {})) {
+    for (const method of METHODS) if (item[method]) declared.add(`${method.toUpperCase()} ${path}`);
+  }
+  const registered = new Set(registeredRoutes.map((r) => r.trim()));
+  const problems: ContractProblem[] = [];
+  for (const route of registered) {
+    if (!declared.has(route)) problems.push({ file, message: `route ${route} is not in the contract` });
+  }
+  for (const route of declared) {
+    if (!registered.has(route))
+      problems.push({
+        file,
+        message: `contract route ${route} is not implemented`,
+      });
+  }
+  return problems;
+}

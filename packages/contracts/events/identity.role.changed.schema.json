@@ -8,8 +8,11 @@
     "schema_version": { "const": 1 },
     "payload": {
       "type": "object",
-      "required": ["user_id","role"],
-      "properties": { "user_id": { "type": "string", "format": "uuid" }, "role": { "type": "string" } },
+      "required": ["user_id", "role"],
+      "properties": {
+        "user_id": { "type": "string", "format": "uuid" },
+        "role": { "type": "string" }
+      },
       "additionalProperties": false
     }
   }

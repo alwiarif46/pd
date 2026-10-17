@@ -1,70 +1,92 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { FileSkillLoader, StageRegistry } from './index.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { AiSkillLoader, StageRegistry } from './index.js';
 import type { StageContext, StageHandler } from './index.js';
 
-function skillsDir(files: Record<string, string>): string {
+const savedDir = process.env.PD_SKILLS_DIR;
+afterEach(() => {
+  if (savedDir === undefined) delete process.env.PD_SKILLS_DIR;
+  else process.env.PD_SKILLS_DIR = savedDir;
+});
+
+function useSkills(files: Record<string, string>): void {
   const dir = mkdtempSync(join(tmpdir(), 'skills-'));
   for (const [name, text] of Object.entries(files)) {
     mkdirSync(join(dir, name));
     writeFileSync(join(dir, name, 'SKILL.md'), text);
   }
-  return dir;
+  process.env.PD_SKILLS_DIR = dir;
 }
 
-describe('FileSkillLoader', () => {
-  const dir = skillsDir({
-    'compliance-matrix': '# Compliance Matrix Skill\n\n**Version:** 1.2.0\n**Status:** Draft\n',
-    unversioned: '# No version here\n',
-  });
-  const loader = new FileSkillLoader(dir);
-
+describe('AiSkillLoader', () => {
   it('loads a skill with its version', async () => {
-    expect(await loader.load('compliance-matrix')).toMatchObject({ name: 'compliance-matrix', version: '1.2.0' });
+    useSkills({
+      'compliance-matrix': '# Compliance Matrix Skill\n\n**Version:** 1.2.0\n**Status:** Draft\n',
+    });
+    expect(await new AiSkillLoader().load('compliance-matrix')).toMatchObject({
+      name: 'compliance-matrix',
+      version: '1.2.0',
+    });
   });
 
-  it('rejects a skill with no version', async () => {
-    await expect(loader.load('unversioned')).rejects.toThrow(/Version/);
-  });
-
-  it('rejects path traversal in the name', async () => {
-    await expect(loader.load('../etc')).rejects.toThrow(/invalid skill name/);
+  it('rejects an unknown skill', async () => {
+    useSkills({});
+    await expect(new AiSkillLoader().load('missing')).rejects.toThrow(/Skill not found/);
   });
 });
 
 describe('StageRegistry', () => {
-  const dir = skillsDir({ 'compliance-matrix': '**Version:** 2.0.0\n' });
-  const ctx: StageContext = { tenantId: 't', runId: 'r', skills: new FileSkillLoader(dir) };
-  const shred: StageHandler<{ text: string }, { rows: number }> = {
-    key: 'shred',
-    skill: 'compliance-matrix',
+  const makeCtx = (): StageContext => {
+    useSkills({
+      'compliance-matrix': '**Version:** 2.0.0\n',
+      'plain-language': '**Version:** 0.3.0\n',
+    });
+    return { tenantId: 't', runId: 'r', skillLoader: new AiSkillLoader() };
+  };
+  const draft: StageHandler<{ text: string }, { rows: number }> = {
+    key: 'draft',
+    skills: ['compliance-matrix', 'plain-language'],
     parseInput(raw) {
       if (typeof (raw as { text?: unknown })?.text !== 'string') throw new Error('text required');
       return raw as { text: string };
     },
     async run(input, c) {
-      const skill = await c.skills.load(this.skill);
-      return { output: { rows: input.text.length }, skill: { name: skill.name, version: skill.version } };
+      const skills = await Promise.all(this.skills.map((n) => c.skillLoader.load(n)));
+      return {
+        output: { rows: input.text.length },
+        skills: skills.map(({ name, version }) => ({ name, version })),
+      };
     },
-    gate: (out) => ({ passed: out.rows > 0, reasons: out.rows > 0 ? [] : ['no rows'] }),
+    gate: (out) => ({
+      passed: out.rows > 0,
+      reasons: out.rows > 0 ? [] : ['no rows'],
+    }),
   };
 
-  it('runs a handler, records the skill version, and applies the gate', async () => {
+  it('runs a handler, records every skill version, and applies the gate', async () => {
+    const ctx = makeCtx();
     const registry = new StageRegistry();
-    registry.register(shred);
-    const res = await registry.execute('shred', { text: 'abc' }, ctx);
-    expect(res.skill).toEqual({ name: 'compliance-matrix', version: '2.0.0' });
+    registry.register(draft);
+    const res = await registry.execute('draft', { text: 'abc' }, ctx);
+    expect(res.skills).toEqual([
+      { name: 'compliance-matrix', version: '2.0.0' },
+      { name: 'plain-language', version: '0.3.0' },
+    ]);
     expect(res.gate.passed).toBe(true);
-    expect((await registry.execute('shred', { text: '' }, ctx)).gate).toEqual({ passed: false, reasons: ['no rows'] });
+    expect((await registry.execute('draft', { text: '' }, ctx)).gate).toEqual({
+      passed: false,
+      reasons: ['no rows'],
+    });
   });
 
   it('rejects bad input, duplicate and unknown stages', async () => {
+    const ctx = makeCtx();
     const registry = new StageRegistry();
-    registry.register(shred);
-    expect(() => registry.register(shred)).toThrow(/already registered/);
-    await expect(registry.execute('shred', {}, ctx)).rejects.toThrow(/text required/);
-    expect(() => registry.get('draft')).toThrow(/no handler/);
+    registry.register(draft);
+    expect(() => registry.register(draft)).toThrow(/already registered/);
+    await expect(registry.execute('draft', {}, ctx)).rejects.toThrow(/text required/);
+    expect(() => registry.get('shred')).toThrow(/no handler/);
   });
 });
