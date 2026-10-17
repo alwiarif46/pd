@@ -5,7 +5,7 @@ import { ORG_CLAIM, startMockOidc, TENANT_A, TENANT_B, type MockOidc } from '../
 
 let oidc: MockOidc;
 beforeAll(async () => {
-  oidc = await startMockOidc({ clientId: 'web-client' });
+  oidc = await startMockOidc({ clientId: 'web-client', idTokenUserinfo: true, legacyOrgClaim: true });
 });
 afterAll(async () => {
   await oidc.close();
@@ -33,7 +33,7 @@ describe('mock OIDC issuer', () => {
     const doc = (await (await fetch(`${oidc.url}/.well-known/openid-configuration`)).json()) as Record<string, unknown>;
     expect(doc.issuer).toBe(oidc.issuer);
     expect(doc.jwks_uri).toBe(oidc.jwksUrl);
-    expect(doc.token_endpoint).toBe(`${oidc.issuer}/token`);
+    expect(doc.token_endpoint).toBe(`${oidc.issuer}/oauth/v2/token`);
     expect(doc.id_token_signing_alg_values_supported).toEqual(['RS256']);
   });
 

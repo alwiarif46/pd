@@ -2,3 +2,4 @@
 export * from './oidc.js';
 export * from './s3.js';
 export * from './clamd.js';
+export * from './zitadel.js';
