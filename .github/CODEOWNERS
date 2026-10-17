@@ -1,0 +1,19 @@
+# Each service folder names its owner (09 s8 item 1). One owner for now; split per team later.
+/services/gateway/ @alwiarif46
+/services/identity/ @alwiarif46
+/services/billing/ @alwiarif46
+/services/ingest/ @alwiarif46
+/services/intel/ @alwiarif46
+/services/orchestrator/ @alwiarif46
+/services/modelgw/ @alwiarif46
+/services/drafting/ @alwiarif46
+/services/review/ @alwiarif46
+/services/evidence/ @alwiarif46
+/services/comms/ @alwiarif46
+/services/drive/ @alwiarif46
+/services/notify/ @alwiarif46
+/services/worker/ @alwiarif46
+/python/ @alwiarif46
+/packages/ @alwiarif46
+/infra/ @alwiarif46
+/docs/plans/ @alwiarif46

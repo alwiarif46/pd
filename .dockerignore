@@ -15,6 +15,6 @@ docs
 plans
 skills
 data
-apps/*/test
+services/**/test
 **/*.test.ts
 **/*.test.tsx

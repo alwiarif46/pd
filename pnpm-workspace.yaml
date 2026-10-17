@@ -1,4 +1,6 @@
 packages:
-  - "apps/*"
+  - "services/*"
+  - "services/gateway/web"
+  - "services/ingest/sandbox"
   - "packages/*"
   - "evals"

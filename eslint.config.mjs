@@ -16,7 +16,7 @@ export default tseslint.config(
       // v0's drop folder: never built, type-checked, or linted (CLAUDE.md).
       'design/**',
       // shadcn/ui output from the CLI; not edited by hand (CLAUDE.md).
-      'apps/web/src/components/ui/**',
+      'services/gateway/web/src/components/ui/**',
     ],
   },
   js.configs.recommended,
@@ -29,7 +29,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['apps/web/**/*.{ts,tsx}'],
+    files: ['services/gateway/web/**/*.{ts,tsx}'],
     languageOptions: { globals: { ...globals.browser } },
     plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh },
     rules: {
@@ -40,7 +40,7 @@ export default tseslint.config(
   {
     // v0 screens integrated as-is (CLAUDE.md: keep v0's code so re-integration is a clean diff).
     // Changes here go through v0, so only rules that flag real bugs apply.
-    files: ['apps/web/src/ui/**'],
+    files: ['services/gateway/web/src/ui/**'],
     rules: {
       // False positive on ref objects passed to custom props such as `inputRef={refs.password}`.
       'react-hooks/refs': 'off',
@@ -52,9 +52,9 @@ export default tseslint.config(
     // Legacy hand-written screens, retired as v0 screens replace them (CLAUDE.md, "Front-end setup").
     // Only the hooks rule that catches real bugs; the compiler-era rules apply to new code.
     files: [
-      'apps/web/src/App.tsx',
-      'apps/web/src/screens/**',
-      'apps/web/src/components/*.tsx',
+      'services/gateway/web/src/App.tsx',
+      'services/gateway/web/src/screens/**',
+      'services/gateway/web/src/components/*.tsx',
     ],
     rules: {
       ...Object.fromEntries(Object.keys(reactHooks.configs.recommended.rules).map((rule) => [rule, 'off'])),
@@ -63,8 +63,8 @@ export default tseslint.config(
   },
   {
     // api: a reply sent inside a withOrg/inOrg callback goes out before COMMIT. Use inOrg's
-    // `respond(code, body)` or return a value instead (apps/api/src/scope.ts).
-    files: ['apps/api/src/**/*.ts'],
+    // `respond(code, body)` or return a value instead (services/gateway/src/scope.ts).
+    files: ['services/gateway/src/**/*.ts'],
     rules: {
       'no-restricted-syntax': ['error', {
         selector: "CallExpression[callee.name=/^(withOrg|inOrg)$/] > :function Identifier[name='reply']",

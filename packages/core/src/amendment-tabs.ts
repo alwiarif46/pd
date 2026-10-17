@@ -1,7 +1,7 @@
 /**
  * Amendment step 8 (04 s3.1, PR5): the bid facts and schedule dates an amendment changes. Pure
  * functions shared by the worker's ai:amendment-tabs step, the api, and migration 0011's backfill
- * (which repeats factKeyOf in SQL; apps/api/test/migration-amendment-tabs.test.ts keeps the two in
+ * (which repeats factKeyOf in SQL; services/gateway/test/migration-amendment-tabs.test.ts keeps the two in
  * step).
  *
  * Supersede by key: a fact or date row carries a key (bid_facts.fact_key, schedule_activities.
