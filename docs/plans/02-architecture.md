@@ -1,178 +1,283 @@
-# 02 — Architecture
+# 02: Architecture
 
-**Status:** Draft v2 · 13 Oct 2026
+**Status:** Draft v2 · 17 Oct 2026
+
+E2E Proposal is a set of microservices. It absorbs PD entirely. PD already takes a solicitation set from upload to a checked compliance matrix. The PD repo, renamed to E2E Proposal, becomes the E2E monorepo. PD's code becomes ingest, solicitation intel, identity, billing, the web shell, and `infra/`. New services turn the matrix into finished volumes. 09 holds each service's contract. PD plan references read as (PD 02 s4).
 
 ## 1. Stack
 
 | Layer | Choice | Why |
 |---|---|---|
-| Language | TypeScript, front end and server | One language across the app |
-| Front end | React with Vite | Sidebar tabs, tables, forms; large hiring pool |
-| PDF viewer | pdf.js | Page view with the quote highlighted; reads files by range requests |
-| API server | Node.js with Fastify | Fast, typed request validation |
-| Database | PostgreSQL 16 | Row-level security for tenants, JSON columns for AI output |
-| ORM and migrations | Drizzle | Typed queries, plain SQL migrations |
-| Job queue | BullMQ on Redis, with `appendonly yes` | Retries, concurrency limits per job type; queue survives a Redis restart |
-| Sessions | PostgreSQL `sessions` table | Sessions survive a Redis restart and can be revoked by row |
-| File checks | qpdf and Poppler `pdfinfo`, in the sandbox | Encryption type and page count before any heavy work |
-| DOCX conversion | LibreOffice headless, in the sandbox (DOCX to PDF). Mammoth only as a text fallback if conversion fails | Real page numbers and a PDF the viewer can highlight |
-| Text extraction | Poppler `pdftotext` (PDF), SheetJS (XLSX), in the sandbox | Page-level text with page numbers |
-| OCR | OCRmyPDF with Tesseract, in the sandbox, `--jobs 2` | Free, runs on the server |
-| Exports | ExcelJS (XLSX), docx library (DOCX) | Matrices export to Excel, forms to Word |
-| AI access | Own provider layer (section 5) | Swap DeepInfra, Anthropic, Ollama by setting |
-| Archive storage | Off-server object storage, files encrypted before upload. 🟨 **OPEN:** provider (01 s4) | Keeps originals after their live date without filling the server |
-| Payments | Stripe Billing, Checkout, Customer Portal | Subscriptions per organization |
-| SMS | Telnyx | Phone verification codes; Shaavir already has an account |
-| Email | Transactional email provider 🟨 **OPEN** | Verification, invites, receipts |
+| TypeScript services | Node 20, Fastify, Drizzle, pnpm and Turbo | PD's stack (PD 02 s1). Thirteen of the fifteen services |
+| Python services | Python 3.12, FastAPI, one uv workspace | Render and the portal agent. The skill scripts and python-docx are Python |
+| Web | React with Vite | PD's web shell, with PD's tabs as E2E features (09 s7) |
+| Database | One PostgreSQL 16 cluster, one schema per service, row-level security in each | Strong isolation with one cluster to run and back up |
+| Identity | Self-hosted Zitadel (AGPL-3.0), wrapped by the identity service | Decided. Credentials, MFA, passkeys, Google, Microsoft, and SAML live in Zitadel; `tenant_id`, memberships, and invites live in our schema (09 s4.2) |
+| Vector search | pgvector in the evidence schema | Repository fetch by meaning, inside the tenant |
+| Events | Redis Streams on the self-hosted Redis container, decided | Durable, replayable events between services, on the Redis that BullMQ already uses. No NATS (09 s2) |
+| In-service queues | PD's BullMQ on Redis inside ingest and intel | PD's jobs move as built |
+| Object storage | S3-compatible, encrypted | Run files, the repository, and packages outgrow one disk |
+| Render | python-docx, LibreOffice headless (MPL 2.0), Poppler, pdfplumber, librsvg | DOCX, PDF, page images, page geometry, SVG (01 s5) |
+| Model access | The model gateway service, built from PD's provider layer | One place for keys, rate limits, metering, and the cost cap |
+| Email | Gmail and Microsoft 365 connections, in the comms service | Mail leaves from the tenant's own address (s7.1) |
+| Working documents | Shaavir Drive, in the Drive service | Pink and working documents per tenant (s7.2) |
+| Containers | One per service, deployed with PD's hosting adapters | Hosting stays OPEN until the tool is built (01 s1) |
 
-## 2. Components
+## 2. Services
+
+Fifteen services. 09 s3 lists language, server role, and PD source for each.
 
 ```
-Browser (React app)
+Browser (E2E web, with PD's tabs as features)
    │  HTTPS (Cloudflare → nginx)
    ▼
-api (Fastify)
-   ├── Auth, sessions, organizations, members, invites
-   ├── Bids, tabs, rows, row detail and edit history
-   ├── Upload sessions (20 MB chunks, MB cap check, joined on disk, queue scan)
-   ├── Plan limits and RFP credit reservation
-   ├── Stripe webhooks (stored, then processed by a system job)
-   └── Job status (polling endpoint with queue position)
+[1] Gateway / BFF ── verifies tokens from [2], routes, composes screens, streams run updates
    │
-   ├── PostgreSQL (all app data, tenant-scoped)
-   ├── Redis (queues, rate limits)
-   └── /data/files (uploads, viewer copies, upload chunks, exports)
-   ▲
-worker (BullMQ; AI and database work only, never opens an uploaded file)
-   ├── scan        ClamAV check through clamd
-   ├── file        asks the sandbox runner to process a file; validates and stores the result
-   ├── marking     CUI and export-control marking check on the extracted text
-   ├── classify    tag pages: instructions, evaluation, scope, terms, attachments
-   ├── ai:*        compliance, amendment-diff, dates, overview, outline, resume, review, production, orals
-   ├── export      XLSX and DOCX files
-   ├── retention   archive moves, restores, archive purges, resume deletion at 90 days
-   └── cleanup     expired exports, abandoned upload sessions, orphan files
-   │
-   ▼
-sandbox (one container per file job; no network, no secrets; see 01 s2.1)
-   └── encryption check, page count, DOCX to PDF, pdftotext, OCR → JSON page text and page images
+   ├── [2] Identity and tenancy   tenant_id, memberships, roles; wraps Zitadel (MFA, passkeys, SSO)
+   ├── [3] Billing                plans, credits, recharge, font fee, Stripe
+   ├── [4] Ingest                 upload, ClamAV, sandbox, OCR, marking, classify   (from PD)
+   ├── [5] Solicitation intel     shred, matrix, dates, bid facts, amendments, fit  (from PD)
+   ├── [6] Orchestrator           run state machine, stages, gates, resume, cost cap
+   ├── [8] Drafting               worksheet, outline, pages, blocks, locks, NEEDs
+   ├── [9] Review                 Red, Gold, White Glove, findings, diff
+   ├── [10] Render (Python)       format lock, assembly, numbering, PDF, page count, package
+   ├── [11] Evidence and repo     evidence, repository, pgvector, learning
+   ├── [12] Comms                 Gmail and M365, Q&A, request and collect, eBuy inbound
+   ├── [13] Portal agent (Python) isolated host, human-approved logins
+   ├── [14] Drive                 Shaavir Drive folders and read-back
+   └── [15] Notifications, audit  alerts, email notices, audit log
 
-Off the server: archive storage (encrypted files), off-site database backups
+[7] Model gateway ── Anthropic, reviewer model, image provider, rate buckets, metering
+    (called by 5, 6, 8, 9, 10, 11, 12, 13; never by the browser)
+
+Shared: Postgres cluster (schema per service) · Redis Streams events · object storage
 ```
 
-The worker validates the sandbox's JSON against a schema before anything reaches the database.
+Rules that hold across services:
+- No service reads another service's schema. It calls an API or consumes an event.
+- No service opens an uploaded file except ingest, through PD's sandbox. Files reach a model only as text and page images that ingest or render produced.
+- Only the model gateway holds model keys.
+- The orchestrator never drafts. It asks the owning service to run a stage.
 
-## 3. Request flow: upload to compliance matrix
+## 3. PD reuse map
 
-1. User opens a bid and starts one upload session per file. The session declares the total size, the sha256, and the chunk count (`upload_sessions`, 03 s2).
-2. api checks that the declared size fits what is left of the bid's MB cap (06 s3), that the same sha256 is not already on the bid, and, for the bid's first `solicitation` file, that a credit can be reserved (06 s4).
-3. The browser sends 20 MB chunks, each with its index and the chunk count. The api checks order and the running total against the declared size and the cap. Sessions not completed in 24 hours expire and their chunks are deleted.
-4. On completion the api checks the sha256, stores the file, reserves the credit if needed, and queues `scan`.
-5. worker scans the file. Infected files are deleted and the user sees an error.
-6. The sandbox checks encryption (files that need a password to open are rejected) and page count, converts DOCX to PDF, extracts text per page, and runs OCR on pages with no text layer.
-7. worker runs the marking check. If a CUI or export-control marking is found, AI work on that file stops until the user confirms (07 s3).
-8. worker reads the solicitation number and checks it against the bid's `solicitation_key` (06 s4), then runs `classify`, chunk, and pre-scan.
-9. worker runs the AI jobs for free tabs: overview facts, dates, compliance matrix.
-10. Each job writes results with the document, page, page end, and exact quote (03 s3.1), then marks the job done. When the compliance matrix job succeeds, the reserved credit is consumed. If it fails, the credit is released.
-11. The browser polls job status every 3 seconds and shows progress per step and the queue position.
-12. User reviews, edits, and exports.
+PD's code stays in its own repo, which is renamed to E2E Proposal and restructured into services (09 s6). No code is copied. No PD app survives on its own.
 
-An amendment follows steps 1 to 8, then runs the amendment flow in 04 s3.1 instead of a full run. An attachment added later runs the full passes on its own text and merges into the matrix.
-
-## 4. Multi-tenancy
-
-- One shared database. Every tenant table has an `org_id` column.
-- Row-level security on every tenant table, with `FORCE ROW LEVEL SECURITY` so policies apply even to the table owner.
-- Every API request and every worker job runs inside a transaction that starts with `select set_config('app.org_id', $1, true)`. The `true` makes the setting transaction-local, so a pooled connection never carries one tenant's setting into the next request. Policies compare `org_id` with `current_setting('app.org_id')`. A transaction with no setting sees no rows.
-- Database roles:
-
-| Role | Used by | Rights |
+| PD component | E2E service | Status |
 |---|---|---|
-| `pd_owner` | Migrations only | Owns the tables. Never used by the running app |
-| `pd_app` | api and worker | Not the table owner. `NOBYPASSRLS`. Reaches tenant tables only through row-level security |
-| `pd_system` | A few named `SECURITY DEFINER` functions | `NOLOGIN`. Serves the jobs with no org context: retention and cleanup, usage rollup, Stripe webhook processing, invite-token lookup. `pd_app` may call these functions but cannot act as `pd_system` any other way |
+| Hosting adapters, LUKS volumes, host firewall, Borg and B2 backups (PD 01 s4, s9) | Shared `infra/` | As is |
+| Cloudflare, nginx, chunked upload sessions (PD 01 s3, PD 02 s3) | Gateway, ingest | As is |
+| Auth, sessions, organizations, members, invites | Identity. Organization becomes tenant; `org_id` maps to `tenant_id`. Zitadel takes over passwords, sessions, MFA, and SSO; PD's password and session code retires. Members and invites carry over. SMS dropped | Replace and extend |
+| Row-level security and `withOrg` (PD 02 s4) | Every service, through `withTenant` in `packages/core` | Extend |
+| ClamAV, sandbox: encryption check, DOCX to PDF, text, OCR (PD 01 s2.1) | Ingest | As is |
+| Marking check (CUI, export control) | Ingest | As is |
+| Classify, chunk, pre-scan | Ingest | As is |
+| Compliance matrix passes 1 to 6, quote check | Solicitation intel | As is |
+| AI-ban check | Solicitation intel, beside the marking result (s5) | New |
+| Amendment key check and diff (PD 04 s3.1) | Solicitation intel. The orchestrator reopens pages from its event (04 s9) | Extend |
+| Dates task and schedule | Solicitation intel; comms reads schedule events for the Q&A alert | Extend |
+| Bid facts, outline, production rules, resume matrix, review scoring tasks | Intel, drafting, evidence, and review, by table (09 s4) | Extend |
+| Provider layer and `ai_runs` (PD 02 s5) | Model gateway; adapters added for image and reviewer | Extend |
+| Skill loader (PD 02 s6) | `packages/stage-interface` | Extend |
+| BullMQ queues and per-bid caps | Inside ingest and intel; run caps move to the orchestrator | Extend |
+| Exports: ExcelJS, docx library | Matrix exports stay in intel. Volumes come from render | Extend |
+| Stripe Billing, Checkout, Portal (PD 01 s8) | Billing: new plans, credits, recharge, font fee (06) | Extend |
+| Credits, seats, retention in `packages/core` | Billing (credits, seats); retention runs in each owning service | Extend |
+| Telnyx phone verification | Dropped. SMS verification is not required (06 s1) | Dropped |
+| pdf.js viewer with quote highlight | Web | As is |
+| PD web UI and tabs | Web shell in the gateway. Overview, schedule, compliance matrix, outline, resumes, reviews, production, orals, and lessons become E2E features (09 s7) | Extend |
+| PD plans (Free, Starter, Growth) | Dropped. E2E's plans replace them (06 s3) | Dropped |
+| Evidence library on pp.shaavir.com | Not used. Each tenant's evidence lives in the evidence service | Replaced |
+| Word Relay loop (`word-critic`, `relay-producer`) | Not used. Review and drafting run the patch loop on the server | Replaced |
+| Word COM page count (`word-page-verify`) | Not used. Render's PDF check replaces it (01 s5.5) | Replaced |
 
-- Each `pd_system` function returns the minimum it must (IDs and their `org_id`). The job then does the work per organization as `pd_app`, with `app.org_id` set.
-- Files are stored under `/data/files/{org_id}/...`. The api serves a file only after a membership check, through a per-document viewing token valid about 1 hour and bound to the user's session. pdf.js reads the file in range requests for as long as it is open, so a 5-minute link would break the viewer.
-- Jobs carry `org_id`. The worker sets it the same way before it reads or writes.
-- AI requests never mix two organizations' text in one call.
-- Tests (08): user A gets 404 on every endpoint with user B's IDs; a pool of size 1 serving two requests from different organizations in a row never returns the other organization's rows.
+## 4. Skills and the stage interface
 
-## 5. AI provider layer
+Every stage runs behind one stage interface in `packages/stage-interface`. A stage handler declares its inputs, outputs, gate check, and skill version. The orchestrator calls handlers through that contract only.
 
-One interface, three adapters:
+Today's bid-autopilot skills sit behind the interface as placeholders. The Owner will rebuild each stage's skill later. A rebuilt skill swaps in without a change to the orchestrator or to any other stage. Each stage record stores the skill name and version it ran.
 
-```ts
-interface ModelProvider {
-  name: 'deepinfra' | 'anthropic' | 'ollama';
-  complete(req: {
-    system: string;            // skill instructions + task prompt
-    messages: Message[];
-    jsonSchema?: object;       // structured output when supported
-    maxOutputTokens: number;
-    cacheKey?: string;         // provider prefix caching where offered; cost plans do not assume it
-  }): Promise<{ text: string; json?: unknown; usage: TokenUsage }>;
-}
-```
+Skills live in the repo under `skills/{name}/SKILL.md`. Only tenant-neutral copies ship. No service reads a SKILL.md file except through the interface.
 
-- DeepInfra and Ollama use the OpenAI-compatible chat API. Anthropic uses the Messages API.
-- A settings table maps each AI task to a provider and model, so one task can move to another model without a deploy. Example: extraction on Qwen, verification on Sonnet. In v1 Amaan changes settings directly in the database; admin screens come after v1.
-- Concurrency: each provider has its own concurrent-call setting (starting value 3, set from the Phase 1 benchmark), and each bid has a cap below it (01 s2.2).
-- Every call records tokens, cost, duration, model, and task in `ai_runs`, rolled up nightly into `ai_usage_daily` (03-data-model.md).
-- Retries: 2 retries with backoff on timeouts and rate limits. Invalid JSON gets one repair attempt, then the job fails with a clear message. The JSON validity rate is measured in Phase 1.
+| Use | Skills | Service |
+|---|---|---|
+| Stage prompts | `amendment-gate`, `compliance-matrix` | Solicitation intel |
+| Stage prompts | `rfp-format-lock`, `client-format-specs` | Render |
+| Stage prompts | `scoresheet-first`, `proposal-outline-generator`, `proposal-response-writer`, `federal-proposal`, `exec-summary`, `federal-sled-pricing` | Drafting |
+| Stage prompts | `evidence-capture`, `case-vignette` | Evidence, drafting |
+| Reviews | `red-team-review` (separate reviewer model), `gold-white-review` | Review |
+| Page checks before the content gate | `kill-words`, `plain-language`, `term-mirror`, `customer-focus`, `strength-test`, `story-placement` | Drafting |
+| Rewritten as code | `word-page-verify` becomes render's PDF verifier | Render |
+| Replaced | `bid-autopilot` (orchestrator state machine), `word-critic` and `relay-producer` (server-side patch loop) | Orchestrator, review |
 
-## 6. Skills inside the app
+Skill scripts are tools the model can call through render's toolrunner (01 s5.3). 04 maps each stage to its skills and scripts.
 
-- Shaavir skills (compliance-matrix, bid-summary to start) live in the repo under `/skills/{name}/SKILL.md`, versioned with the code.
-- A loader reads the instructions for each task and places them in the system prompt. Users never see the instructions.
-- Each AI result stores the skill name and version that produced it, so test results tie to a skill version.
-- Skill scripts that need to run become server functions the model can call as tools, only where needed. The fixed pipeline in 04-ai-pipeline.md needs no model-chosen tools in v1.
+## 5. Data flow per stage
 
-## 7. API outline
+Detail lives in 04. This table shows which service runs each stage and what it leaves behind.
 
-| Area | Endpoints (prefix `/api`) |
+| Stage | Input | Service | Output stored |
+|---|---|---|---|
+| Intake fetch | Tenant repository, evidence, format spec | Evidence, intel | "We already have this" and "we still need this" lists, mandatory items marked |
+| Document processing | Solicitation set | Ingest | Pages, text, page images, marking result |
+| AI-ban check | Solicitation text | Intel (code first, model to confirm) | Flag with quote and page. The run continues |
+| Shred and matrix | Pages | Intel (PD passes 1 to 6) | Requirements with quotes, "check these" list |
+| Bid/no-bid scoring (Gate 0b) | Matrix, bid facts, repository coverage | Intel, evidence | Fit, eligibility, coverage, and risk scores. A human decides |
+| Amendment gate | Uploads, eBuy mail, Drive additions | Intel, orchestrator | Amendment log or diff, reopened pages |
+| Worksheet | Matrix, evaluation pages | Drafting | Blank Register, page and word budgets |
+| Format lock | Instruction pages, format spec, shell, fonts | Render | Locked format spec, empty volume shells |
+| Outline | Matrix, Blank Register, locked spec, shells | Drafting | Outline with page budgets inside the shells |
+| Q&A draft | Matrix, ambiguous rows, questionnaire if given | Comms | Draft questions in the required format, draft email |
+| Pink document | Outline, worksheet, matrix | Drafting, Drive | Pink review document in the tenant's Drive folder |
+| Evidence, vignettes, agency intel | Tenant evidence, repository, official sources | Evidence, drafting, render (egress allow list) | Cited evidence picks, vignettes, agency notes |
+| Drafting | Outline, evidence, locks | Drafting, in parallel by volume and section | Pages and blocks, NEEDs, per-page scores |
+| Graphics | Call-outs in the draft | Drafting, model gateway, render | SVG source, PNG for Word, art from the image provider |
+| Executive summary, pricing narrative | Drafted volumes, pricing inputs | Drafting | Draft text. Pricing figures wait for human approval |
+| Red review | Assembled draft, scoresheet | Review | Findings, predicted rating per factor, ranked NEEDs. Gate 1 opens; billing consumes the credit |
+| Gate 1 | Findings, NEEDs, scores | Review, drafting | Dispositions, filled NEEDs, locks on edited blocks |
+| Re-draft and sweep | Dispositions, locks | Drafting | New page versions written around locked blocks |
+| Assembly and render | Pages, shells, graphics, fonts | Render | DOCX with computed numbering, PDF, page images, page counts, layout findings |
+| Gold and White Glove | Assembled volumes | Review | Gold record, production findings |
+| Gate 2 | Round-by-round diff | Review | Sign-off |
+| Package | Volumes, forms, attachments, matrix | Render | One download, named per the solicitation, with the signature and review notice |
+| Request and collect (any time) | Request items | Comms, ingest | Sent requests, replies, uploaded items, status per item |
+
+Every stage writes its record before it ends. A rerun with the same inputs hash reuses the stored output (01 s4).
+
+## 6. Tenancy model
+
+The identity service owns `tenant_id`. A tenant is one client firm, the offeror on its bids.
+
+| Layer | Rule |
 |---|---|
-| Auth | `POST /auth/signup`, `/auth/verify-email`, `/auth/verify-phone`, `/auth/login`, `/auth/logout`, `/auth/reset` |
-| Organization | `GET/PATCH /org`, `GET/POST/DELETE /org/members`, `POST /org/invites` |
-| Processing info | `GET /about/processing` (AI model, provider, and subprocessors in use) |
-| Billing | `POST /billing/checkout`, `POST /billing/portal`, `POST /billing/webhook` (Stripe) |
-| Bids | `GET/POST /bids`, `GET/PATCH/DELETE /bids/:id` |
-| Uploads | `POST /bids/:id/uploads` (open a session), `PUT /uploads/:id/chunks/:index`, `POST /uploads/:id/complete` |
-| Documents | `GET /bids/:id/documents`, `GET /documents/:id/view-token`, `POST /documents/:id/restore`, `POST /documents/:id/confirm-marking`, `POST /documents/:id/key-override` (owner only), `DELETE /documents/:id` |
-| Amendments | `GET /bids/:id/amendment-links`, `POST /amendment-links/:id/confirm`, `POST /amendment-links/:id/reject` |
-| Jobs | `GET /bids/:id/jobs` (status and queue position) |
-| Tabs | `GET/PATCH /bids/:id/tabs/:tab` plus row endpoints per tab; `GET /bids/:id/rows/:table/:rowId` (row detail with edit history) |
-| Exports | `POST /bids/:id/exports/:tab`, `GET /exports/:id` |
-| Health | `GET /health` |
+| Database | Every tenant table in every schema has `tenant_id` and `FORCE ROW LEVEL SECURITY`. Each transaction sets `app.tenant_id` locally. No setting, no rows |
+| PD tables | PD's `org_id` holds the same value as `tenant_id`. `withTenant` sets both settings during the transition (09 s2) |
+| Service boundary | Each service role can reach only its own schema. Cross-service reads go through APIs and events |
+| Requests | The gateway forwards a signed token with `tenant_id`. Each service checks it before any read or write |
+| Events | Every event carries `tenant_id`. A consumer sets it before it writes |
+| Object storage | Every key starts with `tenant_id`. Signed links are short-lived and bound to a session, as in PD's viewing tokens |
+| Model calls | One tenant's text per call. Skill instructions sit before the cache breakpoint and hold no tenant data |
+| Render jobs | One tenant per container. Fonts, shells, and format specs mount from that tenant only |
+| Evidence and repository | Per tenant. Never searched, ranked, embedded, or learned across tenants |
+| Learning loop | Dispositions, filled NEEDs, and award outcomes tune that tenant's own retrieval and gate calibration only |
+| Mailbox, Drive, inbound address, portal sessions | One tenant each, as before |
 
-No admin endpoints in v1. Admin tooling is post-v1 (08).
+Tests carry over from PD (PD 02 s4): user A gets 404 on every endpoint with user B's ids, and a pool of one connection never leaks rows between tenants. Added: a service role cannot read another service's schema, and a render job for tenant A cannot list tenant B's fonts or files.
 
-## 8. Code layout
+## 7. Integrations
 
-```
-pd/
-├── apps/web          React front end
-├── apps/api          Fastify server
-├── apps/worker       BullMQ workers
-├── apps/sandbox      file processing image (qpdf, Poppler, LibreOffice, OCRmyPDF, SheetJS)
-├── packages/core     shared types, plan rules, date logic, quote normalization
-├── packages/ai       provider layer, prompts, schema, skill loader
-├── skills/           SKILL.md files (compliance-matrix, bid-summary)
-├── evals/            model test harness and golden set (not deployed)
-├── infra/            docker-compose, nginx, sandbox runner, backup scripts
-└── docs/plans/       copy of these plans
-```
+### 7.1 Email: Gmail and Microsoft 365
+
+| Item | Design |
+|---|---|
+| Owner | The comms service |
+| Connect | A tenant Admin connects a Gmail or Microsoft 365 mailbox through OAuth in settings |
+| Transport | Comms calls the email MCP server's tools from code |
+| Send | Q&A goes only after a human reviews the questions and the email, then clicks send. Proposed: each request email takes the same click (🟨 **OPEN**, 07 s3). The model drafts; code sends. No model call can trigger a send |
+| Q&A | Draft questions in the required format, a filled agency questionnaire when one exists, and a draft email. All three shown for review (05 s4.5) |
+| Requests | Commitment letters, partner past performance forms, resume consents. One thread per item |
+| Replies | Comms polls the connected mailbox for replies on threads it started. Attachments go to ingest |
+| Scope | Searches cover only the tool's own thread ids |
+| Upload option | A user can also upload any item by hand. Status tracks either route |
+| Tokens | Comms stores OAuth refresh tokens encrypted per tenant. A tenant Admin can revoke them in settings |
+
+🟨 **OPEN:** which email MCP servers (hosted or self-run) and the narrowest scopes each needs. 🟨 **OPEN:** confirm that storing mailbox OAuth tokens fits the credentials rule (07 s2).
+
+### 7.2 Shaavir Drive
+
+| Item | Design |
+|---|---|
+| Owner | The Drive service |
+| Folder | One per tenant, created on `identity.tenant.created`, shared only with that tenant's users |
+| Contents | The Pink review document and working documents for each bid |
+| Write | Drive writes a new version when a stage produces one |
+| Read back | Drive picks up tenant edits and added files and sends them to ingest. An edited block becomes a locked block (04 s8) |
+| Copy | The tool keeps its own copy of every document it puts in Drive |
+| Disclosure | The privacy notice states that Shaavir's Drive stores client data (07 s8) |
+
+🟨 **OPEN:** Drive's interface for folders, sharing, versions, and change notices.
+
+### 7.3 eBuy inbound
+
+1. Each tenant gets an inbound address, such as `tenantname@in.<tool domain>`.
+2. The tenant adds it in eBuy or sets a forwarding rule.
+3. The inbound mail service posts each message to comms. Comms checks the sender, parses the RFQ number, and emits `comms.ebuy.rfq_received`. Intel opens a bid for that tenant.
+4. Documents come in through the existing eBuy connector, or through the portal agent with a login the user approves. Either way they enter ingest.
+5. A daily check covers missed emails, through the same connector or the portal agent.
+
+🟨 **OPEN:** nobody has yet verified how a tenant registers its address in eBuy. Test on one tenant first.
+
+🟨 **OPEN:** how the daily check authenticates per tenant. The existing connector holds one login, and the tool stores no portal credentials (07 s2). Proposed: the daily check runs through the portal agent with a user-approved login until the connector supports per-tenant sessions without stored secrets.
+
+### 7.4 Portals
+
+Users choose one route per portal:
+
+| Route | How |
+|---|---|
+| (a) Agent | The portal agent checks the portal and downloads documents. The human approves each login and MFA prompt in a live view. Credentials are never stored |
+| (b) Upload | The user uploads the files |
+| Banned portals | SAM.gov bans bots, so it gets upload or a guided checklist only. The same holds for any portal that bans automation |
+| Final submit | Always a human's click |
+
+The portal agent host and its controls are in 01 s7. 🟨 **OPEN:** the agent implementation.
+
+SAM.gov also publishes public APIs for opportunity notices, attachments, and entity data, used with an API key. Those are not browser automation. 🟨 **OPEN:** whether the tool pulls opportunity attachments through that API, within its terms and daily quota.
+
+### 7.5 Model providers
+
+All model and image calls go through the model gateway. Anthropic covers drafting, checks, vision, and the portal agent. A separate reviewer model covers Red (🟨 **OPEN** which). GPT Image 2 makes illustrative art only. The gateway meters every call and enforces the run's budget (01 s6; 01 s8).
+
+## 8. API outline
+
+The gateway exposes PD's endpoints (PD 02 s7) and the areas below, prefix `/api`. Each route forwards to its owning service.
+
+| Area | Endpoints | Service |
+|---|---|---|
+| Auth | `/auth/*` (OIDC sign-in with Zitadel, which hosts the MFA, passkey, and SSO screens), `/members`, `/invites` | Identity |
+| Intake | `GET /bids/:id/intake`, `POST /bids/:id/intake/items` | Intel, evidence |
+| Bid/no-bid | `GET /bids/:id/fit`, `POST /bids/:id/fit/decision` | Intel, orchestrator |
+| Runs | `POST /bids/:id/runs/estimate`, `POST /bids/:id/runs`, `GET /runs/:id`, `POST /runs/:id/pause`, `/resume`, `/cancel` | Orchestrator |
+| Stages | `GET /runs/:id/stages`, `POST /stages/:id/retry` | Orchestrator |
+| Gates | `GET /runs/:id/gates/:gate`, `POST /runs/:id/gates/:gate/approve` | Orchestrator |
+| Pages and blocks | `GET /runs/:id/pages`, `GET /pages/:id`, `PATCH /blocks/:id` (edit locks the block), `POST /blocks/:id/unlock`, `POST /change-proposals/:id/approve`, `/reject` | Drafting |
+| Findings | `GET /runs/:id/findings`, `POST /findings/:id/disposition` | Review |
+| NEEDs | `GET /runs/:id/needs`, `PATCH /needs/:id` (fill) | Drafting |
+| Round diff | `GET /runs/:id/diff?from=&to=` | Review |
+| Q&A | `GET /bids/:id/qa`, `PATCH /qa/:id`, `POST /qa/:id/approve-send` | Comms |
+| Requests | `GET /bids/:id/requests`, `POST /bids/:id/requests`, `POST /requests/:id/approve-send`, `POST /requests/:id/upload` | Comms |
+| Packages | `POST /runs/:id/package`, `GET /packages/:id`, `GET /packages/:id/download` | Render |
+| Repository | `GET /repo?agency=&factor=&section_type=&contract=&from=&to=`, `GET /repo/:id` | Evidence |
+| Fonts | `GET /fonts`, `POST /fonts/requests` (upload plus license confirmation) | Render, billing |
+| Connections | `POST /connections/mailbox`, `DELETE /connections/mailbox/:id`, `GET /connections/drive` | Comms, Drive |
+| Portals | `POST /portal-sessions`, `GET /portal-sessions/:id/live`, `POST /portal-sessions/:id/stop` | Portal agent |
+| Inbound | `POST /inbound/mail` (signed webhook from the inbound mail service) | Comms |
+| Billing | `/billing/*` | Billing |
+
+Internal, private network only: render's `/tools/{name}`, the model gateway's `/v1/messages` and `/v1/images`, identity's `/tokens/verify`, billing's `/credits/*`, and evidence's `/ledger/*` for the ledger scripts.
+
+## 9. Code layout
+
+The repo layout, the restructure steps, the CLAUDE.md rules, and the local stack with its environment variables live in 09 s5, 09 s6, 09 s8, and 09 s9.
 
 ## Decision log
 
 | Date | Decision |
 |---|---|
-| 13 Oct 2026 | TypeScript stack, Postgres with row-level security, provider layer with three adapters |
-| 13 Oct 2026 | Row-level security hardened: transaction-local `app.org_id`, `FORCE ROW LEVEL SECURITY`, roles `pd_owner`, `pd_app` (`NOBYPASSRLS`), and `pd_system` reachable only through named functions |
-| 13 Oct 2026 | Uploaded files are opened only in a `sandbox` container; the worker keeps AI and database work |
-| 13 Oct 2026 | DOCX converted to PDF with LibreOffice headless; Mammoth kept only as a text fallback |
-| 13 Oct 2026 | Upload sessions with declared size, sha256, chunk index and count, MB cap check, 24-hour expiry |
-| 13 Oct 2026 | Sessions in Postgres; Redis runs with `appendonly yes` |
-| 13 Oct 2026 | Per-document viewing tokens valid about 1 hour, bound to the session, replace 5-minute signed URLs |
-| 13 Oct 2026 | AI concurrency per provider plus a per-bid cap; amendment-diff job added |
-| 13 Oct 2026 | No admin endpoints in v1; settings changed in the database |
+| 17 Oct 2026 | PD's stack carries over; orchestrator in TypeScript, toolrunner in Python on the render server |
+| 17 Oct 2026 | The conductor skill becomes the orchestrator's state machine; server-side code replaces the Word Relay loop and Word COM verify |
+| 17 Oct 2026 | pp.shaavir.com evidence library not used; each tenant's evidence lives in the tool behind row-level security |
+| 17 Oct 2026 | Email goes through the tenant's Gmail or Microsoft 365 connection; code sends only after human approval; the tool reads only its own threads |
+| 17 Oct 2026 | Shaavir Drive holds Pink and working documents in one folder per tenant; the tool keeps its own copy |
+| 17 Oct 2026 | eBuy inbound by per-tenant address plus a daily check; test on one tenant first |
+| 17 Oct 2026 | Portals by agent with human-approved login, or by upload; SAM.gov upload or checklist only; final submit always human |
+| 17 Oct 2026 | Review pass: request email send marked Proposed; eBuy daily-check authentication and SAM.gov public API added as OPEN |
+| 17 Oct 2026 | Owner decision: microservices. Fifteen services on one Postgres cluster with a schema per service and row-level security in each, events on NATS, S3-compatible storage (09) |
+| 17 Oct 2026 | Owner decision, then owner updates: E2E absorbs PD entirely. PD's code becomes E2E services and features; no PD lighter UI. One deployment question closed |
+| 17 Oct 2026 | Owner decision: the PD repo is renamed to E2E Proposal and becomes the monorepo; no new repo, no code copy |
+| 17 Oct 2026 | Owner decision: the identity service owns `tenant_id`; PD's `org_id` maps to it. Telnyx SMS verification dropped |
+| 17 Oct 2026 | Owner decision: PD reuse map settled by service (s3; 09 s4) |
+| 17 Oct 2026 | Owner decision: stages run behind one stage interface; current skills are placeholders until the Owner rebuilds them |
+| 17 Oct 2026 | Owner decision: AI-ban hit flags and lets the run continue |
+| 17 Oct 2026 | Owner decision: events on Redis Streams, on the self-hosted Redis that BullMQ uses. NATS dropped (item 60 closed) |
+| 17 Oct 2026 | Owner decision: self-hosted Zitadel behind the identity service; PD's password and session code retires (item 61 closed) |

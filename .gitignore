@@ -51,3 +51,9 @@ docs/plans/.versions/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Skills stay out of git for now (owner decision 17 Oct 2026). Tracked PD skills remain.
+/skills/*
+!/skills/bid-summary/
+!/skills/compliance-matrix/
+!/docs/build/
