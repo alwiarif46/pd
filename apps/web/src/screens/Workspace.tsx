@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, api, uploadFile } from '../legacy-api';
-import { Dialog } from '../components/Dialog';
 import { RowDetail } from '../components/RowDetail';
 import { SourceViewer } from '../components/SourceViewer';
-import { amendmentTabsNote } from '../features/shared/amendment-tabs-status';
 import { downloadDocx, downloadXlsx } from '../export';
 import {
   type Bid,
@@ -322,7 +320,7 @@ function TabPanel(props: {
     case 'production': return <Production {...props} bid={bid} />;
     case 'orals': return <Orals {...props} bid={bid} />;
     case 'lessons': return <Lessons {...props} bid={bid} />;
-    case 'documents': return <Documents {...props} bid={bid} />;
+    case 'documents': return null; // features/documents/route.tsx renders it; the shell never embeds it here.
     case 'settings': return null; // features/settings/route.tsx renders it; the shell never embeds it here.
     default: {
       const unreachable: never = tab;
@@ -595,96 +593,6 @@ function Lessons({ bid, data, onReload, onError }: Panel) {
       ))}
       <AddForm label="Add a note" onSubmit={(body) => postRow(bid.id, 'lessons', { question: body.name, answer: body.extra }, onReload, onError)} />
       <button className="btn secondary" type="button" onClick={() => downloadDocx('lessons.docx', items.map((item) => `${item.question} ${item.answer}`))}>DOCX</button>
-    </div>
-  );
-}
-
-/** The amendment tabs status beside a document's status (legacy tag classes). */
-function TabsNote({ doc }: { doc: DocumentRow }) {
-  const note = amendmentTabsNote(doc);
-  return note ? <span className={note.tone === 'bad' ? 'tag withdrawn' : 'tag'}>{note.text}</span> : null;
-}
-
-function Documents({ bid, plan, docs, onReload, onError, onNotice }: Panel) {
-  const [kind, setKind] = useState('attachment');
-  const [reason, setReason] = useState('');
-  const [overrideId, setOverrideId] = useState<string | null>(null);
-  const used = docs.reduce((sum, doc) => sum + doc.sizeBytes, 0);
-  const cap = capMb(plan);
-  return (
-    <div className="stack">
-      <p className="num">{mb(used)} of {cap} MB used</p>
-      <form className="row" onSubmit={(event) => {
-        event.preventDefault();
-        const input = (event.currentTarget.elements.namedItem('file') as HTMLInputElement);
-        const file = input.files?.[0];
-        if (!file) return;
-        uploadFile(bid.id, file, kind).then((result) => {
-          if (result.duplicate) onNotice('Already uploaded.');
-          onReload();
-        }).catch((err: Error) => {
-          if (err instanceof ApiError && err.status === 413) onError(`This file is larger than the ${mb(Math.max(0, cap * 1024 * 1024 - used))} left.`);
-          else if (err.message.toLowerCase().includes('password')) onError('Upload an unlocked copy.');
-          else onError(err.message);
-        });
-      }}>
-        <label className="field">Kind
-          <select aria-label="File kind" value={kind} onChange={(event) => setKind(event.target.value)}>
-            {['solicitation', 'amendment', 'attachment', 'resume', 'draft'].map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </label>
-        <label className="field">File
-          <input name="file" type="file" required aria-label="File to upload" />
-        </label>
-        <button className="btn" type="submit">Upload</button>
-      </form>
-      {docs.length === 0 ? <p>No items found.</p> : (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Name</th><th>Kind</th><th>Amd</th><th>Pages</th><th>Size</th><th>Uploaded</th><th>Live until</th><th>Status</th><th>Marking</th><th /></tr></thead>
-            <tbody>
-              {docs.map((doc) => (
-                <tr key={doc.id}>
-                  <td>{doc.fileName}</td>
-                  <td>{doc.kind}</td>
-                  <td className="num">{doc.amendmentNo ?? '—'}</td>
-                  <td className="num">{doc.pageCount ?? (doc.pagesEstimated ? `${doc.pagesEstimated} est.` : '—')}</td>
-                  <td className="num">{mb(doc.sizeBytes)}</td>
-                  <td className="num">{doc.createdAt.slice(0, 10)}</td>
-                  <td className="num">{doc.liveUntil?.slice(0, 10) ?? '—'}</td>
-                  <td>
-                    {doc.liveStatus || doc.extractStatus || doc.scanStatus || 'processing'}
-                    {' '}
-                    <TabsNote doc={doc} />
-                  </td>
-                  <td>{doc.markingStatus || 'none'}</td>
-                  <td className="row">
-                    {doc.liveStatus === 'archived' ? <button className="btn secondary" type="button" onClick={() => api(`/api/documents/${doc.id}/restore`, { method: 'POST' }).then(() => onNotice('Restore requested')).then(onReload).catch((err: Error) => onError(err.message))}>Restore</button> : null}
-                    {doc.liveStatus === 'restoring' ? <span>Restoring (a short wait)</span> : null}
-                    {doc.kind === 'amendment' ? <button className="btn secondary" type="button" onClick={() => setOverrideId(doc.id)}>Override</button> : null}
-                    <button className="btn danger" type="button" onClick={() => api(`/api/documents/${doc.id}`, { method: 'DELETE' }).then(onReload)}>Delete</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {overrideId ? (
-        <Dialog title={`Override solicitation key for this amendment. ${2 - bid.keyOverridesUsed} left.`} onCancel={() => setOverrideId(null)}>
-          <form className="stack" onSubmit={(event) => {
-            event.preventDefault();
-            api(`/api/documents/${overrideId}/key-override`, { method: 'POST', body: JSON.stringify({ reason }) })
-              .then(() => { setOverrideId(null); onNotice('Override recorded.'); onReload(); })
-              .catch((err: Error) => onError(err.message));
-          }}>
-            <label className="field">Reason
-              <input required value={reason} onChange={(event) => setReason(event.target.value)} />
-            </label>
-            <button className="btn" type="submit">Override</button>
-          </form>
-        </Dialog>
-      ) : null}
     </div>
   );
 }
