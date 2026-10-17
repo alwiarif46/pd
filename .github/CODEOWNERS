@@ -1,4 +1,6 @@
 # Each service folder names its owner (09 s8 item 1). One owner for now; split per team later.
+/.github/ @alwiarif46
+/* @alwiarif46
 /services/gateway/ @alwiarif46
 /services/identity/ @alwiarif46
 /services/billing/ @alwiarif46
