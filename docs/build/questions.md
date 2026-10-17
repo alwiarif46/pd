@@ -24,6 +24,11 @@ One heading per chat. Each entry: question, options, choice made, why. Design ga
 - **Service role may only read its own `schema_migrations` (PR 9).** The brief grants DML on "its tables". Chose SELECT only on the ledger so a service cannot rewrite migration history; DML on every other table, including future ones through default privileges.
 - **`REVOKE ALL ON SCHEMA public FROM PUBLIC` (PR 9).** Done as the brief says. PD's own migration `0001_tenant_rls.sql` already does this and grants `pd_app` explicitly, so PD keeps working.
 - **Roles are cluster-wide (PR 9).** The DB tests create a throwaway database but the `<schema>_svc` roles live in the cluster, so the tests hold an advisory lock on the cluster and reset the role passwords each run. Two runs on one cluster wait for each other.
+- **`withTenant` and `withOrg` differ (PR 9 review).** `withTenant` in `@pd/service-kit` sets `app.tenant_id` and `app.org_id`. `withOrg` in `packages/core` still sets only `app.org_id`. Not edited in chat 1. Chat 2 reconciles: either `withOrg` sets both, or PD's RLS moves to `app.tenant_id`.
+- **Dockerfile follow-ups (PR 9 review).** The service Dockerfiles need the real port and a `HEALTHCHECK` against `/healthz`, and the tool image tags are floating. Chat 2, when real services exist. Dockerfiles not changed in chat 1.
+- **LISTEN/NOTIFY channel names (PR 9 review).** When the outbox relay arrives, give channels a per-service prefix so one service cannot listen to another's. Chat 2 or 3, with the relay.
+- **Health queries cancel on the server (PR 9 review).** The brief said to create pools with `options: '-c statement_timeout=2000'`. That would cap every query of a real service at 2 s. Chose `set local statement_timeout = 2000` sent with the health query itself, so only `/healthz` is capped. Pools keep `connectionTimeoutMillis: 2000`. Python connections use the `options` form because they only serve `/healthz`.
+- **Service-kit tests refuse a cluster in use (PR 9 review).** They reset the `*_svc` passwords. They skip (fail under CI) when any of those roles has a login password, unless `SERVICE_KIT_TEST_RESETS_ROLES=1`.
 
 ## Chat 2
 

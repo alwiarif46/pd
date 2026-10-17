@@ -18,7 +18,13 @@ render 4109, evidence 4110, comms 4111, portal 4112, drive 4113, notify 4114. `P
 
 ## Tests
 
-`pnpm --filter @pd/service-kit test`. The database tests need `TEST_DATABASE_URL` (a superuser connection). Unset: they skip with a warning. Under `CI=true`: they fail. They create and drop their own database; the service roles are cluster-wide, so the tests hold a cluster advisory lock.
+`pnpm --filter @pd/service-kit test`. The database tests need `TEST_DATABASE_URL` (a superuser connection). Unset: they skip with a warning. Under `CI=true`: they fail.
+
+- **Disposable cluster only.** The tests call `applyMigrations` with random passwords, which resets the password of the cluster-wide `<schema>_svc` roles. If any of the 14 already has a login password, the tests refuse to run: they skip with a loud warning, and fail under `CI=true`. Set `SERVICE_KIT_TEST_RESETS_ROLES=1` to say resetting them is fine (a local dev cluster whose service passwords you can set again). A fresh CI Postgres passes the guard without it.
+- Each file creates a database owned by a throwaway `sk_admin_<rand>` role (`CREATEROLE CREATEDB NOSUPERUSER NOBYPASSRLS`), migrates as that role, and drops both after. The 14 roles live in the cluster, so the tests hold a cluster advisory lock.
+- `healthz` reads the ledger with `set local statement_timeout = 2000` in the same message, so the server cancels a slow query; the 2 second race stays as the backstop. Pools do not get a global statement timeout.
 
 - `isolation.test.ts`: every role against every other service's `outbox` and `schema_migrations` (14 x 13 pairs, Postgres error 42501), `app.app_settings`, `public`.
-- `migrate.test.ts`: order, idempotence, and a grep that no migration names another schema.
+- `owner-rls.test.ts`: FORCE RLS holds for the table owner; a guard that every service table except `schema_migrations` has RLS enabled and forced (allow-list in the test); `CONNECT` privileges.
+- `scram.test.ts`: the SCRAM-SHA-256 verifier equals the one Postgres stores for the same salt and iterations.
+- `migrate.test.ts`: order, idempotence, and a grep that no migration names another schema or sets `search_path`.
