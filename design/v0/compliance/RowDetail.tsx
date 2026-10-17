@@ -31,6 +31,7 @@ export function RowDetail({ open, row, history, federal, editFields, saveStatus,
     setSeenStatus(saveStatus.state)
     if (saveStatus.state === 'done') setEditingId(null)
   }
+  if (!open && editingId !== null) setEditingId(null)
   useEffect(() => {
     if (open) heading.current?.focus()
   }, [open, row?.id])

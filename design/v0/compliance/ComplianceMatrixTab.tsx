@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -50,19 +50,27 @@ function activeFilterCount(f: ComplianceFilters) {
   ].filter(Boolean).length
 }
 
-function RequirementCell({ row, onOpenRow, closed }: { row: ComplianceRow; onOpenRow: () => void; closed: boolean }) {
+function RequirementCell({ row }: { row: ComplianceRow }) {
   const [expanded, setExpanded] = useState(false)
-  const long = row.requirement.length > 240 || row.requirement.split('\n').length > 4
+  const [clamped, setClamped] = useState(false)
+  const measure = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (!el || expanded) return
+      const check = () => setClamped(el.scrollHeight > el.clientHeight + 1)
+      check()
+      if (typeof ResizeObserver === 'undefined') return
+      const observer = new ResizeObserver(check)
+      observer.observe(el)
+      return () => observer.disconnect()
+    },
+    [expanded],
+  )
   return (
     <div className="flex flex-col items-start gap-1">
-      <button
-        type="button"
-        className={`whitespace-pre-line text-left hover:underline ${closed ? 'line-through' : ''} ${expanded ? '' : 'line-clamp-4'}`}
-        onClick={onOpenRow}
-      >
+      <div ref={measure} className={`whitespace-pre-line ${expanded ? '' : 'line-clamp-4'}`}>
         {row.requirement}
-      </button>
-      {long && (
+      </div>
+      {(clamped || expanded) && (
         <Button type="button" variant="link" size="sm" className="h-auto p-0" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
           {expanded ? 'Show less' : 'Show more'}
         </Button>
@@ -131,7 +139,7 @@ function MatrixRow({
     <TableRow
       ref={ref}
       data-state={selected ? 'selected' : undefined}
-      className={`${closed ? 'text-muted-foreground' : ''} ${selected ? 'bg-weekend' : ''}`}
+      className={`${closed ? 'text-muted-foreground line-through' : ''} ${selected ? 'bg-weekend' : ''}`}
     >
       <TableCell className={`sticky left-0 z-10 ${stickyBg} ${selected ? 'border-l-4 border-l-primary' : ''}`}>
         <Checkbox aria-label={`Select ${row.reqId}`} checked={checked} onCheckedChange={(v) => onCheck(v === true)} />
@@ -143,7 +151,7 @@ function MatrixRow({
       </TableCell>
       <TableCell>{row.sectionRef ?? '—'}</TableCell>
       <TableCell className="min-w-72 whitespace-normal">
-        <RequirementCell row={row} closed={closed} onOpenRow={() => props.onOpenRow(row.id)} />
+        <RequirementCell row={row} />
       </TableCell>
       <TableCell>{row.type ?? '—'}</TableCell>
       <TableCell>{row.instrRef ?? '—'}</TableCell>
