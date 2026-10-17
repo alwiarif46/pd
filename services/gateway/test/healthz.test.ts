@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { closeDb, getPool } from '@pd/core';
 
+const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 const unavailable = inject('dbUnavailable');
 
 describe.skipIf(Boolean(unavailable))('GET /healthz', () => {
@@ -22,7 +24,7 @@ describe.skipIf(Boolean(unavailable))('GET /healthz', () => {
   it('returns the standard shape without a session', async () => {
     const response = await app.inject({ method: 'GET', url: '/healthz' });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ service: 'gateway', version: '0.1.0', schemaMigration: 'none' });
+    expect(response.json()).toEqual({ service: 'gateway', version: pkg.version, schemaMigration: 'none' });
   });
 
   it('keeps the old /health route', async () => {
