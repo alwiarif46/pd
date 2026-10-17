@@ -193,14 +193,25 @@ function read(env: Env, name: string): string | undefined {
   return value ? value : undefined;
 }
 
-const ADDRESS = '[^\\s<>@",;()]+@[^\\s<>@",;()]+\\.[A-Za-z]{2,}';
-const FROM_BARE = new RegExp(`^${ADDRESS}$`);
-const FROM_NAMED = new RegExp(`^[^<>"\\r\\n]+ <${ADDRESS}>$`);
+/** `Name <address>`: the name from letters, digits, space and . _ ' - only, so it needs no quoting. */
+const FROM_NAMED = /^([A-Za-z0-9 ._'-]+) <([^<>]+)>$/;
+
+function fromIsValid(value: string): boolean {
+  const named = FROM_NAMED.exec(value);
+  if (named) {
+    return /\S/.test(named[1]) && normalizeAddress(named[2]) !== null;
+  }
+  return normalizeAddress(value) !== null;
+}
 const TOKEN_LIKE = /^\S+$/;
 const E164 = /^\+[1-9]\d{6,14}$/;
 const PROFILE_ID = /^[A-Za-z0-9-]+$/;
 
 function appUrlProblem(value: string, production: boolean): string | null {
+  // URL parsing drops an empty "?" or "#", so check the raw value: the links append "/#/...".
+  if (value.includes('?') || value.includes('#')) {
+    return 'APP_URL must be an origin (and optional path) with no query, fragment or credentials';
+  }
   let url: URL;
   try {
     url = new URL(value);
@@ -237,8 +248,8 @@ export function deliveryConfigFromEnv(env: Env = process.env): DeliveryConfig {
     if (!resendKey) problems.push('RESEND_API_KEY is not set');
     else if (!TOKEN_LIKE.test(resendKey)) problems.push('RESEND_API_KEY is not valid (it contains whitespace)');
     if (!emailFrom) problems.push('PD_EMAIL_FROM is not set (for example "Shaavir PD <no-reply@notify.shaavir.com>")');
-    else if (/[\r\n]/.test(emailFrom) || !(FROM_BARE.test(emailFrom) || FROM_NAMED.test(emailFrom))) {
-      problems.push('PD_EMAIL_FROM must be "Name <address>" or a bare address');
+    else if (!fromIsValid(emailFrom)) {
+      problems.push('PD_EMAIL_FROM must be "Name <address>" (name from letters, digits, space and . _ \' -) or a bare address');
     }
     const urlProblem = appUrl ? appUrlProblem(appUrl, production) : 'APP_URL is not set (the email links point at it)';
     if (urlProblem) problems.push(urlProblem);

@@ -310,6 +310,13 @@ describe('delivery settings from the environment', () => {
     expect(config.sms).toEqual({ apiKey: TELNYX_KEY, messagingProfileId: '40017f8e-49bd-4f16-9e3d-ef103f916228' });
   });
 
+  it.each([
+    "Shaavir PD <no-reply@notify.shaavir.com>",
+    "O'Neil Co. - PD_1 <no-reply@notify.shaavir.com>",
+  ])('accepts the display name %j', (from) => {
+    expect(deliveryConfigFromEnv({ ...full, PD_EMAIL_FROM: from }).email?.from).toBe(from);
+  });
+
   it('leaves both channels off when nothing is set, outside production', () => {
     expect(deliveryConfigFromEnv({ NODE_ENV: 'development', APP_URL: 'http://localhost:3000' })).toEqual({ email: null, sms: null });
   });
@@ -344,6 +351,17 @@ describe('delivery settings from the environment', () => {
     ['PD_EMAIL_FROM', 'Shaavir PD <no-reply@notify.shaavir.com>\r\nBcc: x@y.com'],
     ['APP_URL', 'pd.shaavir.com'],
     ['APP_URL', 'https://pd.shaavir.com/?a=1'],
+    ['APP_URL', 'https://pd.shaavir.com/?'],
+    ['APP_URL', 'https://pd.shaavir.com/#'],
+    ['APP_URL', 'https://pd.shaavir.com#/verify'],
+    ['APP_URL', 'https://pd.shaavir.com?'],
+    ['PD_EMAIL_FROM', 'Shaavir "PD" <no-reply@notify.shaavir.com>'],
+    ['PD_EMAIL_FROM', 'Shaavir, PD <no-reply@notify.shaavir.com>'],
+    ['PD_EMAIL_FROM', 'Shaavir PD: Alerts <no-reply@notify.shaavir.com>'],
+    ['PD_EMAIL_FROM', 'Shaavir (PD) <no-reply@notify.shaavir.com>'],
+    ['PD_EMAIL_FROM', 'Shäavir PD <no-reply@notify.shaavir.com>'],
+    ['PD_EMAIL_FROM', 'Shaavir PD <Work Co <me@gmail.com>>'],
+    ['PD_EMAIL_FROM', 'no-reply@notify.shaavir.com, x@evil.com'],
     ['TELNYX_FROM', '5557654321'],
     ['TELNYX_FROM', '+1 555 765 4321'],
     ['TELNYX_MESSAGING_PROFILE_ID', 'has spaces in it'],
