@@ -39,6 +39,8 @@ One heading per chat. Each entry: question, options, choice made, why. Design ga
 
 ## Chat 2
 
+- **Relay role without BYPASSRLS in practice (PR 2, tenancy).** The owner chose a BYPASSRLS relay role. Postgres lets only a role that has BYPASSRLS create one, and the test migrator deliberately lacks it, so `outbox_relay` gets BYPASSRLS only when the migrator has it. Two policies (`relay_read`, `relay_publish`, keyed on `current_user`) give the role the same reach either way, and the tests run the policy path. Production: run `pnpm migrate` as a superuser or BYPASSRLS admin if you want the attribute; nothing else changes. Also open: the outbox `type` column may hold the short name (`red.delivered`) or the full event name (`review.red.delivered`); `streamName` accepts both and gives `e2e.review.red.delivered`.
+
 ## Chat 3
 
 ## Chat 4
