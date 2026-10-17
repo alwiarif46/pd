@@ -198,6 +198,30 @@ describe('runStage skill version', () => {
   });
 });
 
+describe('schema isolation', () => {
+  it('a typo schema does not poison its $id for a corrected handler', async () => {
+    const typo = handler({ inputSchema: { $id: 'https://test.local/typo', type: 'objekt' } as never });
+    const bad = await runStage(typo, ctx, { text: 'a' }, { skills });
+    expect(bad.status).toBe('failed');
+    expect(bad.error).toContain('Invalid inputSchema');
+    const fixed = handler({ inputSchema: { $id: 'https://test.local/typo', type: 'object', required: ['text'] } });
+    const ok = await runStage(fixed, ctx, { text: 'a' }, { skills });
+    expect(ok.status).toBe('done');
+  });
+
+  it('a $ref to another handler $id fails whatever the run order', async () => {
+    const a = handler({ id: 'a', inputSchema: { $id: 'https://test.local/shared-a', type: 'object' } });
+    const b = handler({ id: 'b', inputSchema: { type: 'object', properties: { text: { $ref: 'https://test.local/shared-a' } } } });
+    for (const order of [[a, b], [b, a]]) {
+      const results = [];
+      for (const h of order) results.push(await runStage(h, ctx, { text: 'x' }, { skills }));
+      const rb = results[order.indexOf(b)]!;
+      expect(rb.status).toBe('failed');
+      expect(rb.error).toContain('Invalid inputSchema');
+    }
+  });
+});
+
 describe('StageRegistry', () => {
   it('registers, gets and lists', () => {
     const reg = new StageRegistry();

@@ -14,38 +14,29 @@ function newAjv(): Ajv2020 {
   return ajv;
 }
 
-const ajv = newAjv();
-
 interface Compiled {
   input: ValidateFunction;
   output: ValidateFunction;
 }
 
 // Keyed by the handler object, so a handler is compiled once and the cache does not outlive it.
+// Each handler gets its own Ajv, so one handler's schemas (a typo included) never affect another's,
+// and a $ref to another handler's $id does not resolve.
 const compiledByHandler = new WeakMap<object, Compiled>();
-
-function compileSchema(schema: JSONSchema): ValidateFunction {
-  const id = typeof schema === 'object' ? schema.$id : undefined;
-  if (typeof id !== 'string') return ajv.compile(schema);
-  const existing = ajv.getSchema(id);
-  if (!existing) return ajv.compile(schema);
-  // The same $id was compiled before (a rebuilt handler). Reuse it only when the schema is identical.
-  if (JSON.stringify(existing.schema) === JSON.stringify(schema)) return existing;
-  return newAjv().compile(schema);
-}
 
 function compiledFor(handler: StageHandler<never, never>): Compiled {
   let entry = compiledByHandler.get(handler);
   if (entry) return entry;
+  const ajv = newAjv();
   let input: ValidateFunction;
   let output: ValidateFunction;
   try {
-    input = compileSchema(handler.inputSchema);
+    input = ajv.compile(handler.inputSchema);
   } catch (err) {
     throw new Error(`Invalid inputSchema for stage ${handler.id}: ${message(err)}`);
   }
   try {
-    output = compileSchema(handler.outputSchema);
+    output = ajv.compile(handler.outputSchema);
   } catch (err) {
     throw new Error(`Invalid outputSchema for stage ${handler.id}: ${message(err)}`);
   }
