@@ -656,7 +656,7 @@ export interface RenderDoneEvent {
   occurred_at: string;
   type: "render.done";
   /**
-   * Payload of render.done: one volume rendered and checked.
+   * Payload of render.done: one volume rendered and checked. Fires only when the render finished (status done).
    */
   payload: {
     render_id: string;
@@ -694,6 +694,7 @@ export interface RenderIssueFoundEvent {
     severity: "blocker" | "warning";
     detail: string;
     source: "geometry" | "vision";
+    issue_id: string;
   };
 }
 

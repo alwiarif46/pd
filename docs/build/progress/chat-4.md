@@ -15,7 +15,7 @@ Branch pattern `e2e/c4-<nn>-<slug>`, one worktree each under `../wt/`. One servi
 
 | # | Branch | What | Reviewer | Status | Next step |
 |---|---|---|---|---|---|
-| 0 | e2e/c4-00-contracts | `render.yaml` routes and schemas; tighten `render.done`, `render.issue.found`, `render.package.ready`; version bumps | reviewer | planned | build |
+| 0 | e2e/c4-00-contracts | `render.yaml` routes and schemas; tighten `render.done`, `render.issue.found`, `render.package.ready`; version bumps | reviewer | in review (round 1 fixed: 3 majors, minors) | owner merge OK |
 | 1 | e2e/c4-01-toolrunner | Toolrunner, tool registry, `--selftest` for every tool in CI, per-job temp dirs wiped at job end, no-leftover test | fable-reviewer (sandbox, cleanup) | planned | after 0 |
 | 2 | e2e/c4-02-fonts | Metric-compatible alias map, per-job fontconfig, per-tenant font mounts, `tenant_fonts` migration with RLS, licensing note | fable-reviewer (licensing, tenant isolation) | planned | after 1 |
 | 3 | e2e/c4-03-format-lock | Format spec, silent rules, empty shell per volume, `format_specs` and `client_shells` | reviewer | planned | after 2 |
@@ -24,7 +24,7 @@ Branch pattern `e2e/c4-<nn>-<slug>`, one worktree each under `../wt/`. One servi
 | 6 | e2e/c4-06-convert | LibreOffice headless DOCX to PDF (profile dir per slot), librsvg SVG to PNG | reviewer | planned | after 5 |
 | 7 | e2e/c4-07-visual-check | Rasterize, page geometry, vision check, model-gateway stub and recorded-response double | reviewer | planned | after 6 |
 | 8 | e2e/c4-08-page-count | `pdfinfo` count on the exact PDF, limits, Word-only note, `renders` and `render_issues` | reviewer | planned | after 7 |
-| 9a | e2e/c4-09a-font-requests | Font request API, license confirmation, fee record (`font_requests`, fee ledger row) | fable-reviewer (fee record) | planned | after 2 |
+| 9a | e2e/c4-09a-font-requests | Font request API, license confirmation, fee snapshot on `font_requests` (billing charges it; hand-off deferred, see questions.md) | fable-reviewer (fee record) | planned | after 2 |
 | 9b | e2e/c4-09b-fonts-ui | Fonts and Request a font screens in Atrium style (`features/fonts`), states test, light and dark screenshots | reviewer (design fidelity) | planned | after 9a |
 | 10 | e2e/c4-10-final-docs | Final review file, handoff, ENHANCEMENTS section, doc fixes | fable-reviewer (final) | planned | end |
 

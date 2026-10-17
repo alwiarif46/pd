@@ -22,7 +22,7 @@
     },
     "payload": {
       "type": "object",
-      "description": "Payload of render.done: one volume rendered and checked.",
+      "description": "Payload of render.done: one volume rendered and checked. Fires only when the render finished (status done).",
       "additionalProperties": false,
       "required": [
         "render_id",

@@ -4,9 +4,14 @@ info:
   version: 0.2.0
 x-service: render
 x-note: >
-  Internal routes (/tools, /render, /packages, /format-specs) are called by stage services on the
-  private network with an x-tenant-id header until the identity service issues service tokens (09 s2).
-  Public routes (/fonts, /fonts/requests, /packages/{id}/download) are reached through the gateway.
+  Internal routes (/tools, /render, /packages) are called by stage services on the private network
+  with an x-tenant-id header until the identity service issues service tokens (09 s2).
+  Public routes (/fonts, /fonts/requests, /format-specs, /packages/{id}/download) are reached through
+  the gateway. On public routes the gateway drops any client-sent x-tenant-id, x-user-id and
+  x-user-role header and sets its own from the session. The gateway checks the Admin role from
+  identity; render trusts x-user-role. GET /tools, GET /render/{renderId} and GET /packages/{id} go
+  beyond the 09 s4.10 API line and are internal additions. The font file is uploaded through the
+  gateway's upload route into object storage first; the request then names its key.
 paths:
   /healthz:
     get:
@@ -127,6 +132,31 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Package'
+        '404':
+          description: A render id is unknown for this tenant.
+        '422':
+          description: The request failed validation, or a render is not done.
+  /packages/{packageId}:
+    get:
+      operationId: getPackage
+      summary: One package with its files
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - name: packageId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The package.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Package'
+        '404':
+          description: No such package for this tenant.
   /packages/{packageId}/download:
     get:
       operationId: downloadPackage
@@ -229,9 +259,11 @@ paths:
                       $ref: '#/components/schemas/FontRequest'
     post:
       operationId: createFontRequest
-      summary: Request a font. Admin only. Records the one-time fee (06 s6)
+      summary: Request a font. Admin only. Records the fee owed; billing charges it (06 s6)
       parameters:
         - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRole'
       requestBody:
         required: true
         content:
@@ -250,9 +282,23 @@ paths:
         '409':
           description: The fee amount is not set, so no request can be taken.
         '422':
-          description: The license is not confirmed, the font file is missing or not a font.
+          description: The license is not confirmed, the font file is missing, not a font, or its key is not under the caller's tenant.
 components:
   parameters:
+    UserId:
+      name: x-user-id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+    UserRole:
+      name: x-user-role
+      in: header
+      required: true
+      schema:
+        type: string
+        enum: [admin, member]
     TenantId:
       name: x-tenant-id
       in: header
@@ -281,7 +327,7 @@ components:
           description: File name inside the job folder.
         key:
           type: string
-          description: Object storage key. It starts with the tenant id, then the owning service (03 s11).
+          description: Object storage key. It starts with the tenant id, then the owning service (03 s11). Render rejects a key that does not start with the caller's tenant id.
     ToolInfo:
       type: object
       required: [name, timeoutSeconds, hasSelftest]
@@ -350,8 +396,14 @@ components:
       enum: [overflow, broken_table, cut_off_graphic, orphan_heading, margin]
     RenderIssue:
       type: object
-      required: [page, kind, severity, detail, source]
+      required: [issueId, status, page, kind, severity, detail, source]
       properties:
+        issueId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [open, resolved]
         page:
           type: integer
           minimum: 1
@@ -377,7 +429,7 @@ components:
           type: boolean
     RenderResult:
       type: object
-      required: [renderId, runId, volumeId, status, pageCount, withinLimit, issues, fonts]
+      required: [renderId, runId, volumeId, status, docx, pageCount, withinLimit, issues, fonts, visionChecked]
       properties:
         renderId:
           type: string
@@ -390,15 +442,23 @@ components:
         status:
           type: string
           enum: [done, failed]
+        docx:
+          $ref: '#/components/schemas/FileRef'
         pageCount:
           type: integer
+          minimum: 0
           description: Counted with pdfinfo on the exact PDF to submit (01 s5.5).
         pageLimit:
-          type: integer
+          type:
+            - integer
+            - 'null'
+        wordOnly:
+          type: boolean
         withinLimit:
           type: boolean
         pdf:
           $ref: '#/components/schemas/FileRef'
+          description: Present when status is done.
         issues:
           type: array
           items:
@@ -438,6 +498,7 @@ components:
           format: uuid
         files:
           type: array
+          minItems: 1
           items:
             $ref: '#/components/schemas/FileRef'
         wordOnlyNote:
@@ -516,20 +577,20 @@ components:
           type: string
     FontRequestCreate:
       type: object
-      required: [fontName, licenseConfirmed]
+      required: [fontName, licenseConfirmed, file]
       properties:
         fontName:
           type: string
           minLength: 1
           maxLength: 120
         licenseConfirmed:
-          type: boolean
+          const: true
           description: The checkbox "We hold a license to use this font." It must be true.
         file:
           $ref: '#/components/schemas/FileRef'
     FontRequest:
       type: object
-      required: [requestId, fontName, status, licenseConfirmedAt, feeCents, currency, feeRecordedAt]
+      required: [requestId, fontName, status, licenseConfirmedAt, licenseConfirmedBy, feeCents, currency, feeRecordedAt, file]
       properties:
         requestId:
           type: string

@@ -102,6 +102,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/packages/{packageId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One package with its files */
+        get: operations["getPackage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/packages/{packageId}/download": {
         parameters: {
             query?: never;
@@ -180,7 +197,7 @@ export interface paths {
         /** This tenant's font requests */
         get: operations["listFontRequests"];
         put?: never;
-        /** Request a font. Admin only. Records the one-time fee (06 s6) */
+        /** Request a font. Admin only. Records the fee owed; billing charges it (06 s6) */
         post: operations["createFontRequest"];
         delete?: never;
         options?: never;
@@ -201,7 +218,7 @@ export interface components {
         FileRef: {
             /** @description File name inside the job folder. */
             name: string;
-            /** @description Object storage key. It starts with the tenant id, then the owning service (03 s11). */
+            /** @description Object storage key. It starts with the tenant id, then the owning service (03 s11). Render rejects a key that does not start with the caller's tenant id. */
             key: string;
         };
         ToolInfo: {
@@ -241,6 +258,10 @@ export interface components {
         /** @enum {string} */
         PageIssueKind: "overflow" | "broken_table" | "cut_off_graphic" | "orphan_heading" | "margin";
         RenderIssue: {
+            /** Format: uuid */
+            issueId: string;
+            /** @enum {string} */
+            status: "open" | "resolved";
             page: number;
             kind: components["schemas"]["PageIssueKind"];
             /** @enum {string} */
@@ -262,17 +283,20 @@ export interface components {
             volumeId: string;
             /** @enum {string} */
             status: "done" | "failed";
+            docx: components["schemas"]["FileRef"];
             /** @description Counted with pdfinfo on the exact PDF to submit (01 s5.5). */
             pageCount: number;
-            pageLimit?: number;
+            pageLimit?: number | null;
+            wordOnly?: boolean;
             withinLimit: boolean;
+            /** @description Present when status is done. */
             pdf?: components["schemas"]["FileRef"];
             issues: components["schemas"]["RenderIssue"][];
             fonts: components["schemas"]["FontUse"][];
             /** @description Present when wordOnly is true. Tells the user to check the page limit in Word. */
             wordOnlyNote?: string;
             /** @description False when the vision check did not run, for example when the model gateway is down. */
-            visionChecked?: boolean;
+            visionChecked: boolean;
         };
         PackageRequest: {
             /** Format: uuid */
@@ -324,9 +348,12 @@ export interface components {
         };
         FontRequestCreate: {
             fontName: string;
-            /** @description The checkbox "We hold a license to use this font." It must be true. */
-            licenseConfirmed: boolean;
-            file?: components["schemas"]["FileRef"];
+            /**
+             * @description The checkbox "We hold a license to use this font." It must be true.
+             * @constant
+             */
+            licenseConfirmed: true;
+            file: components["schemas"]["FileRef"];
         };
         FontRequest: {
             /** Format: uuid */
@@ -337,16 +364,18 @@ export interface components {
             /** Format: date-time */
             licenseConfirmedAt: string;
             /** @description User id of the Admin who ticked the box. */
-            licenseConfirmedBy?: string;
+            licenseConfirmedBy: string;
             feeCents: number;
             currency: string;
             /** Format: date-time */
             feeRecordedAt: string;
-            file?: components["schemas"]["FileRef"];
+            file: components["schemas"]["FileRef"];
         };
     };
     responses: never;
     parameters: {
+        UserId: string;
+        UserRole: "admin" | "member";
         TenantId: string;
     };
     requestBodies: never;
@@ -529,6 +558,51 @@ export interface operations {
                     "application/json": components["schemas"]["Package"];
                 };
             };
+            /** @description A render id is unknown for this tenant. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request failed validation, or a render is not done. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getPackage: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-tenant-id": components["parameters"]["TenantId"];
+            };
+            path: {
+                packageId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The package. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Package"];
+                };
+            };
+            /** @description No such package for this tenant. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     downloadPackage: {
@@ -672,6 +746,8 @@ export interface operations {
             query?: never;
             header: {
                 "x-tenant-id": components["parameters"]["TenantId"];
+                "x-user-id": components["parameters"]["UserId"];
+                "x-user-role": components["parameters"]["UserRole"];
             };
             path?: never;
             cookie?: never;
@@ -705,7 +781,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The license is not confirmed, the font file is missing or not a font. */
+            /** @description The license is not confirmed, the font file is missing, not a font, or its key is not under the caller's tenant. */
             422: {
                 headers: {
                     [name: string]: unknown;

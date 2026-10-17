@@ -43,6 +43,14 @@ One heading per chat. Each entry: question, options, choice made, why. Design ga
 
 ## Chat 4
 
+- **Bid-autopilot scripts are not in the repo.** 09 s4.10 says "PD source: None" and the 29 scripts and 7 prose scripts are not on master. Options: stop, or write the scripts Phase 3 needs. Chose to write the Phase 3 tools (format lock, shell, audit, caption fields, visual gate, page count) and register them with the toolrunner. The remaining scripts wait for their source. Owner to say where the originals live.
+- **Model gateway stub.** Chat 3 has not run. The vision check calls a client interface with a recorded-response double, switched by `RENDER_MODELGW_MODE`. The double lives in `python/render/tests/`. The vision check against a real model is unverified: waits on chat 3.
+- **Font request fee amount.** 06 s6 leaves it open. Chose a configuration value (`FONT_REQUEST_FEE_CENTS`, default 0 means unset and blocks the request) so no number is invented. Owner to give the amount.
+- **Font fee hand-off to billing.** 09 s4.3 gives font fees to billing, but 09 s4.10 lists no event from render to billing. Render stores the fee snapshot on the request (`feeCents`, `currency`). Options: a new event `render.font.requested` that billing consumes, or an internal billing route. Chose to defer both to chat 8 (billing) and not invent a cross-service write. Reversible: add the event in its own contract PR.
+- **Header stand-ins.** Until service tokens exist (09 s2), internal calls carry `x-tenant-id`; the font request adds `x-user-id` and `x-user-role`. The gateway sets them on public routes and drops client values. Replace with the signed token in chat 2.
+- **Format spec capture route.** 05 s6 says uploading a submitted proposal captures a new spec. No route yet. Deferred to the format lock PR (c4-03) if the capture logic fits, else a later chat.
+- **Event minor bump.** Tightening `render.done`, `render.issue.found` and `render.package.ready` is marked 1.1, but 1.0 events with open payloads no longer validate. Safe only because no producer or consumer exists. Do not copy this for live events.
+
 ## Chat 5
 
 ## Chat 6
@@ -52,9 +60,3 @@ One heading per chat. Each entry: question, options, choice made, why. Design ga
 ## Chat 8
 
 ## Chat 9
-
-## Chat 4
-
-- **Bid-autopilot scripts are not in the repo.** 09 s4.10 says "PD source: None" and the 29 scripts and 7 prose scripts are not on master. Options: stop, or write the scripts Phase 3 needs. Chose to write the Phase 3 tools (format lock, shell, audit, caption fields, visual gate, page count) and register them with the toolrunner. The remaining scripts wait for their source. Owner to say where the originals live.
-- **Model gateway stub.** Chat 3 has not run. The vision check calls a client interface with a recorded-response double, switched by `RENDER_MODELGW_MODE`. The double lives in `python/render/tests/`. The vision check against a real model is unverified: waits on chat 3.
-- **Font request fee amount.** 06 s6 leaves it open. Chose a configuration value (`FONT_REQUEST_FEE_CENTS`, default 0 means unset and blocks the request) so no number is invented. Owner to give the amount.

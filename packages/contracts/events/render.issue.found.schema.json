@@ -25,6 +25,7 @@
       "description": "Payload of render.issue.found: one layout issue on one page.",
       "additionalProperties": false,
       "required": [
+        "issue_id",
         "render_id",
         "run_id",
         "volume_id",
@@ -73,6 +74,10 @@
             "geometry",
             "vision"
           ]
+        },
+        "issue_id": {
+          "type": "string",
+          "format": "uuid"
         }
       }
     }
