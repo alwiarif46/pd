@@ -103,6 +103,18 @@ export interface RunCrossTenantOptions {
    */
   expectAsA?: Record<string, number | number[]>;
   /**
+   * Allow a 4xx or 5xx in `expectAsA`. Off by default: a control that expects an error proves little.
+   * Meant for an endpoint whose valid answer to tenant A really is a 4xx. Applies to tenant A only.
+   */
+  allowNon2xxControl?: boolean;
+  /**
+   * What tenant B must get from an endpoint with NO path parameter (a list or a create, which B is
+   * allowed to call), per `METHOD /path` key; a number or a list. Default: any status below 500 except
+   * 401 and 403, which a broken credential would give. A 5xx is never accepted here. Endpoints with a
+   * path parameter still expect 404.
+   */
+  expectAsB?: Record<string, number | number[]>;
+  /**
    * Strings that must not appear in any body returned to tenant B or to an anonymous caller. The values
    * of `ids` are always checked. Default: tenant A's name, tenant A's bid name and tenant A's admin email.
    */
@@ -191,12 +203,39 @@ function isExpectedAsA(status: number, expected: number | number[] | undefined):
   return Array.isArray(expected) ? expected.includes(status) : status === expected;
 }
 
+function isExpectedAsB(status: number, expected: number | number[] | undefined): boolean {
+  if (expected === undefined) return status < 500 && status !== 401 && status !== 403;
+  return Array.isArray(expected) ? expected.includes(status) : status === expected;
+}
+
+const describeExpected = (expected: number | number[] | undefined, fallback: string): string =>
+  expected === undefined ? fallback : Array.isArray(expected) ? expected.join(' or ') : String(expected);
+
+/** Markers match as whole words, case-insensitively, so 'Tenant A' does not match 'tenant authentication'. */
+function markerRegex(marker: string): RegExp {
+  return new RegExp(`(?<![\\p{L}\\p{N}_])${marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}_])`, 'iu');
+}
+
+function checkControlConfig(opts: RunCrossTenantOptions): void {
+  const statuses = (v: number | number[]): number[] => (Array.isArray(v) ? v : [v]);
+  for (const [key, v] of Object.entries(opts.expectAsA ?? {})) {
+    if (!opts.allowNon2xxControl && statuses(v).some((st) => st >= 400)) {
+      throw new Error(`expectAsA for ${key} expects a 4xx or 5xx from tenant A, which proves little. Pass allowNon2xxControl: true if that really is the valid answer.`);
+    }
+  }
+  for (const [key, v] of Object.entries(opts.expectAsB ?? {})) {
+    if (statuses(v).some((st) => st >= 500)) throw new Error(`expectAsB for ${key} expects a 5xx from tenant B, which is never a valid answer.`);
+  }
+}
+
 /**
  * For every non-public endpoint:
  * - as tenant B with tenant A's ids: expect 404;
  * - with no credentials: expect 401;
  * - for a path with 2 or more parameters, as tenant B with exactly one of A's ids and the rest B's own
  *   (`idsB`): expect 404, so a handler that checks one id and loads the other alone is caught;
+ * - an endpoint with no path parameter has nothing to point at A's data, so B must get a usable answer
+ *   (below 500, not 401 or 403, or `expectAsB`) whose body holds none of A's ids or markers;
  * - as tenant A with A's ids (the positive control, sent last): expect 2xx, or `expectAsA`. Without this
  *   a service that answers 404 to everyone, or ids that do not exist, would pass;
  * - no B or anonymous body may contain a value of `ids` or a marker.
@@ -205,6 +244,7 @@ function isExpectedAsA(status: number, expected: number | number[] | undefined):
  * problem; returns the report when clean.
  */
 export async function runCrossTenant(opts: RunCrossTenantOptions): Promise<CrossTenantReport> {
+  checkControlConfig(opts);
   const fixtures = opts.fixtures ?? FIXTURES;
   const endpoints = opts.endpoints ?? endpointsOf(opts.serviceId);
   const report: CrossTenantReport = {
@@ -218,7 +258,7 @@ export async function runCrossTenant(opts: RunCrossTenantOptions): Promise<Cross
   const markers = [
     ...Object.values(opts.ids).filter((v) => v !== ''),
     ...(opts.markers ?? [fixtures.a.name, fixtures.a.bid.name, fixtures.a.admin.email]),
-  ].filter((m) => m !== '');
+  ].filter((m) => m !== '').map((m) => ({ text: m, re: markerRegex(m) }));
 
   for (const e of targets) {
     const key = endpointKey(e);
@@ -249,9 +289,8 @@ export async function runCrossTenant(opts: RunCrossTenantOptions): Promise<Cross
       }
     };
     const checkBody = (label: string, requestUrl: string, res: InjectResponse): void => {
-      const body = res.body.toLowerCase();
-      const hit = markers.find((m) => body.includes(m.toLowerCase()));
-      if (hit !== undefined) fail('body-leak', `${requestUrl} ${label} returned a body that contains ${JSON.stringify(hit)}`);
+      const hit = markers.find((m) => m.re.test(res.body));
+      if (hit !== undefined) fail('body-leak', `${requestUrl} ${label} returned a body that contains ${JSON.stringify(hit.text)}`);
     };
 
     await opts.reset?.(e);
@@ -260,7 +299,16 @@ export async function runCrossTenant(opts: RunCrossTenantOptions): Promise<Cross
     const asB = await send(`as ${fixtures.b.name}`, url, headersB);
     if (asB) {
       result.asTenantB = asB.statusCode;
-      if (asB.statusCode !== 404) fail('cross-tenant-leak', `${url} as ${fixtures.b.name} returned ${asB.statusCode}, expected 404`);
+      if (e.params.length === 0) {
+        // Nothing in the path to point at A's data: B may call it, so the body check is the real test.
+        const expectedB = opts.expectAsB?.[key];
+        if (!isExpectedAsB(asB.statusCode, expectedB)) {
+          const want = describeExpected(expectedB, 'a status below 500 other than 401 and 403');
+          fail('broken-control', `${url} as ${fixtures.b.name} returned ${asB.statusCode}, expected ${want}; tenant B's credential or request may be wrong`);
+        }
+      } else if (asB.statusCode !== 404) {
+        fail('cross-tenant-leak', `${url} as ${fixtures.b.name} returned ${asB.statusCode}, expected 404`);
+      }
       checkBody(`as ${fixtures.b.name}`, url, asB);
     }
 
@@ -290,11 +338,14 @@ export async function runCrossTenant(opts: RunCrossTenantOptions): Promise<Cross
       result.asTenantA = asA.statusCode;
       const expected = opts.expectAsA?.[key];
       if (!isExpectedAsA(asA.statusCode, expected)) {
-        const want = expected === undefined ? 'a 2xx status' : Array.isArray(expected) ? expected.join(' or ') : String(expected);
+        const want = describeExpected(expected, 'a 2xx status');
         fail('broken-control', `${url} as ${fixtures.a.name} returned ${asA.statusCode}, expected ${want}; the ids or the path may be wrong, so the checks above prove nothing`);
       }
     }
   }
+
+  // Tenant A's own requests may have changed its data: leave it as found.
+  if (targets.length > 0) await opts.reset?.(targets[targets.length - 1] as Endpoint);
 
   report.summary = targets.length === 0
     ? 'no non-public endpoints; nothing to check'

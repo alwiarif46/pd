@@ -154,6 +154,14 @@ function richApp(): FastifyInstance {
   // 404s correctly but echoes what it was asked for.
   app.get('/echo/:bid_id', async (req, reply) => reply.code(404).send({ error: `bid ${(req.params as { bid_id: string }).bid_id} not found` }));
   app.get('/chatty/:bid_id', async (req, reply) => (BID_OF[(req.params as { bid_id: string }).bid_id] === tenantOf(req).id ? { ok: true } : reply.code(404).send({ error: `no such bid for ${TENANT_A.admin.email}` })));
+  // No path parameter: a list scoped to the caller, and one that forgets to scope.
+  const ROWS = [{ id: 'row-a', org: TENANT_A.id, name: 'A row' }, { id: 'row-b', org: TENANT_B.id, name: 'B row' }];
+  app.get('/rows', async (req) => ROWS.filter((r) => r.org === tenantOf(req).id));
+  app.get('/rows-unscoped', async () => ROWS);
+  app.get('/rows-a-id', async () => [{ id: TENANT_A.bid.id }]);
+  app.post('/rows', async (_req, reply) => reply.code(201).send({ ok: true }));
+  app.get('/rows-broken-for-b', async (req, reply) => (tenantOf(req).id === TENANT_B.id ? reply.code(500).send({ error: 'boom' }) : { ok: true }));
+  app.get('/rows-403', async (req, reply) => (tenantOf(req).id === TENANT_B.id ? reply.code(403).send({ error: 'no' }) : { ok: true }));
   // Nested: checks the bid, then loads the document by its id alone.
   app.get('/bids/:bid_id/docs/:doc_id', async (req, reply) => {
     const { bid_id, doc_id } = req.params as { bid_id: string; doc_id: string };
@@ -226,7 +234,7 @@ describe('runCrossTenant: positive control', () => {
       serviceId: 'identity', endpoints: ep('/bids/{bid_id}', 'GET'), inject, ids: { bid_id: TENANT_A.bid.id }, headersFor,
       reset: () => { order.push('reset'); },
     });
-    expect(order).toEqual(['reset', 'Bearer token-b', 'anon', 'Bearer token-a']);
+    expect(order).toEqual(['reset', 'Bearer token-b', 'anon', 'Bearer token-a', 'reset']);
   });
 });
 
@@ -242,7 +250,7 @@ describe('runCrossTenant: response bodies', () => {
   };
 
   it('fails a 404 that echoes tenant A\'s id', async () => {
-    const err = await run(ep('/echo/{bid_id}', 'GET'), { expectAsA: { 'GET /echo/{bid_id}': 404 } });
+    const err = await run(ep('/echo/{bid_id}', 'GET'), { expectAsA: { 'GET /echo/{bid_id}': 404 }, allowNon2xxControl: true });
     expect(err!.report.failures.map((f) => f.kind)).toEqual(['body-leak']);
     expect(err!.report.failures[0]?.detail).toContain(TENANT_A.bid.id);
   });
@@ -363,5 +371,95 @@ describe('assertRlsIsolation arguments', () => {
     await expect(
       assertRlsIsolation({ client: client as never, table: 'bids', tenantColumn: 'org_id', idsA: [TENANT_A.bid.id], tenantB: TENANT_B.id } as never),
     ).rejects.toThrow(/needs tenantA/);
+  });
+});
+
+describe('runCrossTenant: markers match whole words', () => {
+  const body = (text: string): Inject => async (req) => {
+    if (!req.headers.authorization) return { statusCode: 401, body: text };
+    return { statusCode: req.headers.authorization === 'Bearer token-a' ? 200 : 404, body: text };
+  };
+  const run = (text: string) =>
+    runCrossTenant({ serviceId: 'identity', endpoints: ep('/bids/{bid_id}', 'GET'), inject: body(text), ids: { bid_id: TENANT_A.bid.id }, headersFor })
+      .then(() => null, (e: unknown) => e as CrossTenantError);
+
+  it('does not trip on ordinary words that start like tenant A', async () => {
+    for (const text of ['tenant authentication required', 'Tenant Alpha', 'tenant-agnostic', 'retenant a']) {
+      expect(await run(text), text).toBeNull();
+    }
+  });
+
+  it('still catches the names and the email in running text, in any case', async () => {
+    for (const text of ['Tenant A', 'welcome to tenant a.', 'org "TENANT A" not found', `x ${TENANT_A.bid.name}!`, `mail ${TENANT_A.admin.email}, thanks`, `<b>${TENANT_A.bid.name.toLowerCase()}</b>`]) {
+      const err = await run(text);
+      expect(err?.report.failures.map((f) => f.kind), text).toContain('body-leak');
+    }
+  });
+});
+
+describe('runCrossTenant: paths with no parameter', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => {
+    await app?.close();
+  });
+  const run = async (path: string, methods: string[] = ['GET'], extra: Partial<Parameters<typeof runCrossTenant>[0]> = {}) => {
+    app = richApp();
+    return runCrossTenant({ serviceId: 'identity', endpoints: ep(path, ...methods), inject: injectOn(app), ids: { bid_id: TENANT_A.bid.id }, headersFor, ...extra })
+      .then((r) => r, (e: unknown) => e as CrossTenantError);
+  };
+
+  it('passes a scoped list that returns only the caller\'s rows', async () => {
+    const report = (await run('/rows')) as Awaited<ReturnType<typeof runCrossTenant>>;
+    expect(report.failures).toEqual([]);
+    expect(report.checked[0]).toMatchObject({ asTenantA: 200, asTenantB: 200, noCredentials: 401, ok: true });
+  });
+
+  it('fails a list that includes tenant A\'s row', async () => {
+    const err = (await run('/rows-unscoped', ['GET'], { markers: ['A row'] })) as CrossTenantError;
+    expect(err.report.failures.map((f) => f.kind)).toEqual(['body-leak']);
+    const byId = (await run('/rows-a-id')) as CrossTenantError;
+    expect(byId.report.failures.map((f) => f.kind)).toEqual(['body-leak']);
+  });
+
+  it('accepts a created or other non-5xx answer to a scoped POST, and expectAsB pins the status', async () => {
+    expect(await run('/rows', ['POST'])).toHaveProperty('failures', []);
+    const err = (await run('/rows', ['POST'], { expectAsB: { 'POST /rows': 200 } })) as CrossTenantError;
+    expect(err.report.failures[0]).toMatchObject({ kind: 'broken-control', endpoint: 'POST /rows' });
+    expect(err.report.failures[0]?.detail).toContain('as Tenant B returned 201, expected 200');
+    expect(await run('/rows', ['POST'], { expectAsB: { 'POST /rows': [200, 201] } })).toHaveProperty('failures', []);
+  });
+
+  it('fails when tenant B gets a 5xx, 401 or 403, which a broken credential would give', async () => {
+    for (const path of ['/rows-broken-for-b', '/rows-403']) {
+      const err = (await run(path)) as CrossTenantError;
+      expect(err.report.failures.map((f) => f.kind), path).toEqual(['broken-control']);
+    }
+    const noAuth = await runCrossTenant({
+      serviceId: 'identity', endpoints: ep('/rows', 'GET'), ids: {}, headersFor,
+      inject: async (req) => ({ statusCode: req.headers.authorization === 'Bearer token-a' ? 200 : 401, body: '' }),
+    }).catch((e: unknown) => e as CrossTenantError);
+    expect((noAuth as CrossTenantError).report.failures.map((f) => f.kind)).toContain('broken-control');
+  });
+
+  it('still needs 401 for an anonymous caller and a 2xx for tenant A', async () => {
+    const err = (await run('/rows', ['GET'], {
+      inject: async (req) => ({ statusCode: req.headers.authorization === 'Bearer token-a' ? 404 : 200, body: '[]' }),
+    })) as CrossTenantError;
+    expect(err.report.failures.map((f) => f.kind).sort()).toEqual(['anonymous-leak', 'broken-control']);
+  });
+});
+
+describe('runCrossTenant: control statuses', () => {
+  const inject: Inject = async () => ({ statusCode: 200, body: '' });
+  const base = { serviceId: 'identity', endpoints: ep('/bids/{bid_id}', 'GET'), inject, ids: { bid_id: 'x' }, headersFor };
+
+  it('refuses a 4xx or 5xx in expectAsA unless allowNon2xxControl is true', async () => {
+    await expect(runCrossTenant({ ...base, expectAsA: { 'GET /bids/{bid_id}': 404 } })).rejects.toThrow(/allowNon2xxControl/);
+    await expect(runCrossTenant({ ...base, expectAsA: { 'GET /bids/{bid_id}': [200, 500] } })).rejects.toThrow(/allowNon2xxControl/);
+    await expect(runCrossTenant({ ...base, expectAsA: { 'GET /bids/{bid_id}': 404 }, allowNon2xxControl: true })).rejects.toBeInstanceOf(CrossTenantError);
+  });
+
+  it('refuses a 5xx in expectAsB', async () => {
+    await expect(runCrossTenant({ ...base, endpoints: ep('/rows', 'GET'), expectAsB: { 'GET /rows': 500 }, allowNon2xxControl: true })).rejects.toThrow(/5xx/);
   });
 });
