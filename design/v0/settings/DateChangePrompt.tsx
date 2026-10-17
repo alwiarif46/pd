@@ -14,7 +14,7 @@ export function DateChangePrompt({ open, previousDue, nextDue, onChoose, onCance
         <DialogHeader>
           <DialogTitle>The due date moved</DialogTitle>
           <DialogDescription>
-            The due date moved from {formatDate(previousDue)} to {formatDate(nextDue)}. How should the schedule change?
+            The due date moved from {formatDate(previousDue)} to {formatDate(nextDue)}. Move the schedule with it?
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-2">
