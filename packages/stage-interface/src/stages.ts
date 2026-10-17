@@ -1,0 +1,31 @@
+/** Stage keys, as stored in `stages.stage_key` (04 s3). Gates are orchestrator-owned. */
+export const STAGE_KEYS = [
+  'intake',
+  'amendment_gate',
+  'shred',
+  'gate_0b',
+  'worksheet',
+  'format_lock',
+  'outline',
+  'qa_draft',
+  'pink',
+  'evidence',
+  'agency_intel',
+  'draft',
+  'visuals',
+  'exec_summary',
+  'pricing',
+  'red',
+  'gate_1',
+  'recovery',
+  'sweep',
+  'assembly',
+  'render_verify',
+  'gold_white',
+  'gate_2',
+  'package',
+  'submit',
+  'outcome',
+] as const;
+
+export type StageKey = (typeof STAGE_KEYS)[number];
