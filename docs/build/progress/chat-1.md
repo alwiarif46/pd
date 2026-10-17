@@ -33,7 +33,7 @@ Plan PRs 3 to 6 (PD #37, #35, #36, #38) are already merged on master (merge comm
 | 10 Testing | e2e/c1-10-testing | planned | |
 | 11 Local stack | e2e/c1-11-stack | planned | |
 | 12 CI | e2e/c1-12-ci | planned | |
-| 13 Rename notice | - | planned | |
+| 13 Rename notice | e2e/c1-13-rename-notice | notice posted | Owner step H-13 in HUMAN-TODO; redirect check before the final review |
 
 ## Decisions
 See `docs/build/questions.md`, Chat 1.
