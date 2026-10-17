@@ -312,7 +312,7 @@ paths:
           content:
             application/json:
               schema:
-                oneOf:
+                anyOf:
                   - $ref: "#/components/schemas/Ok"
                   - $ref: "#/components/schemas/ScheduleSeedResponse"
         "400":
@@ -471,7 +471,7 @@ paths:
       security:
         - bearerAuth: []
         - sessionCookie: []
-      description: The tenant comes from the verified token. No tenant id is sent.
+      description: 409 when the item would move under itself or one of its own sections. Returns the whole outline. The tenant comes from the verified token. No tenant id is sent.
       parameters:
         - name: id
           in: path
@@ -504,6 +504,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
       x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
   /bids/{id}/matrix:
     get:
@@ -2298,7 +2300,7 @@ components:
           production: ProductionTab
           orals: OralsTab
           lessons: LessonsTab
-      oneOf:
+      anyOf:
         - $ref: "#/components/schemas/OverviewTab"
         - $ref: "#/components/schemas/ScheduleTab"
         - $ref: "#/components/schemas/ComplianceTab"

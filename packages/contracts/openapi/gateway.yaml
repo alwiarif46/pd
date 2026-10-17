@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Gateway and web service
   version: 0.3.0
-  description: "The public surface under /api. Each route forwards to the owning service (x-upstream), which has the same path without /api. This file copies the service schemas; it is standalone on purpose. GET /api/org keeps its PD name. GET /healthz (not under /api) replaces PD's /health. Every secured route takes a bearer access token (Authorization header) or the e2e_session cookie. Either one works. CSRF: a request authenticated by the cookie must send the header X-Requested-With: e2e on POST, PATCH, PUT and DELETE, or it answers 403. Bearer requests may omit it. List routes accept limit and cursor and return X-Next-Cursor while more rows remain. The body stays a plain array."
+  description: "The public surface under /api. Each route forwards to the owning service (x-upstream), which has the same path without /api. This file copies the service schemas; it is standalone on purpose. GET /api/org keeps its PD name. GET /healthz (not under /api) replaces PD's /health. billing.yaml gains /billing/* in B1; the x-upstream: billing routes forward there then. Path renames from PD: /api/org/members is /api/members, /api/org/invites is /api/invites, /api/documents/:id/key-override is /api/bids/{id}/amendments/{documentId}/key-override, and /api/documents/:id/amendment-no is /api/bids/{id}/amendments/{documentId}/amendment-no (the web client must now pass the bid id). Every secured route takes a bearer access token (Authorization header) or the e2e_session cookie. Either one works. CSRF: a request authenticated by the cookie must send the header X-Requested-With: e2e on POST, PATCH, PUT and DELETE, or it answers 403. Bearer requests may omit it. List routes accept limit and cursor and return X-Next-Cursor while more rows remain. The body stays a plain array."
 x-service: gateway
 security:
   - bearerAuth: []
@@ -1148,7 +1148,7 @@ paths:
           content:
             application/json:
               schema:
-                oneOf:
+                anyOf:
                   - $ref: "#/components/schemas/Ok"
                   - $ref: "#/components/schemas/ScheduleSeedResponse"
         "400":
@@ -1311,7 +1311,7 @@ paths:
       security:
         - bearerAuth: []
         - sessionCookie: []
-      description: The tenant comes from the verified token. No tenant id is sent.
+      description: 409 when the item would move under itself or one of its own sections. Returns the whole outline. The tenant comes from the verified token. No tenant id is sent.
       parameters:
         - name: id
           in: path
@@ -1344,6 +1344,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
       x-csrf: "X-Requested-With: e2e is required when the cookie authenticates the request."
       x-upstream: intel
   /api/bids/{id}/matrix:
@@ -2242,6 +2244,12 @@ paths:
                 $ref: "#/components/schemas/WebhookAck"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "500":
+          description: The event could not be processed. Stripe retries the delivery.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
       x-upstream: billing
@@ -4025,7 +4033,7 @@ components:
           production: ProductionTab
           orals: OralsTab
           lessons: LessonsTab
-      oneOf:
+      anyOf:
         - $ref: "#/components/schemas/OverviewTab"
         - $ref: "#/components/schemas/ScheduleTab"
         - $ref: "#/components/schemas/ComplianceTab"

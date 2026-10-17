@@ -523,8 +523,8 @@ components:
     zitadelSignature:
       type: apiKey
       in: header
-      name: X-Zitadel-Signature
-      description: HMAC of the body with the shared webhook secret. Internal only.
+      name: X-ZITADEL-Signature
+      description: "HMAC of the body with the shared webhook secret. Internal only. The name follows the pinned Zitadel proto comment: verify in CI against the real Zitadel."
   parameters:
     CsrfHeader:
       name: X-Requested-With

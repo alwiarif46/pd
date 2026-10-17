@@ -168,7 +168,7 @@ export interface paths {
         put?: never;
         /**
          * Move an outline item
-         * @description The tenant comes from the verified token. No tenant id is sent.
+         * @description 409 when the item would move under itself or one of its own sections. Returns the whole outline. The tenant comes from the verified token. No tenant id is sent.
          */
         post: operations["moveOutlineItem"];
         delete?: never;
@@ -1684,6 +1684,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     getComplianceMatrix: {
