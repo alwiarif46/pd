@@ -87,18 +87,18 @@ Atrium's tokens replace PD's shadcn mapping. PD's domain tokens stay.
 | canvas | #EBEFF4 | Alias of `background` |
 | paper | #FFFFFF | Alias of `card` |
 | line | #D5DBE3 | Alias of `border` |
-| due | #B42318 | Stays as a domain token. Define a light and a dark value; start from `destructive` hue (28) |
-| today | #1F6FEB | Stays. Define light and dark; start from the `primary` hue (258) |
-| weekend | #F3F5F8 | Stays. Light and dark values, near `muted` |
+| due | #B42318 | Alias of `destructive` |
+| today | #1F6FEB | Alias of `primary` |
+| weekend | #F3F5F8 | Alias of `muted` |
 | holiday | #FFF4DC | Stays. Light and dark values, near `signal` at low opacity |
 | warning | #B54708 | Stays. Light and dark values, near `signal-foreground` |
 | team-blue, team-pink, team-red, team-green, team-gold, team-white-glove | PD hexes | Stay as domain tokens (review team colors, 05 labels). Each needs a dark value. Keep a text label with each, never color alone (05 s9) |
 | background, foreground, card, popover, primary, secondary, muted, accent, destructive, border, input, ring (+ foregrounds) | PD navy-gray values | Replaced by Atrium's values in 3.1 |
 | sidebar-*, signal | not in PD | New from Atrium |
 | `--font-sans` | Segoe UI | Replaced by IBM Plex Sans |
-| `--font-numeric` | Bahnschrift stack | Dropped; use Plex Mono and `tabular-nums` |
+| `--font-numeric` | Bahnschrift stack | Alias of `--font-mono` (Plex Mono); use with `tabular-nums` |
 
-Domain tokens must be defined for dark mode, and every PD component that uses `bg-ink`, `bg-canvas`, `bg-paper` or `border-line` keeps working through the aliases until it is moved to the Atrium names.
+`holiday`, `warning` and the team colors must get dark values with their screens, and every PD component that uses `bg-ink`, `bg-canvas`, `bg-paper` or `border-line` keeps working through the aliases until it is moved to the Atrium names.
 
 ## 4. Screen map
 
@@ -127,7 +127,7 @@ The shell has two nav levels: an icon rail (6 primary, 2 secondary) with a top r
 | Accept invite, seat locked (PD `features/membership/ui`) | New in Atrium style (restyle PD's hand-built component) | FAIL (bad code), locked | 2 |
 | Bids list | Partial: sidebar bid list shows the data; no full table page | empty, OOP | 2 |
 | New bid (drop zone, optional past performance zone, Fetch from portal) | New | FAIL (bad file), OOP; portal option shows DISC | 2 (drop zone), 7 (portal option) |
-| Repository (05 s5 browser) | Partial: only the rail entry "Repository" and a placeholder | empty, FAIL | 3 (service). Screen unassigned, see G9 |
+| Repository (05 s5 browser) | Partial: only the rail entry "Repository" and a placeholder | empty, FAIL | 3 (service). 3 (service and screen, G9) |
 | Organization (members, roles, plan, billing) | Partial: rail entry "Settings" and placeholder | OOP | 8 |
 | Account (name, email, MFA factors, linked accounts) | New | FAIL | 2 |
 
@@ -204,7 +204,7 @@ Gaps are build work. Count: 14.
 | G11 | Atrium dashboard shows items 05 does not describe: greeting ("Good morning, Dana"), the "Submission due" and "Q&A window" countdown cards, "Recently" feed with three items, a "Plan usage" bar with a count out of 4 (05 shows "proposals left") | Atrium only | Keep. Make the greeting use the user name from the session. Wire "proposals left" to 06 numbers. 05 should list the countdown cards (add to 05 in a later doc pass) | 3 |
 | G12 | 05 s4.3 Pink review link and "Add anything here at any time" note, the time estimate to the next gate, and the amendment banner have no place in the dashboard | 05 only | Add a link card and a time line to the run monitor | 3 (time), 5 (Pink link), 7 (banner) |
 | G13 | Product name. Atrium says "Bidwright" (title, rail logo "BW", mobile header). 05 and BUILD-PLAN say the working name is E2E Proposal, final name open (00 s7) | Drift | Read the name and logo letters from one config constant; do not hard-code. Use "E2E Proposal" for now | 2 (with the shell) |
-| G14 | Tokens and theme behavior. Atrium has no system-preference theme follow, no stored choice, no `success` or `warning` tokens, and the `dark` variant only matches inside `.dark`. PD's domain tokens have no dark values. CLAUDE.md says PD's dark variants apply only under a `.dark` class that the app never sets | Drift | Put `.theme-atrium` and `.dark` on `html`, follow `prefers-color-scheme` and store the choice, add `success`, `warning`, and dark values for due, today, weekend, holiday, warning, team-* (section 3.3). Replace `ui-preflight`/legacy layer setup when the last legacy screen goes | 1 (tokens, `.dark` on html, stored choice: done); OS follow and domain dark values later (ENHANCEMENTS) |
+| G14 | Tokens and theme behavior. Atrium has no system-preference theme follow, no stored choice, no `success` or `warning` tokens, and the `dark` variant only matches inside `.dark`. PD's domain tokens have no dark values. CLAUDE.md says PD's dark variants apply only under a `.dark` class that the app never sets | Drift | Put `.dark` on `html` (the tokens sit on `:root`, so `.theme-atrium` is not needed), follow `prefers-color-scheme` and store the choice, add `success`, `warning`, and dark values for due, today, weekend, holiday, warning, team-* (section 3.3). Replace `ui-preflight`/legacy layer setup when the last legacy screen goes | 1 (tokens, `.dark` on html, stored choice: done); OS follow and domain dark values later (ENHANCEMENTS) |
 
 Other drift to keep in mind (not counted, small):
 - Atrium's hand-written buttons skip `Button`. On integration, prefer `Button` from `components/ui` for new work and leave the Atrium markup as it is, so re-integration stays a clean diff.

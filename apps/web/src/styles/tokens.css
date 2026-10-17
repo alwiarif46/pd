@@ -1,80 +1,81 @@
 /* Design tokens: Atrium's theme (design/e2e/atrium-design/app/globals.css, BUILD-PLAN s10), copied as is.
    Light values sit on :root; dark values apply under a .dark class (see src/lib/theme.ts).
-   The @theme block maps them to Tailwind utilities. It is "static" so every --color-* variable is always
-   emitted; sonner.tsx reads var(--color-popover) from JS. */
-:root,
-.theme-atrium {
-  color-scheme: light;
-  --background: oklch(0.975 0.013 88);
-  --foreground: oklch(0.25 0.035 258);
-  --card: oklch(0.992 0.007 88);
-  --card-foreground: oklch(0.25 0.035 258);
-  --popover: oklch(0.992 0.007 88);
-  --popover-foreground: oklch(0.25 0.035 258);
-  --primary: oklch(0.48 0.17 258);
-  --primary-foreground: oklch(0.985 0.01 88);
-  --secondary: oklch(0.945 0.016 88);
-  --secondary-foreground: oklch(0.25 0.035 258);
-  --muted: oklch(0.945 0.014 88);
-  --muted-foreground: oklch(0.5 0.03 258);
-  --accent: oklch(0.93 0.035 255);
-  --accent-foreground: oklch(0.36 0.13 258);
-  --signal: oklch(0.8 0.13 80);
-  --signal-foreground: oklch(0.36 0.08 70);
-  --destructive: oklch(0.56 0.18 28);
-  --border: oklch(0.91 0.018 88);
-  --input: oklch(0.91 0.018 88);
-  --ring: oklch(0.48 0.17 258);
-  --radius: 0.75rem;
-  --sidebar-rail: oklch(0.27 0.1 262);
-  --sidebar: oklch(0.32 0.12 261);
-  --sidebar-foreground: oklch(0.97 0.012 88);
-  --sidebar-muted: oklch(0.8 0.045 255);
-  --sidebar-primary: oklch(0.86 0.09 230);
-  --sidebar-primary-foreground: oklch(0.26 0.09 262);
-  --sidebar-accent: oklch(0.38 0.12 260);
-  --sidebar-accent-foreground: oklch(0.97 0.012 88);
-  --sidebar-border: oklch(0.42 0.1 260);
-  --sidebar-ring: oklch(0.86 0.09 230);
+   The @theme block maps them to Tailwind utilities. "inline" makes utilities read the variable at the element, so a
+   .dark class on any ancestor works; "static" keeps every --color-* variable emitted for sonner.tsx. */
+/* In the base layer so these values beat the legacy layer, which also declares --muted and --card on :root. */
+@layer base {
+  :root,
+  .theme-atrium {
+    color-scheme: light;
+    --background: oklch(0.975 0.013 88);
+    --foreground: oklch(0.25 0.035 258);
+    --card: oklch(0.992 0.007 88);
+    --card-foreground: oklch(0.25 0.035 258);
+    --popover: oklch(0.992 0.007 88);
+    --popover-foreground: oklch(0.25 0.035 258);
+    --primary: oklch(0.48 0.17 258);
+    --primary-foreground: oklch(0.985 0.01 88);
+    --secondary: oklch(0.945 0.016 88);
+    --secondary-foreground: oklch(0.25 0.035 258);
+    --muted: oklch(0.945 0.014 88);
+    --muted-foreground: oklch(0.5 0.03 258);
+    --accent: oklch(0.93 0.035 255);
+    --accent-foreground: oklch(0.36 0.13 258);
+    --signal: oklch(0.8 0.13 80);
+    --signal-foreground: oklch(0.36 0.08 70);
+    --destructive: oklch(0.56 0.18 28);
+    --border: oklch(0.91 0.018 88);
+    --input: oklch(0.91 0.018 88);
+    --ring: oklch(0.48 0.17 258);
+    --radius: 0.75rem;
+    --sidebar-rail: oklch(0.27 0.1 262);
+    --sidebar: oklch(0.32 0.12 261);
+    --sidebar-foreground: oklch(0.97 0.012 88);
+    --sidebar-muted: oklch(0.8 0.045 255);
+    --sidebar-primary: oklch(0.86 0.09 230);
+    --sidebar-primary-foreground: oklch(0.26 0.09 262);
+    --sidebar-accent: oklch(0.38 0.12 260);
+    --sidebar-accent-foreground: oklch(0.97 0.012 88);
+    --sidebar-border: oklch(0.42 0.1 260);
+    --sidebar-ring: oklch(0.86 0.09 230);
+  }
+
+  .dark {
+    color-scheme: dark;
+    --background: oklch(0.185 0.02 262);
+    --foreground: oklch(0.93 0.014 88);
+    --card: oklch(0.225 0.025 262);
+    --card-foreground: oklch(0.93 0.014 88);
+    --popover: oklch(0.225 0.025 262);
+    --popover-foreground: oklch(0.93 0.014 88);
+    --primary: oklch(0.7 0.14 252);
+    --primary-foreground: oklch(0.18 0.04 262);
+    --secondary: oklch(0.28 0.03 262);
+    --secondary-foreground: oklch(0.93 0.014 88);
+    --muted: oklch(0.28 0.03 262);
+    --muted-foreground: oklch(0.7 0.025 258);
+    --accent: oklch(0.3 0.06 258);
+    --accent-foreground: oklch(0.88 0.06 245);
+    --signal: oklch(0.8 0.13 80);
+    --signal-foreground: oklch(0.88 0.1 85);
+    --destructive: oklch(0.7 0.16 28);
+    --border: oklch(0.3 0.03 262);
+    --input: oklch(0.3 0.03 262);
+    --ring: oklch(0.7 0.14 252);
+    --sidebar-rail: oklch(0.17 0.05 263);
+    --sidebar: oklch(0.21 0.07 262);
+    --sidebar-foreground: oklch(0.94 0.014 88);
+    --sidebar-muted: oklch(0.72 0.04 255);
+    --sidebar-primary: oklch(0.78 0.12 240);
+    --sidebar-primary-foreground: oklch(0.18 0.05 262);
+    --sidebar-accent: oklch(0.27 0.08 261);
+    --sidebar-accent-foreground: oklch(0.96 0.012 88);
+    --sidebar-border: oklch(0.3 0.07 261);
+    --sidebar-ring: oklch(0.78 0.12 240);
+  }
 }
 
-:root.dark,
-.theme-atrium.dark,
-.dark {
-  color-scheme: dark;
-  --background: oklch(0.185 0.02 262);
-  --foreground: oklch(0.93 0.014 88);
-  --card: oklch(0.225 0.025 262);
-  --card-foreground: oklch(0.93 0.014 88);
-  --popover: oklch(0.225 0.025 262);
-  --popover-foreground: oklch(0.93 0.014 88);
-  --primary: oklch(0.7 0.14 252);
-  --primary-foreground: oklch(0.18 0.04 262);
-  --secondary: oklch(0.28 0.03 262);
-  --secondary-foreground: oklch(0.93 0.014 88);
-  --muted: oklch(0.28 0.03 262);
-  --muted-foreground: oklch(0.7 0.025 258);
-  --accent: oklch(0.3 0.06 258);
-  --accent-foreground: oklch(0.88 0.06 245);
-  --signal: oklch(0.8 0.13 80);
-  --signal-foreground: oklch(0.88 0.1 85);
-  --destructive: oklch(0.7 0.16 28);
-  --border: oklch(0.3 0.03 262);
-  --input: oklch(0.3 0.03 262);
-  --ring: oklch(0.7 0.14 252);
-  --sidebar-rail: oklch(0.17 0.05 263);
-  --sidebar: oklch(0.21 0.07 262);
-  --sidebar-foreground: oklch(0.94 0.014 88);
-  --sidebar-muted: oklch(0.72 0.04 255);
-  --sidebar-primary: oklch(0.78 0.12 240);
-  --sidebar-primary-foreground: oklch(0.18 0.05 262);
-  --sidebar-accent: oklch(0.27 0.08 261);
-  --sidebar-accent-foreground: oklch(0.96 0.012 88);
-  --sidebar-border: oklch(0.3 0.07 261);
-  --sidebar-ring: oklch(0.78 0.12 240);
-}
-
-@theme static {
+@theme static inline {
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
   /* PD's numeric face is now Atrium's mono. */
@@ -129,8 +130,8 @@
   --color-due: var(--destructive);
 
   /* PD domain colors with no Atrium counterpart. Fixed in both themes. */
-  --color-holiday: oklch(0.95 0.05 85);
-  --color-warning: oklch(0.55 0.13 60);
+  --color-holiday: #FFF4DC;
+  --color-warning: #B54708;
   --color-team-blue: #2F6FD6;
   --color-team-pink: #E58AAE;
   --color-team-red: #C62828;

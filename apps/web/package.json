@@ -15,8 +15,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@fontsource/ibm-plex-mono": "5",
-    "@fontsource/ibm-plex-sans": "5",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0",
     "@pd/ai": "workspace:*",
     "@pd/core": "workspace:*",
     "class-variance-authority": "^0.7.1",
