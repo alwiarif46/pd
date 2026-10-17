@@ -4,7 +4,7 @@
   "title": "render.issue.found",
   "x-owner": "render",
   "x-stream": "e2e.render.issue.found",
-  "x-schema-version": "1.0",
+  "x-schema-version": "1.1",
   "type": "object",
   "allOf": [
     {
@@ -22,8 +22,59 @@
     },
     "payload": {
       "type": "object",
-      "additionalProperties": true,
-      "description": "Payload of render.issue.found. Open for now. The chat that builds the owning service (render) tightens it."
+      "description": "Payload of render.issue.found: one layout issue on one page.",
+      "additionalProperties": false,
+      "required": [
+        "render_id",
+        "run_id",
+        "volume_id",
+        "page",
+        "kind",
+        "severity",
+        "detail",
+        "source"
+      ],
+      "properties": {
+        "render_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "volume_id": {
+          "type": "string"
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "kind": {
+          "enum": [
+            "overflow",
+            "broken_table",
+            "cut_off_graphic",
+            "orphan_heading",
+            "margin"
+          ]
+        },
+        "severity": {
+          "enum": [
+            "blocker",
+            "warning"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "geometry",
+            "vision"
+          ]
+        }
+      }
     }
   }
 }
