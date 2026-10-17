@@ -541,7 +541,7 @@ describe.skipIf(Boolean(unavailable))('auth routes', () => {
   });
 
   describe('client IP behind a proxy', () => {
-    async function capsHitAfter(trust: string | undefined, forwardedFor: (i: number) => string) {
+    async function capsHitAfter(trust: string | undefined, forwardedFor: (i: number) => string, remoteAddress = '127.0.0.1') {
       vi.stubEnv('PD_TRUST_PROXY', trust ?? '');
       const { buildApp } = await import('../src/app.js');
       const proxied = await buildApp({ logger: false });
@@ -552,7 +552,7 @@ describe.skipIf(Boolean(unavailable))('auth routes', () => {
           const response = await proxied.inject({
             method: 'POST',
             url: '/api/auth/resend-email',
-            remoteAddress: '127.0.0.1',
+            remoteAddress,
             headers: { 'x-forwarded-for': forwardedFor(i) },
             payload: { email: uniqueEmail('proxy') },
           });
@@ -571,6 +571,22 @@ describe.skipIf(Boolean(unavailable))('auth routes', () => {
       // Eleven clients behind the proxy: none capped.
       const statuses = await capsHitAfter('127.0.0.1', (i) => `203.0.113.${i + 10}`);
       expect(statuses.every((status) => status === 200)).toBe(true);
+    });
+
+    // Production: the host's nginx reaches the api through the port published on 127.0.0.1, so
+    // the api sees the compose network's gateway (pinned to 172.31.250.1 in docker-compose.yml)
+    // and nginx's X-Forwarded-For carries the visitor's address from CF-Connecting-IP.
+    it('counts per-IP caps by the client address nginx forwards from the compose gateway', async () => {
+      const gateway = '172.31.250.1';
+      expect((await capsHitAfter(gateway, () => '198.51.100.7', gateway)).at(-1)).toBe(429);
+      resetSendCaps();
+      const statuses = await capsHitAfter(gateway, (i) => `198.51.100.${i + 20}`, gateway);
+      expect(statuses.every((status) => status === 200)).toBe(true);
+    });
+
+    it('ignores X-Forwarded-For from any other container on the network', async () => {
+      const statuses = await capsHitAfter('172.31.250.1', (i) => `198.51.100.${i + 40}`, '172.31.250.9');
+      expect(statuses.at(-1)).toBe(429);
     });
 
     it('ignores X-Forwarded-For when no proxy is trusted', async () => {

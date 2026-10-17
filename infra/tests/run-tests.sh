@@ -361,6 +361,42 @@ export PD_CLOUDFLARE_API="$DEAD_SINK/client/v4"; unset PD_BASH
 o="$(bash infra/tests/test-providers.sh </dev/null 2>&1)"; rc=$?
 [[ $rc == 0 ]] && ok "provider layer suite: $(tail -1 <<<"$o")" || bad "provider layer suite (bash infra/tests/test-providers.sh)" "$(grep -A1 '^FAIL' <<<"$o" | head -20)"
 
+# ------------------------------------------------------------------ client IP through nginx
+# The per-IP send caps need the visitor's address. Cloudflare -> host nginx (real IP from CF-Connecting-IP, only from
+# Cloudflare's ranges) -> api published on 127.0.0.1:3001 -> the api trusts X-Forwarded-For only from the compose
+# network's pinned gateway (PD_TRUST_PROXY).
+"$PY" - <<'PYEOF' && ok "nginx takes the client IP from CF-Connecting-IP (ranges = infra/server/cloudflare-ips.txt), proxies to 127.0.0.1:3001 and overwrites X-Forwarded-For; compose publishes the api on loopback, pins the gateway and passes PD_TRUST_PROXY" || bad "client IP through nginx"
+import re, sys
+from pathlib import Path
+problems = []
+nginx = Path("infra/nginx.conf").read_text(encoding="utf-8")
+compose = Path("infra/docker-compose.yml").read_text(encoding="utf-8").replace("\r\n", "\n")
+env = Path(".env.example").read_text(encoding="utf-8").replace("\r\n", "\n")
+cf = {l.split("#")[0].strip() for l in Path("infra/server/cloudflare-ips.txt").read_text(encoding="utf-8").splitlines()} - {""}
+real = set(re.findall(r"^\s*set_real_ip_from\s+(\S+);", nginx, re.M))
+if real != cf:
+    problems.append(f"set_real_ip_from differs from cloudflare-ips.txt: missing {sorted(cf - real)}, extra {sorted(real - cf)}")
+if not re.search(r"^\s*real_ip_header\s+CF-Connecting-IP;", nginx, re.M):
+    problems.append("no real_ip_header CF-Connecting-IP")
+if "http://api:" in nginx:
+    problems.append("nginx proxies to http://api: (not resolvable from the host)")
+if len(re.findall(r"proxy_pass\s+http://127\.0\.0\.1:3001", nginx)) < 2:
+    problems.append("/api and /health must proxy_pass to http://127.0.0.1:3001")
+if "$proxy_add_x_forwarded_for" in nginx or not re.search(r"proxy_set_header\s+X-Forwarded-For\s+\$remote_addr;", nginx):
+    problems.append("X-Forwarded-For must be overwritten with $remote_addr (a client-sent header must not pass through)")
+api = compose.split("\n  api:\n", 1)[1].split("\n  migrate:\n", 1)[0]
+if "- PD_TRUST_PROXY=${PD_TRUST_PROXY:-}" not in api:
+    problems.append("api environment lacks PD_TRUST_PROXY")
+if '"127.0.0.1:3001:3001"' not in api:
+    problems.append('api must publish "127.0.0.1:3001:3001" (loopback only)')
+if not re.search(r"subnet:\s*172\.31\.250\.0/24", compose) or not re.search(r"gateway:\s*172\.31\.250\.1\b", compose):
+    problems.append("the default network must pin subnet 172.31.250.0/24 and gateway 172.31.250.1")
+if not re.search(r"^# PD_TRUST_PROXY=172\.31\.250\.1\b", env, re.M):
+    problems.append(".env.example must document PD_TRUST_PROXY=172.31.250.1")
+print("\n".join(problems))
+sys.exit(1 if problems else 0)
+PYEOF
+
 # ------------------------------------------------------------------ static
 mapfile -t SH < <(find infra ops -name '*.sh' -not -path '*/node_modules/*')
 badsyntax=""

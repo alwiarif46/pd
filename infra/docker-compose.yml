@@ -47,6 +47,13 @@ services:
       - TELNYX_MESSAGING_PROFILE_ID=${TELNYX_MESSAGING_PROFILE_ID:-}
       # Testers whose phone step is skipped (exact emails, comma-separated). Empty: off.
       - PD_SKIP_PHONE_VERIFY_EMAILS=${PD_SKIP_PHONE_VERIFY_EMAILS:-}
+      # The proxy whose X-Forwarded-For the api believes, so the per-IP send caps count visitors, not nginx.
+      # Set it to the network gateway pinned below (172.31.250.1): the host's nginx reaches the api through the
+      # loopback port, which arrives from that gateway. Empty: no proxy trusted, every visitor counts as one IP.
+      - PD_TRUST_PROXY=${PD_TRUST_PROXY:-}
+    # Loopback only: the host's nginx (infra/nginx.conf) proxies /api here. Not reachable from outside the host.
+    ports:
+      - "127.0.0.1:3001:3001"
     volumes:
       - ${PD_DATA_ROOT:-/mnt/pddata}/files:/data/files
     deploy:
@@ -148,6 +155,15 @@ services:
         limits:
           cpus: '0.25'
           memory: 1.5G
+
+# The default network's subnet and gateway are pinned so PD_TRUST_PROXY can name the gateway, the address the
+# api sees for requests from the host's nginx through the loopback port.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24
+          gateway: 172.31.250.1
 
 # Only the ClamAV signatures stay in a named volume: they are downloaded, not customer data.
 volumes:
