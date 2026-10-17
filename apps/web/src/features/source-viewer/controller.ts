@@ -31,7 +31,7 @@ export interface LoadedSource {
   fileName: string | null;
 }
 
-/** 09 s5.18 has no mode for a deleted file that is not a resume (plan Open question 6). */
+/** 09 s5.18 has no mode for a deleted file that is not a resume (09-ui-workflow.md decision log, 17 Oct 2026: a deleted file that is not a resume shows the error mode). */
 export const DELETED_FILE_MESSAGE = 'This file was deleted. Its rows keep the stored quote.';
 
 /** The PDF page in an iframe, opened at the source page. */

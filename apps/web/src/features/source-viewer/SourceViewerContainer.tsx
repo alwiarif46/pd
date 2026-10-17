@@ -26,7 +26,7 @@ const LOADING: SourceView = { mode: 'loading' };
  * Radix Dialog that portals to the body (no LegacyFrame). Renews the viewing token every 10 minutes while
  * open, as the legacy viewer did. The object URL of the viewer PDF is revoked, and the load aborted, when the
  * viewer closes or the source changes (each effect run cleans up its own, so StrictMode's double run is safe).
- * Restore is offered to everyone (plan Open question 7): the API refuses when it must, and 402 opens Upgrade.
+ * Restore is offered to everyone (09-ui-workflow.md decision log, 17 Oct 2026: `canRestore` is true for everyone): the API refuses when it must, and 402 opens Upgrade.
  */
 export function SourceViewerContainer({ source, docs, onClose, api = sourceApi }: SourceViewerContainerProps) {
   const shell = useRequiredShell();
