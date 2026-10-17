@@ -7,6 +7,7 @@ import { Verify } from '@/ui/auth/Verify';
 import type { AuthStatus } from '@/types';
 import {
   authApi,
+  clearPending,
   IDLE,
   loadPending,
   logInAction,
@@ -48,7 +49,7 @@ function useAction() {
       alive.current = false;
     };
   }, []);
-  const run = useCallback(async (call: () => Promise<AuthStatus>): Promise<AuthStatus> => {
+  const run = useCallback(async <T extends AuthStatus>(call: () => Promise<T>): Promise<T> => {
     setStatus(SUBMITTING);
     const result = await call();
     if (alive.current) setStatus(result);
@@ -91,7 +92,9 @@ function SignUpView({ api }: { api: AuthApi }) {
 
 function VerifyView({ api, token }: { api: AuthApi; token: string | null }) {
   const [pending] = useState(loadPending);
-  const [step, setStep] = useState<'email' | 'phone' | 'done'>(pending?.emailVerified ? 'phone' : 'email');
+  const [step, setStep] = useState<'email' | 'phone' | 'done'>(
+    pending?.emailVerified ? (pending.phoneRequired === false ? 'done' : 'phone') : 'email',
+  );
   const { status, setStatus, run, alive } = useAction();
   const handled = useRef<string | null>(null);
 
@@ -101,7 +104,7 @@ function VerifyView({ api, token }: { api: AuthApi; token: string | null }) {
     handled.current = token;
     stripToken('verify');
     void run(() => verifyEmailAction(api, token)).then((result) => {
-      if (result.state === 'done' && alive.current) setStep('phone');
+      if (result.state === 'done' && alive.current) setStep(result.phoneRequired === false ? 'done' : 'phone');
     });
   }, [api, token, run, alive]);
 
@@ -132,6 +135,8 @@ function VerifyView({ api, token }: { api: AuthApi; token: string | null }) {
       }}
       onLogIn={() => {
         setStatus(IDLE);
+        // The sign-up is finished (a skipped phone step keeps it until here).
+        clearPending();
         go('login');
       }}
     />

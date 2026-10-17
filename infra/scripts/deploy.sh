@@ -3,9 +3,14 @@
 # Implements: docs/plans/01-infrastructure.md s6. Run it after infra/scripts/setup-server.sh and the LUKS setup
 # (infra/luks/README.md).
 #
-# Order: checks, pull code, build (or pull) images, start the database, run migrations as pd_owner, then restart the
-# services. A failed migration stops the deploy before the api and worker are touched, so the running version keeps
-# serving the old schema.
+# Order: checks, pull code, build (or pull) images, start the database, run migrations as pd_owner, restart the
+# services, then install infra/nginx.conf on the host nginx. A failed migration stops the deploy before the api and
+# worker are touched, so the running version keeps serving the old schema.
+#
+# Host nginx (installed by cloud-init; it proxies /api to the api's loopback port 127.0.0.1:3001): when
+# infra/nginx.conf differs from $PD_NGINX_CONF (default /etc/nginx/conf.d/pd.conf), the old file is copied to
+# <file>.bak-<UTC stamp>, the new one installed (0644), `nginx -t` run, and nginx reloaded only if the test passes.
+# A failed test puts the previous file back (or removes a first install), does not reload, and fails the deploy.
 #
 # Checks before anything is built (all refuse; there is no override):
 #   - /mnt/pddata and /mnt/pdbackup are mounted from /dev/mapper/pddata and /dev/mapper/pdbackup (findmnt). Postgres,
@@ -81,6 +86,7 @@ echo "=== PD Deployment Script ==="
 PROJECT_DIR="${PD_PROJECT_DIR:-/opt/pd}"
 GIT_REPO="https://github.com/alwiarif46/pd.git"
 ENV_FILE="$PROJECT_DIR/.env"
+NGINX_CONF="${PD_NGINX_CONF:-/etc/nginx/conf.d/pd.conf}"
 DATA_MOUNT="${PD_DATA_MOUNT:-/mnt/pddata}"
 BACKUP_MOUNT="${PD_BACKUP_MOUNT:-/mnt/pdbackup}"
 COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$PROJECT_DIR/infra/docker-compose.yml")
@@ -201,6 +207,30 @@ fi
 
 say "Restarting services..."
 x "${COMPOSE[@]}" up -d --remove-orphans
+
+# ------------------------------------------------------------------ 8. host nginx
+NGINX_SRC="$PROJECT_DIR/infra/nginx.conf"
+[[ -f "$NGINX_SRC" ]] || NGINX_SRC="$REPO_OF_SCRIPT/infra/nginx.conf"
+if ! command -v nginx >/dev/null 2>&1 && ! dry; then
+  fail "nginx is not installed on this host (cloud-init installs it). The services are up; /api is not proxied."
+fi
+if [[ -f "$NGINX_CONF" ]] && cmp -s "$NGINX_SRC" "$NGINX_CONF"; then
+  say "nginx config unchanged ($NGINX_CONF); not reloaded."
+else
+  say "Installing $NGINX_SRC as $NGINX_CONF..."
+  NGINX_BAK=""
+  if [[ -f "$NGINX_CONF" ]]; then
+    NGINX_BAK="$NGINX_CONF.bak-$(date -u +%Y%m%dT%H%M%SZ)"
+    x cp -p "$NGINX_CONF" "$NGINX_BAK"
+  fi
+  x mkdir -p "$(dirname "$NGINX_CONF")"
+  x install -m 0644 "$NGINX_SRC" "$NGINX_CONF"
+  if ! x nginx -t; then
+    if [[ -n "$NGINX_BAK" ]]; then x cp -p "$NGINX_BAK" "$NGINX_CONF"; else x rm -f "$NGINX_CONF"; fi
+    fail "nginx -t failed with the new config: nginx was NOT reloaded and the previous config was put back. The services are up; fix infra/nginx.conf and deploy again."
+  fi
+  x systemctl reload nginx
+fi
 
 printf '%bDeployment complete!%b\n' "$GREEN" "$NC"
 echo "Check status with: docker compose --env-file $ENV_FILE -f $PROJECT_DIR/infra/docker-compose.yml ps"

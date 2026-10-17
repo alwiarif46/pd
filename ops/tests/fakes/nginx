@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# fake nginx: logs. `nginx -t` exits $FAKE_NGINX_T_EXIT (default 0)
+printf 'nginx %s\n' "$*" >>"${FAKE_CALLS:-/dev/null}"
+[[ "${1:-}" == -t ]] && exit "${FAKE_NGINX_T_EXIT:-0}"
+exit 0

@@ -9,6 +9,7 @@ import { BODY_REQUIRED, readBody, text } from './body.js';
 import { currentCreditPeriod, expireAbandonedUploads, lockOrg, planCreditPeriod, removeChunkDirs } from './credits.js';
 import { apiError } from './errors.js';
 import { inOrg } from './scope.js';
+import { normalizeAddress } from './email-address.js';
 import { hashToken, isWorkEmail, newToken, sendOutOfBand } from './security.js';
 
 /** The organization fields GET /api/org returns (no Stripe customer or subscription id). */
@@ -182,8 +183,8 @@ export async function registerOrg(app: FastifyInstance): Promise<void> {
     if (!body) {
       return reply.code(400).send(BODY_REQUIRED);
     }
-    const email = text(body, 'email').trim().toLowerCase();
-    if (!isWorkEmail(email)) {
+    const email = normalizeAddress(text(body, 'email')) ?? '';
+    if (!email || !isWorkEmail(email)) {
       return reply.code(400).send({ error: 'Use a work email address' });
     }
     // Delivered only after COMMIT, so the link never names an invite that rolled back.

@@ -170,8 +170,9 @@ let sink: OutOfBandSink | null = null;
 const warned = new Set<string>();
 
 /**
- * Installs the delivery for email links and SMS codes (the email and Telnyx senders once they
- * exist; tests install a collector). `null` removes it.
+ * Installs the delivery for email links and SMS codes (at startup, installDeliveryFromEnv in
+ * delivery.ts installs the Resend and Telnyx senders; tests install a collector). `null`
+ * removes it.
  */
 export function setOutOfBandSink(next: OutOfBandSink | null): void {
   sink = next;
@@ -203,9 +204,37 @@ function warnOnce(message: string): void {
 }
 
 /**
- * Delivers an email link or SMS code. Never throws: a failed delivery is logged without the
- * destination or the secret, and the route answers as it would on success, so the response
- * does not depend on delivery (the user can ask for a resend).
+ * A delivery failure whose message is written by this codebase (provider name and HTTP status,
+ * never a destination, secret, key, link or provider response body), so it is safe to log.
+ */
+export class DeliveryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DeliveryError';
+  }
+}
+
+/**
+ * What happens to a message no sender handles: printed in local development (see
+ * devPrintEnabled), otherwise dropped with a warning that names neither the destination nor the
+ * secret. The installed sink calls this for a channel it has no sender for.
+ */
+export function deliverWithoutSender(message: OutOfBandMessage): void {
+  if (devPrintEnabled()) {
+    console.log(`[dev only: PD_DEV_PRINT_SECRETS=1] ${message.channel} ${message.purpose} to ${message.to}: ${message.secret}`);
+    return;
+  }
+  if (process.env.PD_DEV_PRINT_SECRETS === '1') {
+    warnOnce('PD_DEV_PRINT_SECRETS=1 is ignored unless NODE_ENV=development.');
+  }
+  warnOnce(`No ${message.channel} delivery is configured: ${message.purpose} messages are not sent.`);
+}
+
+/**
+ * Delivers an email link or SMS code. Never throws: a failed delivery (a sender that throws,
+ * including on a non-2xx answer or a timeout) is logged without the destination or the secret,
+ * and the route answers as it would on success, so the response does not depend on delivery
+ * (the user can ask for a resend).
  */
 export async function sendOutOfBand(message: OutOfBandMessage): Promise<void> {
   try {
@@ -213,15 +242,10 @@ export async function sendOutOfBand(message: OutOfBandMessage): Promise<void> {
       await sink(message);
       return;
     }
-    if (devPrintEnabled()) {
-      console.log(`[dev only: PD_DEV_PRINT_SECRETS=1] ${message.channel} ${message.purpose} to ${message.to}: ${message.secret}`);
-      return;
-    }
-    if (process.env.PD_DEV_PRINT_SECRETS === '1') {
-      warnOnce('PD_DEV_PRINT_SECRETS=1 is ignored unless NODE_ENV=development.');
-    }
-    warnOnce(`No ${message.channel} delivery is configured: ${message.purpose} messages are not sent.`);
+    deliverWithoutSender(message);
   } catch (error) {
-    console.error(`Out-of-band delivery failed (${message.channel} ${message.purpose}): ${error instanceof Error ? error.name : 'error'}`);
+    // Only a DeliveryError's message is logged; any other error's message may carry a secret.
+    const detail = error instanceof DeliveryError ? error.message : error instanceof Error ? error.name : 'error';
+    console.error(`Out-of-band delivery failed (${message.channel} ${message.purpose}): ${detail}`);
   }
 }

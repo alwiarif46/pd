@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import { getDb, schema } from '@pd/core';
 import { BODY_REQUIRED, readBody, text } from './body.js';
 import { requireUser } from './context.js';
+import { normalizeAddress } from './email-address.js';
+import { skipsPhone } from './phone-skip.js';
 import {
   hashesMatch,
   hashPassword,
@@ -27,6 +29,8 @@ const CODE_ATTEMPTS = 5;
 const CODES_PER_HOUR = 3;
 /** The same hourly limit for verification emails per account. */
 const EMAILS_PER_HOUR = 3;
+/** And for password reset links per account. */
+const RESETS_PER_HOUR = 3;
 
 /**
  * The resend routes answer no sooner than this, whether or not an account exists, so the
@@ -97,17 +101,33 @@ async function atLeast<T>(ms: number, work: () => Promise<T>): Promise<T> {
   return result;
 }
 
-export async function registerAuth(app: FastifyInstance): Promise<void> {
+/** Logged (never with the email or phone) each time PD_SKIP_PHONE_VERIFY_EMAILS is used. */
+const PHONE_SKIP_EVENT = 'auth.phone_verify_skipped';
+
+export interface AuthOptions {
+  /**
+   * PD_SKIP_PHONE_VERIFY_EMAILS (phone-skip.ts): for these exact, lowercased emails phone
+   * verification counts as done (decided at each login) and no SMS is sent. Email verification
+   * is still required. Empty by default. A skipped sign-up stores no phone and there is no
+   * add-phone flow, so removing an email from the list locks that account out until it is
+   * deleted and the person signs up again.
+   */
+  phoneSkip?: ReadonlySet<string>;
+}
+
+export async function registerAuth(app: FastifyInstance, options: AuthOptions = {}): Promise<void> {
+  const phoneSkip: ReadonlySet<string> = options.phoneSkip ?? new Set();
+
   app.post('/api/auth/signup', async (request, reply) => {
     const body = readBody(request);
     if (!body) {
       return reply.code(400).send(BODY_REQUIRED);
     }
-    const email = text(body, 'email').trim().toLowerCase();
+    const email = normalizeAddress(text(body, 'email')) ?? '';
     const phone = text(body, 'phone').trim();
     const password = text(body, 'password');
     const name = text(body, 'name').trim() || null;
-    if (!email.includes('@') || !isWorkEmail(email)) {
+    if (!email || !isWorkEmail(email)) {
       return reply.code(400).send({ error: 'Use a work email address' });
     }
     const weak = passwordProblem(password);
@@ -142,22 +162,28 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
     const passwordHash = await hashPassword(password);
     const emailToken = newToken();
     const code = newPhoneCode();
+    // A tester on PD_SKIP_PHONE_VERIFY_EMAILS gets no phone code and no SMS.
+    const skipPhone = skipsPhone(phoneSkip, email);
     let userId: string;
     try {
       userId = await db.transaction(async (tx) => {
-        const [user] = await tx.insert(schema.users).values({ email, name, phoneE164: phone, passwordHash }).returning({ id: schema.users.id });
+        // A tester's number is never verified, so it is not stored: it must not hold the unique
+        // phone_e164 against the number's owner, or ever read as the account's phone.
+        const [user] = await tx.insert(schema.users).values({ email, name, phoneE164: skipPhone ? null : phone, passwordHash }).returning({ id: schema.users.id });
         await tx.insert(schema.authTokens).values({
           userId: user.id,
           purpose: 'verify_email',
           tokenHash: hashToken(emailToken),
           expiresAt: new Date(Date.now() + DAY),
         });
-        await tx.insert(schema.phoneCodes).values({
-          userId: user.id,
-          phoneE164: phone,
-          codeHash: hashToken(code),
-          expiresAt: new Date(Date.now() + CODE_TTL),
-        });
+        if (!skipPhone) {
+          await tx.insert(schema.phoneCodes).values({
+            userId: user.id,
+            phoneE164: phone,
+            codeHash: hashToken(code),
+            expiresAt: new Date(Date.now() + CODE_TTL),
+          });
+        }
         return user.id;
       });
     } catch (error) {
@@ -169,7 +195,11 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
       return reply.code(409).send(constraint.includes('phone') ? PHONE_TAKEN : EMAIL_TAKEN);
     }
     void sendOutOfBand({ channel: 'email', purpose: 'verify_email', to: email, secret: emailToken });
-    void sendOutOfBand({ channel: 'sms', purpose: 'verify_phone', to: phone, secret: code });
+    if (skipPhone) {
+      request.log.warn({ event: PHONE_SKIP_EVENT, step: 'signup', userId }, 'Phone verification skipped (PD_SKIP_PHONE_VERIFY_EMAILS): no SMS sent');
+    } else {
+      void sendOutOfBand({ channel: 'sms', purpose: 'verify_phone', to: phone, secret: code });
+    }
     return reply.code(201).send({ userId });
   });
 
@@ -192,15 +222,21 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
         gt(schema.authTokens.expiresAt, new Date()),
       )).returning({ userId: schema.authTokens.userId });
       if (!row) {
-        return false;
+        return null;
       }
-      await tx.update(schema.users).set({ emailVerifiedAt: new Date(), updatedAt: new Date() }).where(eq(schema.users.id, row.userId));
-      return true;
+      const [user] = await tx.update(schema.users).set({ emailVerifiedAt: new Date(), updatedAt: new Date() })
+        .where(eq(schema.users.id, row.userId))
+        .returning({ email: schema.users.email, phoneVerifiedAt: schema.users.phoneVerifiedAt });
+      return user ?? null;
     });
     if (!verified) {
       return reply.code(400).send(invalid);
     }
-    return { ok: true };
+    // `phoneRequired: false` tells the web client to skip the phone step: the phone is already
+    // verified, or the account is on PD_SKIP_PHONE_VERIFY_EMAILS. Only the holder of the email
+    // link learns it.
+    const phoneRequired = !verified.phoneVerifiedAt && !skipsPhone(phoneSkip, verified.email);
+    return { ok: true, phoneRequired };
   });
 
   /**
@@ -272,8 +308,8 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
     if (!body) {
       return reply.code(400).send(BODY_REQUIRED);
     }
-    const email = text(body, 'email').trim().toLowerCase();
-    if (!email.includes('@')) {
+    const email = normalizeAddress(text(body, 'email'));
+    if (!email) {
       return reply.code(400).send({ error: 'Enter your email address' });
     }
     const outcome = await atLeast(RESEND_MIN_MS, async () => {
@@ -334,8 +370,8 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
     if (!body) {
       return reply.code(400).send(BODY_REQUIRED);
     }
-    const email = text(body, 'email').trim().toLowerCase();
-    if (!email.includes('@')) {
+    const email = normalizeAddress(text(body, 'email'));
+    if (!email) {
       return reply.code(400).send({ error: 'Enter your email address' });
     }
     const outcome = await atLeast(RESEND_MIN_MS, async () => {
@@ -346,7 +382,8 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
       const db = getDb();
       const [user] = await db.select().from(schema.users).where(eq(schema.users.email, email));
       const phone = user?.phoneE164;
-      if (!user || !phone || user.phoneVerifiedAt) {
+      // An allow-listed tester needs no code; the answer is the same as for any other account.
+      if (!user || !phone || user.phoneVerifiedAt || skipsPhone(phoneSkip, user.email)) {
         return { code: 200, body: { ok: true } } as const;
       }
       const code = newPhoneCode();
@@ -387,7 +424,9 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
     if (!user || password.length > PASSWORD_MAX || !(await passwordMatches(password, user.passwordHash))) {
       return reply.code(401).send(WRONG_CREDENTIALS);
     }
-    if (!user.emailVerifiedAt || !user.phoneVerifiedAt) {
+    // Email is always required. The phone step counts as done for an allow-listed tester.
+    const phoneSkipped = !user.phoneVerifiedAt && skipsPhone(phoneSkip, user.email);
+    if (!user.emailVerifiedAt || (!user.phoneVerifiedAt && !phoneSkipped)) {
       return reply.code(403).send({ error: 'Verify email and phone before signing in' });
     }
     const token = newToken();
@@ -415,6 +454,9 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
     });
     if (!created) {
       return reply.code(401).send(WRONG_CREDENTIALS);
+    }
+    if (phoneSkipped) {
+      request.log.warn({ event: PHONE_SKIP_EVENT, step: 'login', userId: user.id }, 'Signed in without phone verification (PD_SKIP_PHONE_VERIFY_EMAILS)');
     }
     return { token };
   });
@@ -471,22 +513,47 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
       return { ok: true };
     }
     // Requesting a link answers the same, in about the same time, whether or not the account exists.
-    const email = text(body, 'email').trim().toLowerCase();
-    await atLeast(RESEND_MIN_MS, async () => {
+    const email = normalizeAddress(text(body, 'email'));
+    if (!email) {
+      return reply.code(400).send({ error: 'Enter your email address' });
+    }
+    // The caps per IP and per address count every request, known address or not, so a 429
+    // says nothing about the account; the hourly limit per account is silent.
+    const outcome = await atLeast(RESEND_MIN_MS, async () => {
+      const cap = recordEmailSend(request.ip, [`reset:${email}`]);
+      if (!cap.ok) {
+        return { code: 429, body: { error: cap.reason } } as const;
+      }
       const [user] = await db.select().from(schema.users).where(eq(schema.users.email, email));
       if (!user) {
-        return;
+        return { code: 200, body: { ok: true } } as const;
       }
       const token = newToken();
-      await db.insert(schema.authTokens).values({
-        userId: user.id,
-        purpose: 'reset_password',
-        tokenHash: hashToken(token),
-        expiresAt: new Date(Date.now() + HOUR),
+      const issued = await db.transaction(async (tx) => {
+        // Serialize reset requests for one account so the hourly count holds under parallel requests.
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`reset:${user.id}`}, 0))`);
+        const recent = await tx.select({ id: schema.authTokens.id }).from(schema.authTokens).where(and(
+          eq(schema.authTokens.userId, user.id),
+          eq(schema.authTokens.purpose, 'reset_password'),
+          gt(schema.authTokens.createdAt, new Date(Date.now() - HOUR)),
+        ));
+        if (recent.length >= RESETS_PER_HOUR) {
+          return false;
+        }
+        await tx.insert(schema.authTokens).values({
+          userId: user.id,
+          purpose: 'reset_password',
+          tokenHash: hashToken(token),
+          expiresAt: new Date(Date.now() + HOUR),
+        });
+        return true;
       });
-      void sendOutOfBand({ channel: 'email', purpose: 'reset_password', to: user.email, secret: token });
+      if (issued) {
+        void sendOutOfBand({ channel: 'email', purpose: 'reset_password', to: user.email, secret: token });
+      }
+      return { code: 200, body: { ok: true } } as const;
     });
-    return reply.send({ ok: true });
+    return reply.code(outcome.code).send(outcome.body);
   });
 
   app.get('/api/me', { preHandler: requireUser }, async (request) => {
