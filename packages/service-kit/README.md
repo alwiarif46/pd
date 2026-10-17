@@ -34,7 +34,7 @@ render 4109, evidence 4110, comms 4111, portal 4112, drive 4113, notify 4114. `P
 
 ## The outbox relay exception to rule 4
 
-CLAUDE.md rule 4 says every query runs inside `withTenant`. The one written exception is the `outbox_relay` role, which the relay helper uses. It reads every tenant's unpublished `<schema>.outbox` rows and sets `published_at`. The migrate step creates it (SCRAM verifier from `OUTBOX_RELAY_DB_PASSWORD`, never plain text) and grants it `CONNECT`, `USAGE` on each service schema, `SELECT` on each outbox and `UPDATE (published_at)`. It has no other table, no ledger, no `app` schema and no `CREATE`. No service role uses it, and no service code outside the relay may connect as it. `relay-role.test.ts` proves it cannot select, insert, delete or update anything else.
+CLAUDE.md rule 4 says every query runs inside `withTenant`. The one written exception is the `outbox_relay` role, which the relay helper uses. It reads every tenant's `<schema>.outbox` rows (published ones too) and sets `published_at`. It orders by `occurred_at` within one batch only, so consumers must not rely on order across batches. The migrate step creates it (SCRAM verifier from `OUTBOX_RELAY_DB_PASSWORD`, never plain text) and grants it `CONNECT`, `USAGE` on each service schema, `SELECT` on each outbox and `UPDATE (published_at)`. It has no other table, no ledger, no `app` schema and no `CREATE`. No service role uses it, and no service code outside the relay may connect as it. `relay-role.test.ts` proves it cannot select, insert, delete or update anything else.
 
 ## LISTEN/NOTIFY channels
 
@@ -43,3 +43,5 @@ Postgres has no ACL on channels, so this is a convention that review enforces. A
 ## RLS template and drift guard
 
 Every new table gets `tenantRlsSql(schema, table)` (paste its output into the migration). `rls.test.ts` fails when any table in a service schema, except `schema_migrations` and the allow-list, lacks ENABLE, FORCE, a `tenant_id` column or a policy on `app.tenant_id`.
+
+Row protection: three policies on each outbox (`relay_read`, `relay_publish` and the restrictive `relay_no_unsend`) stop the relay from setting `published_at` back to null, even when `app.tenant_id` is set. Postgres does not apply policies to a BYPASSRLS role, and the role gets that attribute when the migrator has it. For that case only the column grant protects the table: the relay can write `published_at`, including null, and nothing else.

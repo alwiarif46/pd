@@ -131,6 +131,58 @@ describe.skipIf(SKIP_DB)('the outbox relay role', () => {
     }
   });
 
+  it('cannot set published_at back to null, with or without app.tenant_id set', async () => {
+    await seed();
+    const pool = new pg.Pool({ connectionString: db().relayUrl(), max: 1 });
+    const unsend = async (tenant: string | null): Promise<{ code?: string; rows?: number }> => {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        if (tenant) await c.query("select set_config('app.tenant_id', $1, true)", [tenant]);
+        try {
+          const r = await c.query("update billing.outbox set published_at = null where type = 'relay.test'");
+          return { rows: r.rowCount ?? 0 };
+        } catch (err) {
+          return { code: (err as { code?: string }).code };
+        }
+      } finally {
+        await c.query('ROLLBACK');
+        c.release();
+      }
+    };
+    try {
+      // Unpublished rows: null stays null for the tenant policy, but the relay may not write it.
+      expect((await unsend(null)).code ?? 'ok').toBe('42501');
+      expect((await unsend(A)).code ?? 'ok').toBe('42501');
+      await pool.query("update billing.outbox set published_at = now() where type = 'relay.test'");
+      // Published rows: no row matches, or the write is refused. Never a successful un-send.
+      for (const t of [null, A]) {
+        const r = await unsend(t);
+        expect(r.code === '42501' || r.rows === 0, `tenant ${t}`).toBe(true);
+      }
+      const left = await pool.query("select count(*)::int as n from billing.outbox where type = 'relay.test' and published_at is null");
+      expect(left.rows[0].n).toBe(0);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('still lets a service role update its own outbox rows (the restrictive policy is relay-only)', async () => {
+    const pool = new pg.Pool({ connectionString: db().roleUrl('billing'), max: 1 });
+    try {
+      await withTenant(pool, A, (c) =>
+        c.query(
+          "insert into billing.outbox (tenant_id, event_id, type, schema_version, payload) values ($1, gen_random_uuid(), 'svc.test', '1.0', '{}')",
+          [A],
+        ),
+      );
+      const r = await withTenant(pool, A, (c) => c.query("update billing.outbox set published_at = null where type = 'svc.test'"));
+      expect(r.rowCount).toBe(1);
+    } finally {
+      await pool.end();
+    }
+  });
+
   it('cannot read a table the owner adds later in a service schema', async () => {
     await db().admin.query('create table if not exists billing.relay_later (n int)');
     await db().admin.query('insert into billing.relay_later values (1)');

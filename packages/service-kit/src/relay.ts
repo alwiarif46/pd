@@ -136,7 +136,11 @@ export async function relayAll(
   return counts;
 }
 
-/** What the channel helpers need from a connection: `pg.Client`, `pg.PoolClient` and `pg.Pool` fit. */
+/**
+ * What the channel helpers need from a connection: `pg.Client`, `pg.PoolClient` and `pg.Pool` fit.
+ * `listenOnOutbox` needs a dedicated `pg.Client` or a checked-out `PoolClient` that stays open:
+ * LISTEN binds to one connection, so a `Pool` would listen on a connection it hands out again.
+ */
 export interface QueryRunner {
   query(sql: string, params?: unknown[]): Promise<unknown>;
 }

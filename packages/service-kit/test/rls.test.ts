@@ -81,9 +81,9 @@ describe.skipIf(SKIP_DB)('tenant RLS in Postgres', () => {
     expect(rows.filter((x) => x.policies < 1).map(name), 'no tenant_id policy').toEqual([]);
   });
 
-  it('applyMigrations is repeatable and leaves exactly one policy per relay role grant', async () => {
+  it('applyMigrations is repeatable and leaves the tenant policy and the three relay policies', async () => {
     await applyMigrations({ adminUrl: db().adminUrl, services: db().services, passwords: db().passwords, relayPassword: db().relayPassword });
     const r = await db().admin.query("select count(*)::int as n from pg_policies where schemaname = 'billing' and tablename = 'outbox'");
-    expect(r.rows[0].n).toBe(3);
+    expect(r.rows[0].n).toBe(4);
   });
 });

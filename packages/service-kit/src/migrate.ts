@@ -171,7 +171,10 @@ async function bootstrapRelayRole(client: pg.Client, password: string | undefine
      exception when duplicate_object then null;
      end $$`,
   );
-  if (password) {
+  if (!password) {
+    // No password this run: an existing relay role stops being able to log in.
+    await client.query(`alter role ${ident(RELAY_ROLE)} nologin`);
+  } else {
     // Same as the service roles: a SCRAM-SHA-256 verifier, never the plain password.
     const stmt = await client.query<{ sql: string }>(
       "select format('alter role %I login password %L', $1::text, $2::text) as sql",
@@ -203,7 +206,11 @@ async function relayGrants(client: pg.Client, services: ReadonlyArray<MigrationS
     // open every tenant's rows to it. They test current_user, not role membership, so the
     // migrator (a member of this role) still obeys the tenant policy. Postgres checks the new row
     // of an UPDATE against the SELECT policy too, so the read policy cannot hide published rows.
-    // The relay can mark a row sent, never un-send it.
+    // relay_no_unsend is restrictive, so it ANDs with the permissive policies. Without it the
+    // tenant policy would let the relay write a null published_at whenever app.tenant_id is set,
+    // because permissive WITH CHECKs are OR'd. Limit: no policy applies to a BYPASSRLS relay (the
+    // role has that attribute when the migrator had it). Then only the column grant protects the
+    // outbox, and that relay can still set published_at back to null.
     const me = `current_user = '${RELAY_ROLE}'`;
     await client.query(`drop policy if exists relay_read on ${s}.outbox`);
     await client.query(`create policy relay_read on ${s}.outbox for select using (${me})`);
@@ -211,6 +218,11 @@ async function relayGrants(client: pg.Client, services: ReadonlyArray<MigrationS
     await client.query(
       `create policy relay_publish on ${s}.outbox for update
          using (${me} and published_at is null) with check (${me} and published_at is not null)`,
+    );
+    await client.query(`drop policy if exists relay_no_unsend on ${s}.outbox`);
+    await client.query(
+      `create policy relay_no_unsend on ${s}.outbox as restrictive for update
+         using (true) with check (current_user <> '${RELAY_ROLE}' or published_at is not null)`,
     );
   }
 }
