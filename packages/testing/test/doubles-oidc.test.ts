@@ -5,7 +5,7 @@ import { ORG_CLAIM, startMockOidc, TENANT_A, TENANT_B, type MockOidc } from '../
 
 let oidc: MockOidc;
 beforeAll(async () => {
-  oidc = await startMockOidc({ clientId: 'web-client', idTokenUserinfo: true });
+  oidc = await startMockOidc({ clientId: 'web-client', idTokenUserinfo: true, legacyOrgClaim: true });
 });
 afterAll(async () => {
   await oidc.close();

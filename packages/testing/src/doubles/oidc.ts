@@ -50,6 +50,8 @@ export interface MockOidcOptions {
   loggedIn?: boolean;
   /** When true, the id_token carries email, email_verified and name. Default false (Zitadel puts them in /userinfo). */
   idTokenUserinfo?: boolean;
+  /** When true, tokens also carry the deprecated `urn:zitadel:iss:org:id` claim. Real Zitadel does not send it. Default false. */
+  legacyOrgClaim?: boolean;
 }
 
 export interface MockOidc {
@@ -245,12 +247,15 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
     for (const [k, g] of accessTokens) if (g.expires < now) accessTokens.delete(k);
   }
 
-  /** Claims every token carries. The resource owner claim needs its scope. */
+  /**
+   * Claims every token carries. The resource owner claim needs its scope. Differences from real Zitadel: the mock
+   * sends `amr` in /userinfo too, and sends no `urn:zitadel:iam:user:resourceowner:name` or `:primary_domain` claims.
+   */
   function claimsOf(user: MockOidcUser, scope: string): Record<string, unknown> {
     const org = options.orgId ?? user.tenantId ?? DEFAULT_ORG_ID;
     return {
       amr: user.amr ?? ['pwd'],
-      [ORG_CLAIM]: org,
+      ...(options.legacyOrgClaim ? { [ORG_CLAIM]: org } : {}),
       ...(scope.split(' ').includes(RESOURCE_OWNER_SCOPE) ? { [RESOURCE_OWNER_CLAIM]: org } : {}),
     };
   }
@@ -294,7 +299,7 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
         code_challenge_methods_supported: ['S256'],
         token_endpoint_auth_methods_supported: ['none', 'client_secret_post', 'client_secret_basic'],
         scopes_supported: ['openid', 'profile', 'email', 'offline_access', RESOURCE_OWNER_SCOPE],
-        claims_supported: ['sub', 'iss', 'aud', 'exp', 'iat', 'nonce', 'email', 'email_verified', 'name', 'amr', ORG_CLAIM, RESOURCE_OWNER_CLAIM],
+        claims_supported: ['sub', 'iss', 'aud', 'exp', 'iat', 'nonce', 'email', 'email_verified', 'name', 'amr', ...(options.legacyOrgClaim ? [ORG_CLAIM] : []), RESOURCE_OWNER_CLAIM],
       });
     }
 
@@ -305,6 +310,8 @@ export async function startMockOidc(options: MockOidcOptions = {}): Promise<Mock
       const redirectUri = q.get('redirect_uri');
       const clientId = q.get('client_id') ?? '';
       if (!redirectUri) return oauthError(res, 400, 'invalid_request', 'redirect_uri is required');
+      // 'zitadel' is the audience of the admin API; a sign-in client with that id would mix the two
+      if (clientId === ZITADEL_API_AUDIENCE) return oauthError(res, 400, 'invalid_request', `client_id ${ZITADEL_API_AUDIENCE} is reserved for the admin API`);
       if (options.clientId && clientId !== options.clientId) return oauthError(res, 400, 'unauthorized_client', 'unknown client_id');
       const cookieKey = cookieOf(req, SESSION_COOKIE);
       const sessionKey = cookieKey && users[cookieKey] ? cookieKey : undefined;

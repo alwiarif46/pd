@@ -115,11 +115,28 @@ describe('mock OIDC issuer, Zitadel behaviors', () => {
     for (const t of [withScope.id, withScope.access, withScope.info]) expect(t[RESOURCE_OWNER_CLAIM]).toBe(TENANT_A.id);
     const without = await signIn(oidc, { scope: 'openid profile email' });
     for (const t of [without.id, without.access, without.info]) expect(t[RESOURCE_OWNER_CLAIM]).toBeUndefined();
-    expect(without.id[ORG_CLAIM]).toBe(TENANT_A.id);
+    expect(without.id[ORG_CLAIM]).toBeUndefined();
+  });
+
+  it('legacyOrgClaim adds the deprecated org claim, and is off by default', async () => {
+    const o = await startMockOidc({ legacyOrgClaim: true });
+    try {
+      const { id, access, info } = await signIn(o, {});
+      for (const t of [id, access, info]) expect(t[ORG_CLAIM]).toBe(TENANT_A.id);
+    } finally {
+      await o.close();
+    }
+    const plain = await signIn(oidc, {});
+    for (const t of [plain.id, plain.access, plain.info]) expect(t[ORG_CLAIM]).toBeUndefined();
+  });
+
+  it('refuses the reserved client id zitadel on authorize', async () => {
+    const res = await authorizeAt(oidc, { client_id: 'zitadel' });
+    expect(res.status).toBe(400);
   });
 
   it('the orgId option fixes the org claims in the id_token, the access token and userinfo', async () => {
-    const o = await startMockOidc({ orgId: 'org-fixed' });
+    const o = await startMockOidc({ orgId: 'org-fixed', legacyOrgClaim: true });
     try {
       const { id, access, info } = await signIn(o, { user: 'b', scope: `openid ${RESOURCE_OWNER_SCOPE}` });
       for (const t of [id, access, info]) expect(t[RESOURCE_OWNER_CLAIM]).toBe('org-fixed');

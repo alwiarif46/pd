@@ -45,6 +45,7 @@ export interface ZitadelTarget {
   body: Record<string, unknown>;
   /** Shown once by the real API. The fake keeps it so a test can sign events. */
   signingKey: string;
+  created: string;
 }
 export interface ZitadelCall {
   method: string;
@@ -60,6 +61,8 @@ export interface MockZitadelOptions {
   oidc?: MockOidc;
   /** Default true. */
   requireAuth?: boolean;
+  /** When set, a token whose subject is not in the list gets 403 (gRPC code 7, permission denied). */
+  allowedSubjects?: string[];
   port?: number;
   host?: string;
 }
@@ -195,10 +198,14 @@ export async function startMockZitadel(options: MockZitadelOptions = {}): Promis
 
     if (method === 'POST' && path === '/v2/organizations') {
       const name = str(body.name);
-      if (!name) return fail(400, 3, 'name is required');
-      // organization_id wins; org_id and orgId are the deprecated spellings
-      const id = str(body.organization_id) || str(body.org_id) || str(body.orgId) || String(randomBytes(9).readBigUInt64BE() % 10n ** 18n);
+      if (name.length < 1 || name.length > 200) return fail(400, 3, 'name must be 1 to 200 characters');
+      // organization_id wins, then organizationId; org_id and orgId are the deprecated spellings
+      const given = str(body.organization_id) || str(body.organizationId) || str(body.org_id) || str(body.orgId);
+      const id = given || String(randomBytes(9).readBigUInt64BE() % 10n ** 18n);
+      if (id.length < 1 || id.length > 200) return fail(400, 3, 'organization_id must be 1 to 200 characters');
       if (z.orgs.has(id)) return fail(409, 6, `organization ${id} already exists`);
+      // names are unique across the instance
+      if ([...z.orgs.values()].some((o) => o.name === name)) return fail(409, 6, `organization name ${name} already exists`);
       z.orgs.set(id, { id, name });
       return reply(201, { details: { sequence: '1', changeDate: new Date().toISOString(), resourceOwner: id }, organizationId: id, createdAdmins: [] });
     }
@@ -271,6 +278,12 @@ export async function startMockZitadel(options: MockZitadelOptions = {}): Promis
     const idpKind = /^\/admin\/v1\/idps\/(google|azure)$/.exec(path);
     if (method === 'POST' && idpKind) {
       const name = str(body.name);
+      const text = (v: unknown): boolean => typeof v === 'string' && v.length >= 1 && v.length <= 200;
+      const clientId = body.clientId ?? body.client_id;
+      const clientSecret = body.clientSecret ?? body.client_secret;
+      if (!text(clientId) || !text(clientSecret)) return fail(400, 3, 'clientId and clientSecret are required (1 to 200 characters)');
+      if (idpKind[1] === 'azure' && !text(name)) return fail(400, 3, 'name is required for an Azure provider');
+      // Verify in CI: whether Zitadel refuses a repeated IdP name with 409 is not proven by the protos.
       if (name && [...z.idps.values()].some((i) => i.body.name === name)) return fail(409, 6, 'idp name already exists');
       const id = randomUUID();
       z.idps.set(id, { id, kind: idpKind[1] as 'google' | 'azure', body });
@@ -286,21 +299,37 @@ export async function startMockZitadel(options: MockZitadelOptions = {}): Promis
 
     if (method === 'POST' && path === '/v2/actions/targets') {
       const name = str(body.name);
-      if (!name) return fail(400, 3, 'name is required');
+      if (name.length < 1 || name.length > 1000) return fail(400, 3, 'name must be 1 to 1000 characters');
+      const kinds = ['rest_webhook', 'rest_call', 'rest_async'].filter((k) => body[k] !== undefined || body[k.replace(/_(\w)/, (_m, c: string) => c.toUpperCase())] !== undefined);
+      if (kinds.length !== 1) return fail(400, 3, 'exactly one target type (rest_webhook, rest_call, rest_async) is required');
+      const endpoint = str(body.endpoint);
+      if (endpoint.length < 1 || endpoint.length > 2048) return fail(400, 3, 'endpoint must be 1 to 2048 characters');
+      const seconds = typeof body.timeout === 'string' ? /^(\d+(?:\.\d+)?)s$/.exec(body.timeout) : null;
+      if (!seconds || Number(seconds[1]) > 270) return fail(400, 3, 'timeout is required, as a duration of at most 270s such as "10s"');
       if ([...z.targets.values()].some((t) => t.body.name === name)) return fail(409, 6, 'target name already exists');
       const id = randomUUID();
       const signingKey = randomBytes(24).toString('base64url');
-      z.targets.set(id, { id, body, signingKey });
+      z.targets.set(id, { id, body, signingKey, created: new Date().toISOString() });
       return reply(200, { id, creationDate: new Date().toISOString(), signingKey });
     }
     if (method === 'POST' && path === '/v2/actions/targets/search') {
       const filters = Array.isArray(body.filters) ? (body.filters as Array<{ targetNameFilter?: { targetName?: string } }>) : [];
       const names = filters.map((f) => f.targetNameFilter?.targetName).filter((n): n is string => typeof n === 'string');
-      const result = [...z.targets.values()].filter((t) => names.length === 0 || names.includes(str(t.body.name))).map((t) => ({ id: t.id, name: t.body.name, endpoint: t.body.endpoint }));
-      return reply(200, { result });
+      const targets = [...z.targets.values()]
+        .filter((t) => names.length === 0 || names.includes(str(t.body.name)))
+        .map((t) => {
+          const type = ['rest_webhook', 'restWebhook', 'rest_call', 'restCall', 'rest_async', 'restAsync'].find((k) => t.body[k] !== undefined) as string;
+          const camel = type.replace(/_(\w)/, (_m, c: string) => c.toUpperCase());
+          return { id: t.id, creationDate: t.created, changeDate: t.created, name: t.body.name, [camel]: t.body[type], timeout: t.body.timeout, endpoint: t.body.endpoint };
+        });
+      return reply(200, { pagination: { totalResult: String(targets.length), appliedLimit: '100' }, targets });
     }
     if (method === 'PUT' && path === '/v2/actions/executions') {
       const ids = Array.isArray(body.targets) ? (body.targets as unknown[]).map(String) : [];
+      const cond = (body.condition ?? {}) as Record<string, unknown>;
+      const one = (o: Record<string, unknown>, keys: string[]): boolean => keys.filter((k) => o[k] !== undefined && o[k] !== null).length === 1;
+      if (!one(cond, ['request', 'response', 'function', 'event'])) return fail(400, 3, 'condition needs exactly one of request, response, function, event');
+      if (cond.event !== undefined && !one(cond.event as Record<string, unknown>, ['event', 'group', 'all'])) return fail(400, 3, 'an event condition needs exactly one of event, group, all');
       const unknown = ids.find((t) => !z.targets.has(t));
       if (unknown) return fail(400, 3, `target ${unknown} does not exist`);
       z.executions.set(JSON.stringify(body.condition ?? null), body);
@@ -326,6 +355,10 @@ export async function startMockZitadel(options: MockZitadelOptions = {}): Promis
       if (requireAuth && typeof subject !== 'string') {
         err(res, 401, 16, 'missing or invalid bearer token');
         return record(401);
+      }
+      if (options.allowedSubjects && !(typeof subject === 'string' && options.allowedSubjects.includes(subject))) {
+        err(res, 403, 7, 'permission denied');
+        return record(403);
       }
       const injected = matchFailure(method, path);
       if (injected) {

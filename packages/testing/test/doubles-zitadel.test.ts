@@ -15,6 +15,9 @@ import {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test responses are read by path
 type Json = Record<string, any>;
 
+/** A valid CreateTarget body. */
+const TARGET = { name: 'identity-events', restWebhook: { interruptOnError: false }, endpoint: 'http://identity/internal/zitadel/events', timeout: '10s' };
+
 let oidc: MockOidc;
 let z: MockZitadel;
 let bearer: string;
@@ -64,17 +67,32 @@ describe('mock Zitadel, auth', () => {
   });
 
   it('refuses a human access token and a jwt-bearer token without the zitadel API scope', async () => {
-    const human = await startMockOidc();
     const key = createServiceKey('sa-x');
     oidc.registerServiceKey(key.userId, key.publicJwk);
-    try {
+    {
       const cb = new URL((await fetch(`${oidc.url}/oauth/v2/authorize?${new URLSearchParams({ client_id: 'c', redirect_uri: 'http://localhost/cb', response_type: 'code' })}`, { redirect: 'manual' })).headers.get('location') as string);
       const tokens = (await (await fetch(`${oidc.url}/oauth/v2/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code: cb.searchParams.get('code') as string, redirect_uri: 'http://localhost/cb', client_id: 'c' }) })).json()) as { access_token: string };
       expect((await call('GET', '/v2/users/u1', undefined, tokens.access_token)).status).toBe(401);
       const noScope = (await (await fetch(`${oidc.url}/oauth/v2/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: JWT_BEARER_GRANT, assertion: await key.assertion(oidc.issuer), scope: 'openid' }) })).json()) as { access_token: string };
       expect((await call('GET', '/v2/users/u1', undefined, noScope.access_token)).status).toBe(401);
+    }
+  });
+
+  it('answers 403 with code 7 for a subject outside allowedSubjects', async () => {
+    const strict = await startMockZitadel({ oidc, allowedSubjects: ['someone-else'] });
+    try {
+      const res = await fetch(`${strict.url}/v2/users/u1`, { headers: { authorization: `Bearer ${bearer}` } });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ code: 7 });
+      expect(strict.calls[0]).toMatchObject({ status: 403, subject: 'identity-sa' });
     } finally {
-      await human.close();
+      await strict.close();
+    }
+    const ok = await startMockZitadel({ oidc, allowedSubjects: ['identity-sa'] });
+    try {
+      expect((await fetch(`${ok.url}/v2/users/u1`, { headers: { authorization: `Bearer ${bearer}` } })).status).toBe(404);
+    } finally {
+      await ok.close();
     }
   });
 
@@ -109,6 +127,25 @@ describe('mock Zitadel, organizations and users', () => {
     expect(dup.status).toBe(409);
     expect(dup.body.code).toBe(6);
     expect(z.orgs.size).toBe(1);
+  });
+
+  it('refuses a repeated name with 409 even for a new id', async () => {
+    expect((await call('POST', '/v2/organizations', { name: 'Acme', organization_id: 'one' })).status).toBe(201);
+    const dup = await call('POST', '/v2/organizations', { name: 'Acme', organization_id: 'two' });
+    expect(dup.status).toBe(409);
+    expect(dup.body.code).toBe(6);
+    expect(z.orgs.has('two')).toBe(false);
+  });
+
+  it('checks name and id lengths and accepts camelCase organizationId', async () => {
+    const tooLongName = await call('POST', '/v2/organizations', { name: 'x'.repeat(201) });
+    expect([tooLongName.status, tooLongName.body.code]).toEqual([400, 3]);
+    expect((await call('POST', '/v2/organizations', { name: 'x'.repeat(200), organization_id: 'ok-1' })).status).toBe(201);
+    const tooLongId = await call('POST', '/v2/organizations', { name: 'n2', organization_id: 'i'.repeat(201) });
+    expect([tooLongId.status, tooLongId.body.code]).toEqual([400, 3]);
+    expect((await call('POST', '/v2/organizations', { name: 'n3', organizationId: 'camel-1' })).body.organizationId).toBe('camel-1');
+    const both = await call('POST', '/v2/organizations', { name: 'n4', organization_id: 'snake-2', organizationId: 'camel-2' });
+    expect(both.body.organizationId).toBe('snake-2');
   });
 
   it('makes an id when none is given and checks the name', async () => {
@@ -173,29 +210,74 @@ describe('mock Zitadel, bootstrap endpoints', () => {
   });
 
   it('adds Google and Azure IdPs and attaches them to the login policy', async () => {
-    const g = await call('POST', '/admin/v1/idps/google', { name: 'Google', clientId: 'gid' });
-    const a = await call('POST', '/admin/v1/idps/azure', { name: 'Microsoft', clientId: 'mid' });
+    const g = await call('POST', '/admin/v1/idps/google', { name: 'Google', clientId: 'gid', clientSecret: 'gsecret' });
+    const a = await call('POST', '/admin/v1/idps/azure', { name: 'Microsoft', clientId: 'mid', clientSecret: 'msecret' });
     expect([...z.idps.values()].map((i) => i.kind).sort()).toEqual(['azure', 'google']);
     expect((await call('POST', '/admin/v1/policies/login/idps', { idpId: g.body.id, ownerType: 'IDP_OWNER_TYPE_SYSTEM' })).status).toBe(200);
     expect((await call('POST', '/admin/v1/policies/login/idps', { idpId: a.body.id })).status).toBe(200);
     expect((await call('POST', '/admin/v1/policies/login/idps', { idpId: a.body.id })).status).toBe(409);
     expect((await call('POST', '/admin/v1/policies/login/idps', { idpId: 'ghost' })).status).toBe(404);
     expect(z.loginIdps).toEqual([g.body.id, a.body.id]);
-    expect((await call('POST', '/admin/v1/idps/google', { name: 'Google' })).status).toBe(409);
+    expect((await call('POST', '/admin/v1/idps/google', { name: 'Google', clientId: 'gid', clientSecret: 'gsecret' })).status).toBe(409);
+  });
+
+  it('requires a client id and secret for an IdP, and a name for Azure', async () => {
+    for (const body of [{ name: 'G' }, { name: 'G', clientId: 'x' }, { name: 'G', clientId: '', clientSecret: 's' }]) {
+      const res = await call('POST', '/admin/v1/idps/google', body);
+      expect([res.status, res.body.code]).toEqual([400, 3]);
+    }
+    expect((await call('POST', '/admin/v1/idps/azure', { clientId: 'x', clientSecret: 's' })).status).toBe(400);
+    expect((await call('POST', '/admin/v1/idps/google', { clientId: 'x', clientSecret: 's' })).status).toBe(200);
+    expect(z.idps.size).toBe(1);
   });
 
   it('creates an action target with a signing key and sets an execution on it', async () => {
-    const t = await call('POST', '/v2/actions/targets', { name: 'identity-events', restWebhook: { interruptOnError: false }, endpoint: 'http://identity/internal/zitadel/events' });
+    const t = await call('POST', '/v2/actions/targets', { ...TARGET, name: 'identity-events' });
     expect(t.status).toBe(200);
-    expect((await call('POST', '/v2/actions/targets', { name: 'identity-events' })).status).toBe(409);
+    expect((await call('POST', '/v2/actions/targets', { ...TARGET, name: 'identity-events' })).status).toBe(409);
     const found = await call('POST', '/v2/actions/targets/search', { filters: [{ targetNameFilter: { targetName: 'identity-events' } }] });
-    expect(found.body.result).toEqual([expect.objectContaining({ id: t.body.id, name: 'identity-events' })]);
-    expect((await call('POST', '/v2/actions/targets/search', { filters: [{ targetNameFilter: { targetName: 'other' } }] })).body.result).toEqual([]);
+    expect(found.body.result).toBeUndefined();
+    expect(found.body.pagination).toEqual({ totalResult: '1', appliedLimit: '100' });
+    expect(found.body.targets).toEqual([expect.objectContaining({ id: t.body.id, name: 'identity-events', endpoint: TARGET.endpoint, timeout: '10s', restWebhook: TARGET.restWebhook })]);
+    expect(found.body.targets[0].creationDate).toBeTruthy();
+    const none = await call('POST', '/v2/actions/targets/search', { filters: [{ targetNameFilter: { targetName: 'other' } }] });
+    expect(none.body.targets).toEqual([]);
+    expect(none.body.pagination.totalResult).toBe('0');
     expect(t.body.signingKey).toBe(z.targets.get(t.body.id)?.signingKey);
     const ex = await call('PUT', '/v2/actions/executions', { condition: { event: { group: 'user' } }, targets: [t.body.id] });
     expect(ex.status).toBe(200);
     expect(z.executions.size).toBe(1);
     expect((await call('PUT', '/v2/actions/executions', { condition: { event: { group: 'user' } }, targets: ['ghost'] })).status).toBe(400);
+  });
+
+  it('validates a target: type, endpoint, timeout, name', async () => {
+    const bad: Array<Record<string, unknown>> = [
+      { ...TARGET, restWebhook: undefined },
+      { ...TARGET, restCall: {} }, // two types
+      { ...TARGET, endpoint: '' },
+      { ...TARGET, endpoint: 'h'.repeat(2049) },
+      { ...TARGET, timeout: undefined },
+      { ...TARGET, timeout: '271s' },
+      { ...TARGET, name: '' },
+    ];
+    for (const body of bad) {
+      const res = await call('POST', '/v2/actions/targets', body);
+      expect([res.status, res.body.code]).toEqual([400, 3]);
+    }
+    expect((await call('POST', '/v2/actions/targets', { ...TARGET, restWebhook: undefined, rest_async: {}, timeout: '270s' })).status).toBe(200);
+    expect(z.targets.size).toBe(1);
+  });
+
+  it('validates an execution condition', async () => {
+    const t = await call('POST', '/v2/actions/targets', TARGET);
+    const put = (condition: unknown): Promise<{ status: number; body: Json }> => call('PUT', '/v2/actions/executions', { condition, targets: [t.body.id] });
+    for (const condition of [undefined, {}, { request: { method: '/x' }, event: { all: true } }, { event: {} }, { event: { group: 'user', all: true } }]) {
+      const res = await put(condition);
+      expect([res.status, res.body.code]).toEqual([400, 3]);
+    }
+    for (const condition of [{ event: { event: 'user.human.added' } }, { event: { all: true } }, { request: { method: '/zitadel.user.v2.UserService/AddHumanUser' } }]) {
+      expect((await put(condition)).status).toBe(200);
+    }
   });
 
   it('answers 404 for an unknown path', async () => {
@@ -272,7 +354,7 @@ describe('Zitadel event signatures', () => {
   });
 
   it('verifies with the key a target returned', async () => {
-    const t = await call('POST', '/v2/actions/targets', { name: 'events' });
+    const t = await call('POST', '/v2/actions/targets', { ...TARGET, name: 'events' });
     expect(verifyZitadelEvent(body, signZitadelEvent(body, t.body.signingKey), t.body.signingKey)).toBe(true);
   });
 });
