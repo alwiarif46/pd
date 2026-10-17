@@ -15,6 +15,7 @@ One heading per chat. Each entry: question, options, choice made, why. Design ga
 - **Shell integration owner.** Chat 1's list has tokens only; chat 2 has no shell item. Chose chat 2 (with the screens that need routes). Told in INVENTORY.
 - **Product name in Atrium.** Atrium's page title says "Bidwright" (INVENTORY G13). Chose "E2E Proposal" in app text; no Atrium file is edited.
 - **Repository browser and Data and AI settings had no owning chat.** INVENTORY assigns them to chat 3 and chat 8.
+- **No version bump enforcement in contracts:check.** contracts:check does not enforce a version bump; PR 12 adds a CI step comparing against the merge base. Chose: defer to PR 12 because it needs git history in CI.
 
 ## Chat 2
 
