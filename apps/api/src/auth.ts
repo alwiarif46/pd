@@ -107,8 +107,10 @@ const PHONE_SKIP_EVENT = 'auth.phone_verify_skipped';
 export interface AuthOptions {
   /**
    * PD_SKIP_PHONE_VERIFY_EMAILS (phone-skip.ts): for these exact, lowercased emails phone
-   * verification counts as done (decided at each login, so removing an email restores the
-   * requirement) and no SMS is sent. Email verification is still required. Empty by default.
+   * verification counts as done (decided at each login) and no SMS is sent. Email verification
+   * is still required. Empty by default. A skipped sign-up stores no phone and there is no
+   * add-phone flow, so removing an email from the list locks that account out until it is
+   * deleted and the person signs up again.
    */
   phoneSkip?: ReadonlySet<string>;
 }
